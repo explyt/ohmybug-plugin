@@ -6,7 +6,7 @@ Claude confirms. $10 a bug, first 3 free.
 ## Install (Claude Code)
 
 ```bash
-claude plugin marketplace add exply-dev/ohmybug
+claude plugin marketplace add exply-dev/ohmybug-plugin
 claude plugin install bughunter@ohmybug
 ```
 
@@ -15,7 +15,7 @@ Sign in happens on first use; get your key at https://app.ohmybug.ai.
 ## Install (Codex CLI)
 
 ```bash
-npx skills add exply-dev/ohmybug --skill bughunter
+npx skills add exply-dev/ohmybug-plugin --skill bughunter
 codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp
 ```
 
