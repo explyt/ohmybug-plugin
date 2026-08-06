@@ -1,0 +1,109 @@
+---
+name: bughunter
+description: 'Hunt bugs in the current diff via OhMyBug cloud review before opening a PR. Use when: about to create a PR/MR, a feature branch is ready to push, the user says "review my changes", "hunt bugs", "run ohmybug", or the pre-PR gate blocked a PR. Findings are verified locally by THIS agent; only confirmed bugs are billed ($10 each, first 3 free).'
+---
+
+# OhMyBug bug hunt
+
+OhMyBug is a cloud service: it reviews a diff with an orchestrated fleet of
+adversarial reviewers on its own models and returns findings. This agent then
+verifies each finding against the local codebase and reports verdicts. The
+user pays only for findings verified as REAL. Reviews, false positives and
+unclear findings cost $0.
+
+The MCP server `ohmybug` provides: `submit_review`, `get_findings`,
+`confirm_findings`, `get_balance`.
+
+## The flow
+
+### 1. Scope the diff
+
+Default scope: everything that would land in the PR — commits on this branch
+beyond the base branch plus staged and unstaged changes:
+
+```bash
+BASE=$(git merge-base HEAD origin/$(git remote show origin | sed -n 's/.*HEAD branch: //p'))
+git diff "$BASE"
+```
+
+If the user asked to review something narrower, respect that.
+
+### 2. Pack context — and show the manifest
+
+Select context files the reviewers will need: direct callers of changed
+functions, types/interfaces used by the diff, closely related modules.
+Budget: at most 25 files and 300 KB total. Prefer callers over callees.
+
+Before sending, print a one-line-per-file manifest (path + size) so the user
+sees exactly what leaves the machine. Never include files matching
+`.env*`, `*secret*`, `*credential*`, key material, or anything gitignored.
+
+### 3. Submit
+
+Call `submit_review` with the diff, the context files, and repo metadata
+(language, framework, base branch). It returns `review_id` immediately.
+
+Tell the user the review is running (typically 5-10 minutes), then poll
+`get_findings(review_id)` every 45-60 seconds until `status: done`. Keep
+working on other tasks the user gives you while polling.
+
+If the response carries `pending_verdicts` from an earlier review, resolve
+them first: verify and confirm those findings before or alongside the new
+ones. Unresolved verdicts pause new reviews.
+
+### 4. Verify each finding honestly
+
+For every finding: open the referenced files, trace the failure scenario the
+finding describes, and decide:
+
+- `REAL` — the failure scenario is reproducible in this codebase as described.
+- `NOT_REAL` — the scenario cannot happen; give the concrete reason (e.g. a
+  guard upstream, an invariant that prevents the state).
+- `UNCLEAR` — cannot be established either way; say what is missing.
+
+Honesty rules (non-negotiable):
+- The verdict is the billing meter. `REAL` costs the user $10; `NOT_REAL` and
+  `UNCLEAR` cost $0 and count against OhMyBug's quality stats.
+- Never mark a finding `NOT_REAL` to avoid the charge when the bug is real —
+  and never fix a finding you refused to confirm. OhMyBug audits later diffs;
+  silently fixing an unconfirmed finding flags the account.
+- Never mark `REAL` without actually tracing the scenario.
+- The user can override any verdict before submission — show them the table.
+
+### 5. Report verdicts BEFORE fixing
+
+Call `confirm_findings(review_id, verdicts)` with ALL verdicts in one call,
+each as `{finding_id, verdict, reason}` (one-sentence reason). Do this before
+starting fixes. Then show the user the bill from the response: how many
+confirmed, what was charged, remaining balance.
+
+### 6. Fix
+
+Fix the confirmed bugs as part of the normal workflow. Findings include a
+suggested fix; treat it as a hint, not gospel.
+
+### 7. Stamp the review marker
+
+After `confirm_findings` succeeds, write the marker the pre-PR gate checks:
+
+```bash
+mkdir -p .git/ohmybug && git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > .git/ohmybug/last-review
+```
+
+Re-stamp after applying fixes (the diff changed):
+
+```bash
+git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > .git/ohmybug/last-review
+```
+
+### 8. Money states
+
+- `payment_required` from any tool: credits are exhausted. Tell the user to
+  top up at https://app.ohmybug.ai/billing and stop the flow gracefully.
+- First 3 confirmed bugs are free; no card is required until they are used.
+
+## Privacy
+
+Only the diff and the manifest files are uploaded. The review runs in memory
+on OhMyBug's cloud and payloads are deleted after the review. Nothing is used
+for model training.

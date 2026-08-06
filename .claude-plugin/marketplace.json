@@ -1,0 +1,18 @@
+{
+  "name": "ohmybug",
+  "owner": {
+    "name": "OhMyBug",
+    "email": "hi@ohmybug.ai",
+    "url": "https://ohmybug.ai"
+  },
+  "plugins": [
+    {
+      "name": "bughunter",
+      "source": "./plugins/bughunter",
+      "description": "Finds the bugs your coding agent missed. Cloud review before every PR; your own agent verifies each finding; you pay only for confirmed bugs.",
+      "author": { "name": "OhMyBug", "url": "https://ohmybug.ai" },
+      "homepage": "https://ohmybug.ai",
+      "keywords": ["code-review", "bugs", "quality", "pre-pr"]
+    }
+  ]
+}
