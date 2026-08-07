@@ -6,21 +6,30 @@ Claude confirms. $10 a bug, first 3 free.
 ## Install (Claude Code)
 
 ```bash
-export OHMYBUG_API_KEY=omb_...   # your key from https://app.ohmybug.ai (add to your shell profile)
 claude plugin marketplace add explyt/ohmybug-plugin
 claude plugin install bughunter@ohmybug
 ```
 
-The plugin reads `OHMYBUG_API_KEY` from your environment on every call —
-no key ends up in any config file.
+That's the whole setup. On first use Claude Code opens a GitHub sign-in in
+your browser; your account (with 3 free confirmed bugs) is created
+automatically. No keys to copy, nothing lands in config files.
 
-## Install (Codex CLI)
+## Install (Codex CLI / CI — raw key)
+
+OAuth needs a browser, so headless environments use a raw `omb_` key —
+write to [hi@ohmybug.ai](mailto:hi@ohmybug.ai) or DM
+[@ohmybug](https://x.com/ohmybug) to get one:
 
 ```bash
 npx skills add explyt/ohmybug-plugin --skill bughunter
 codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp \
   --header "Authorization: Bearer $OHMYBUG_API_KEY"
 ```
+
+(Claude Code users who prefer a key over OAuth can do the same with
+`claude mcp add --transport http ohmybug https://mcp.ohmybug.ai/mcp
+--header "Authorization: Bearer $OHMYBUG_API_KEY"` — an explicit
+Authorization header disables the OAuth flow.)
 
 ## What it does
 
