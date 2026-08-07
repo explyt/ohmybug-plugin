@@ -70,6 +70,30 @@ If the response carries `pending_verdicts` from an earlier review, resolve
 them first: verify and confirm those findings before or alongside the new
 ones. Unresolved verdicts pause new reviews.
 
+### 3a. If polling returns `status: needs_files`
+
+The cloud reviewers named concrete files they are missing (`requested_files`
++ `reason`). Within ~10 minutes:
+
+1. Read the requested paths that exist locally. Apply the SAME exclusion
+   rules as step 2 (no `.env*`, secrets, credentials, gitignored files).
+2. Print the manifest of what you are about to send (path + size), same as
+   step 2. Omit anything that must not leave the machine — partial delivery
+   is fine.
+3. Call `provide_files(review_id, files)`. Then keep polling `get_findings`.
+
+Do not stall: if the user is away and the files pass the exclusion rules,
+send them — the manifest keeps it auditable. If nothing can be sent, call
+`provide_files` with an empty list so the review proceeds without waiting.
+
+### 3b. If the review finishes with 0 findings and an `upsell` block
+
+Show the user the `pitch` text and `install_url` verbatim — it offers a
+one-click GitHub App install (read-only, single repo) that unlocks a re-run
+of the review across the FULL repository instead of the diff + hand-picked
+context. If the user installs it, resubmit with `submit_review` (same diff)
+— the server switches to full-repo mode automatically.
+
 ### 4. Verify each finding honestly
 
 For every finding: open the referenced files, trace the failure scenario the
