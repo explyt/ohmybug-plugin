@@ -60,7 +60,11 @@ sees exactly what leaves the machine. Never include files matching
 ### 3. Submit
 
 Call `submit_review` with the diff, the context files, and repo metadata
-(language, framework, base branch). It returns `review_id` immediately.
+(language, framework, base branch). Also pass `meta.repo` (`owner/name`
+from `git remote get-url origin`, GitHub only) and `meta.ref` (`git
+rev-parse HEAD`) — when the user has the OhMyBug GitHub App installed for
+this repo, the server automatically upgrades to full-repository review
+(`mode: "full"` in the response). It returns `review_id` immediately.
 
 Tell the user the review is running (typically 5-10 minutes), then poll
 `get_findings(review_id)` every 45-60 seconds until `status: done`. Keep
