@@ -2,7 +2,10 @@
   "mcpServers": {
     "ohmybug": {
       "type": "http",
-      "url": "https://mcp.ohmybug.ai/mcp"
+      "url": "https://mcp.ohmybug.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ${OHMYBUG_API_KEY}"
+      }
     }
   }
 }

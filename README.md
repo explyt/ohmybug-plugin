@@ -6,17 +6,20 @@ Claude confirms. $10 a bug, first 3 free.
 ## Install (Claude Code)
 
 ```bash
+export OHMYBUG_API_KEY=omb_...   # your key from https://app.ohmybug.ai (add to your shell profile)
 claude plugin marketplace add explyt/ohmybug-plugin
 claude plugin install bughunter@ohmybug
 ```
 
-Sign in happens on first use; get your key at https://app.ohmybug.ai.
+The plugin reads `OHMYBUG_API_KEY` from your environment on every call —
+no key ends up in any config file.
 
 ## Install (Codex CLI)
 
 ```bash
 npx skills add explyt/ohmybug-plugin --skill bughunter
-codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp
+codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp \
+  --header "Authorization: Bearer $OHMYBUG_API_KEY"
 ```
 
 ## What it does
