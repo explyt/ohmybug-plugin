@@ -1,6 +1,6 @@
 {
   "name": "bughunter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OhMyBug: cloud bug-hunt before every PR. Your agent verifies each finding; you pay only for confirmed bugs ($10/bug, first 3 free).",
   "author": { "name": "OhMyBug", "email": "hi@ohmybug.ai", "url": "https://ohmybug.ai" },
   "homepage": "https://ohmybug.ai"
