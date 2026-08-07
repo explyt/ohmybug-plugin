@@ -139,7 +139,9 @@ suggested fix; treat it as a hint, not gospel.
 
 ### 7. Stamp the review marker
 
-After `confirm_findings` succeeds, write the marker the pre-merge gate checks:
+After `confirm_findings` succeeds — or immediately after a `done` review
+with ZERO findings (nothing to confirm) — write the marker the pre-merge
+gate checks:
 
 ```bash
 mkdir -p .git/ohmybug && git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > .git/ohmybug/last-review
