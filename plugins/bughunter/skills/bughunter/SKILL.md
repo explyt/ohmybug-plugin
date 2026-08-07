@@ -14,6 +14,17 @@ unclear findings cost $0.
 The MCP server `ohmybug` provides: `submit_review`, `get_findings`,
 `confirm_findings`, `get_balance`.
 
+## If a tool call fails with an authentication error
+
+First use on a machine needs a one-time GitHub sign-in. Do not retry
+blindly and do not ask for an API key. Tell the user exactly this:
+
+> Type `/mcp`, pick **ohmybug** → **Authenticate**. A GitHub page opens in
+> your browser — one click, and your account (3 free confirmed bugs) is
+> created automatically. This happens once per machine.
+
+Then retry the tool call.
+
 ## The flow
 
 ### 1. Scope the diff
