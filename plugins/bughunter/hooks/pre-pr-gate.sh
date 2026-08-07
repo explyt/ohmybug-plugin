@@ -1,13 +1,17 @@
 #!/bin/bash
-# OhMyBug pre-PR gate: block `gh pr create` / `glab mr create` until the
-# current diff has been reviewed (marker written by the bughunter skill).
+# OhMyBug pre-MERGE gate: block `gh pr merge` / `glab mr merge` until the
+# CURRENT diff has been hunted (marker written by the bughunter skill).
+# The hunt is deliberately the LAST gate before merge — it runs on the code
+# that survived human/agent review rounds and CI, so its findings are the
+# ones every other net missed. A diff changed since the last hunt (review
+# fixes!) re-triggers the block via the sha marker.
 # Escape hatch: SKIP_BUGHUNT=1 in the command, or delete .git/ohmybug.
 
 INPUT=$(cat)
 CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null)
 
 case "$CMD" in
-  *"gh pr create"*|*"glab mr create"*) ;;
+  *"gh pr merge"*|*"glab mr merge"*) ;;
   *) exit 0 ;;
 esac
 
@@ -25,5 +29,5 @@ if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$CURRENT" ]; then
   exit 0
 fi
 
-echo "OhMyBug: this diff has not been reviewed. Run the bughunter skill (/bughunter:review) first — it reviews the diff, you confirm findings, then PR creation is unblocked. To skip once, prefix the command with SKIP_BUGHUNT=1 (ask the user first)." >&2
+echo "OhMyBug: the current diff has not been hunted (or changed since the last hunt). Run the bughunter skill (/bughunter:review) — it hunts the FINAL post-review diff, you confirm findings, then merge is unblocked. To skip once, prefix the command with SKIP_BUGHUNT=1 (ask the user first)." >&2
 exit 2

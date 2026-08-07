@@ -33,8 +33,10 @@ Authorization header disables the OAuth flow.)
 
 ## What it does
 
-- Before every `gh pr create`, a gate checks the diff was reviewed
-  (skip once with `SKIP_BUGHUNT=1`).
+- Before every `gh pr merge`, a gate checks the FINAL diff was hunted —
+  deliberately the last net before merge, after human reviews and CI
+  (skip once with `SKIP_BUGHUNT=1`; review fixes change the diff and
+  re-arm the gate).
 - `/bughunter:review` (or just ask to "hunt bugs") sends your diff + selected
   context to OhMyBug's cloud. You see the exact file manifest before upload.
 - An orchestrated fleet of adversarial reviewers hunts on OhMyBug's models.

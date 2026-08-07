@@ -1,6 +1,6 @@
 ---
 name: bughunter
-description: 'Hunt bugs in the current diff via OhMyBug cloud review before opening a PR. Use when: about to create a PR/MR, a feature branch is ready to push, the user says "review my changes", "hunt bugs", "run ohmybug", or the pre-PR gate blocked a PR. Findings are verified locally by THIS agent; only confirmed bugs are billed ($10 each, first 3 free).'
+description: 'Hunt bugs in the current diff via OhMyBug cloud review as the LAST gate before merge. Use when: about to merge a PR/MR, review rounds are done and CI is green, the user says "review my changes", "hunt bugs", "run ohmybug", or the pre-merge gate blocked a merge. Findings are verified locally by THIS agent; only confirmed bugs are billed ($10 each, first 3 free).'
 ---
 
 # OhMyBug bug hunt
@@ -90,13 +90,21 @@ Do not stall: if the user is away and the files pass the exclusion rules,
 send them — the manifest keeps it auditable. If nothing can be sent, call
 `provide_files` with an empty list so the review proceeds without waiting.
 
-### 3b. If the review finishes with 0 findings and an `upsell` block
+### 3b. Requesting full-repo access (`connect_repo` / `upsell` blocks)
 
-Show the user the `pitch` text and `install_url` verbatim — it offers a
-one-click GitHub App install (read-only, single repo) that unlocks a re-run
-of the review across the FULL repository instead of the diff + hand-picked
-context. If the user installs it, resubmit with `submit_review` (same diff)
-— the server switches to full-repo mode automatically.
+YOU ask for this permission — it is part of the flow, not a website step.
+
+- `submit_review` response carries `connect_repo` when the repo is not yet
+  connected: while the light review runs, show the user the `pitch` and ask
+  ONE yes/no question: open the install page? On yes, run
+  `open "<install_url>"` (macOS) / `xdg-open` (Linux) — the user picks the
+  repo and clicks Install on GitHub; nothing else is needed. Ask at most
+  once per repo per session; a "no" is final, do not nag.
+- `get_findings` carries `upsell` when a light review ends with 0 findings —
+  same handling, stronger moment: zero findings in light mode is exactly
+  when blind spots matter. After the user installs, resubmit with
+  `submit_review` (same diff) — the server switches to `mode: "full"`
+  automatically.
 
 ### 4. Verify each finding honestly
 
@@ -131,7 +139,7 @@ suggested fix; treat it as a hint, not gospel.
 
 ### 7. Stamp the review marker
 
-After `confirm_findings` succeeds, write the marker the pre-PR gate checks:
+After `confirm_findings` succeeds, write the marker the pre-merge gate checks:
 
 ```bash
 mkdir -p .git/ohmybug && git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > .git/ohmybug/last-review
