@@ -1,18 +1,20 @@
 ---
 name: bughunter
-description: 'Hunt bugs in the current diff via OhMyBug cloud review as the LAST gate before merge. Use when: about to merge a PR/MR, review rounds are done and CI is green, the user says "review my changes", "hunt bugs", "run ohmybug", or the pre-merge gate blocked a merge. Findings are verified locally by THIS agent; only confirmed bugs are billed ($10 each, first 3 free).'
+description: 'Hunt bugs in the current diff via OhMyBug cloud review as the LAST gate before merge. Use when: about to merge a PR/MR, review rounds are done and CI is green, the user says "review my changes", "hunt bugs", "run ohmybug", or the pre-merge gate blocked a merge. Findings are verified locally by THIS agent; billing is $10 flat per review that finds real bugs (however many), first 3 free.'
 ---
 
 # OhMyBug bug hunt
 
 OhMyBug is a cloud service: it reviews a diff with an orchestrated fleet of
 adversarial reviewers on its own models and returns findings. This agent then
-verifies each finding against the local codebase and reports verdicts. The
-user pays only for findings verified as REAL. Reviews, false positives and
-unclear findings cost $0.
+verifies each finding against the local codebase and reports verdicts.
+Billing is flat: $10 per review whose verdicts confirm at least one real
+(P0/P1) bug — no matter how many. Minor (P2) findings are never billed.
+Reviews, false positives and unclear findings cost $0. First 3 bug-finding
+reviews are free.
 
 The MCP server `ohmybug` provides: `submit_review`, `get_findings`,
-`confirm_findings`, `get_balance`.
+`provide_files`, `confirm_findings`, `get_balance`.
 
 ## If a tool call fails with an authentication error
 
@@ -117,8 +119,9 @@ finding describes, and decide:
 - `UNCLEAR` — cannot be established either way; say what is missing.
 
 Honesty rules (non-negotiable):
-- The verdict is the billing meter. `REAL` costs the user $10; `NOT_REAL` and
-  `UNCLEAR` cost $0 and count against OhMyBug's quality stats.
+- The verdict is the billing meter. A review with at least one `REAL` P0/P1
+  costs the user $10 flat (extra REALs and P2 minors are free); `NOT_REAL`
+  and `UNCLEAR` cost $0 and count against OhMyBug's quality stats.
 - Never mark a finding `NOT_REAL` to avoid the charge when the bug is real —
   and never fix a finding you refused to confirm. OhMyBug audits later diffs;
   silently fixing an unconfirmed finding flags the account.
@@ -157,7 +160,8 @@ git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > .git/ohmybug/last-review
 
 - `payment_required` from any tool: credits are exhausted. Tell the user to
   top up at https://app.ohmybug.ai/billing and stop the flow gracefully.
-- First 3 confirmed bugs are free; no card is required until they are used.
+- First 3 bug-finding reviews are free; no card is required until they are
+  used. `/bughunter:stats` (or `get_balance`) shows the full hunting record.
 
 ## Privacy
 

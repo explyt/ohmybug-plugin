@@ -9,7 +9,7 @@
     {
       "name": "bughunter",
       "source": "./plugins/bughunter",
-      "description": "Finds the bugs your coding agent missed. Cloud review before every PR; your own agent verifies each finding; you pay only for confirmed bugs.",
+      "description": "Finds the bugs your coding agent missed. Cloud review as the last gate before merge; your own agent verifies each finding; $10 flat per bug-finding review.",
       "author": { "name": "OhMyBug", "url": "https://ohmybug.ai" },
       "homepage": "https://ohmybug.ai",
       "keywords": ["code-review", "bugs", "quality", "pre-pr"]

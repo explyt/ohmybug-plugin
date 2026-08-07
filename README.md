@@ -1,7 +1,8 @@
 # OhMyBug plugin — bughunter
 
-We find the bugs your Claude Code missed. You pay only for bugs your own
-Claude confirms. $10 a bug, first 3 free.
+We find the bugs your Claude Code missed. You pay only when your own Claude
+confirms real bugs: $10 flat per bug-finding review (however many bugs it
+holds), minor findings free, first 3 reviews free.
 
 ## Install (Claude Code)
 
@@ -11,7 +12,7 @@ claude plugin install bughunter@ohmybug
 ```
 
 That's the whole setup. On first use Claude Code opens a GitHub sign-in in
-your browser; your account (with 3 free confirmed bugs) is created
+your browser; your account (with 3 free bug-finding reviews) is created
 automatically. No keys to copy, nothing lands in config files.
 
 ## Install (Codex CLI / CI — raw key)
@@ -43,17 +44,19 @@ Authorization header disables the OAuth flow.)
   Only findings that survive triage come back.
 - Your own agent verifies each finding against your codebase and reports
   REAL / NOT_REAL / UNCLEAR. You see and approve the verdicts.
-- Billing: confirmed (REAL) bug — $10. Review runs, false positives,
-  unclear findings — $0.
+- Billing: $10 flat per review with confirmed real bugs — one or ten, same
+  price. Minor findings, review runs, false positives, unclear — $0.
+- `/bughunter:stats` shows your record: bugs found, reviews run, balance.
 
 ## MCP contract (server: https://mcp.ohmybug.ai/mcp)
 
 | Tool | In | Out |
 |---|---|---|
-| `submit_review` | `diff`, `files[{path, content}]`, `meta{language?, base_branch?}` | `{review_id, status, pending_verdicts[]}` |
-| `get_findings` | `review_id` | `{status: running\|done\|failed, findings[{finding_id, severity, file, line?, title, failure_scenario, suggested_fix?}]}` |
-| `confirm_findings` | `review_id`, `verdicts[{finding_id, verdict: REAL\|NOT_REAL\|UNCLEAR, reason}]` | `{billed_usd, confirmed, balance_usd, receipt_id}` |
-| `get_balance` | — | `{balance_usd, free_bugs_left, confirmed_total}` |
+| `submit_review` | `diff`, `files[{path, content}]`, `meta{language?, base_branch?, repo?, ref?}` | `{review_id, status, mode, pending_verdicts[]}` |
+| `get_findings` | `review_id` | `{status: running\|needs_files\|done\|failed, findings[{finding_id, severity, file, line?, title, failure_scenario, suggested_fix?}]}` |
+| `provide_files` | `review_id`, `files[{path, content}]` | `{status, delivered}` |
+| `confirm_findings` | `review_id`, `verdicts[{finding_id, verdict: REAL\|NOT_REAL\|UNCLEAR, reason}]` | `{confirmed, minor_confirmed, billed_usd, free_review_used, balance_usd, receipt_id}` |
+| `get_balance` | — | `{balance_usd, free_reviews_left, confirmed_total, stats{…}}` |
 
 Errors: `payment_required` (top up), `pending_verdicts` (resolve previous
 review's verdicts first).
