@@ -17,13 +17,21 @@ The MCP server `ohmybug` provides: `submit_review`, `get_findings`,
 ## If a tool call fails with an authentication error
 
 First use on a machine needs a one-time GitHub sign-in. Do not retry
-blindly and do not ask for an API key. Tell the user exactly this:
+blindly and do not ask for an API key. Tell the user exactly this,
+depending on the surface:
 
-> Type `/mcp`, pick **ohmybug** → **Authenticate**. A GitHub page opens in
-> your browser — one click, and your account (3 free confirmed bugs) is
-> created automatically. This happens once per machine.
+- Terminal Claude Code: type `/mcp`, pick **ohmybug** → **Authenticate**.
+- IDE / GUI surface (where `/mcp` only prints status): run this in any
+  terminal, then reply `/mcp reconnect all` in the chat:
 
-Then retry the tool call.
+  ```bash
+  claude mcp login plugin:bughunter:ohmybug
+  ```
+
+Either way a GitHub page opens in the browser — one click (zero if the
+app was approved before), the account with 3 free confirmed bugs is
+created automatically, once per machine. Then retry the tool call.
+(Do not run `claude mcp login` yourself: it needs an interactive tty.)
 
 ## The flow
 
