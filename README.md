@@ -15,6 +15,45 @@ That's the whole setup. On first use Claude Code opens a GitHub sign-in in
 your browser; your account (with 3 free bug-finding reviews) is created
 automatically. No keys to copy, nothing lands in config files.
 
+## Install (pi)
+
+[pi](https://pi.dev) has no built-in MCP — add the adapter, then the server:
+
+```bash
+pi install npm:pi-mcp-adapter
+npx skills add explyt/ohmybug-plugin --skill bughunter
+```
+
+Add to `.mcp.json` in your project root (or `~/.config/mcp/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "ohmybug": { "url": "https://mcp.ohmybug.ai/mcp", "auth": "oauth" }
+  }
+}
+```
+
+Restart pi, run `/mcp-auth ohmybug` once — a GitHub page opens in the
+browser, your account with 3 free bug-finding reviews is created
+automatically. Then say "hunt bugs" or `/skill:bughunter`.
+
+Prefer a raw key (CI)? Use `"auth": "bearer", "bearerTokenEnv":
+"OHMYBUG_API_KEY"` instead of `"auth": "oauth"`.
+
+Optional merge gate (pi has blocking tool hooks) — `.pi/extensions/ohmybug-gate.ts`:
+
+```ts
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+
+pi.on("tool_call", async (event) => {
+  if (isToolCallEventType("bash", event) && /\bgh pr merge\b/.test(event.input.command)
+      && !process.env.SKIP_BUGHUNT) {
+    return { block: true, reason: "Final diff not hunted — run /skill:bughunter first (or SKIP_BUGHUNT=1)" };
+  }
+});
+```
+
 ## Install (Codex CLI / CI — raw key)
 
 OAuth needs a browser, so headless environments use a raw `omb_` key —
