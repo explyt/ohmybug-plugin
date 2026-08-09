@@ -12,6 +12,12 @@
 INPUT=$(cat)
 CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null)
 
+# Worktree support: the hook process runs in the project root, but the merge
+# command runs in the session's cwd (often a git worktree with its own git-dir
+# and its own diff). Judge the repo the COMMAND sees, not the hook's cwd.
+SESSION_CWD=$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
+[ -n "$SESSION_CWD" ] && [ -d "$SESSION_CWD" ] && cd "$SESSION_CWD" 2>/dev/null
+
 case "$CMD" in
   *"gh pr merge"*|*"glab mr merge"*) ;;
   *) exit 0 ;;
