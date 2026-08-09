@@ -144,17 +144,15 @@ suggested fix; treat it as a hint, not gospel.
 
 After `confirm_findings` succeeds — or immediately after a `done` review
 with ZERO findings (nothing to confirm) — write the marker the pre-merge
-gate checks:
+gate checks. It lives under `~/.ohmybug/` (keyed by the git-dir path), so
+no write into the repo or `.git/` is ever needed:
 
 ```bash
-mkdir -p .git/ohmybug && git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > .git/ohmybug/last-review
+MARKER="$HOME/.ohmybug/markers/$(git rev-parse --absolute-git-dir | tr -d '\n' | shasum -a 256 | cut -c1-16)"
+mkdir -p "$HOME/.ohmybug/markers" && git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > "$MARKER"
 ```
 
-Re-stamp after applying fixes (the diff changed):
-
-```bash
-git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > .git/ohmybug/last-review
-```
+Re-stamp after applying fixes (the diff changed) — same two lines.
 
 ### 8. Money states
 
