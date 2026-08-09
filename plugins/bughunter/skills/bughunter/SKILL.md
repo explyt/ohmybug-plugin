@@ -76,9 +76,22 @@ installed. Omitting them silently downgrades EVERY review to light mode —
 the single most common integration mistake. It returns `review_id`
 immediately.
 
-Tell the user the review is running (typically 5-10 minutes), then poll
-`get_findings(review_id)` every 45-60 seconds until `status: done`. Keep
-working on other tasks the user gives you while polling.
+Tell the user the review is running (typically 5-10 min light, 15-45 min
+full), then ARM A BACKGROUND MONITOR — do not silently end your turn and
+wait to be prodded. The response carries `status_url` (plain HTTPS, no
+auth). If your harness supports background shell tasks (Claude Code:
+`Bash` with `run_in_background`), start:
+
+```bash
+until curl -sf '<status_url>' | grep -qE '"status":"(done|failed)"|"files_requested":true'; do sleep 45; done
+```
+
+Its completion wakes you: call `get_findings(review_id)` then. If it woke
+on `files_requested`, serve `provide_files` first and re-arm the monitor.
+
+No background tasks in your harness? Then poll `get_findings` every 45-60
+seconds IN the current turn while doing other work — never leave a
+running review unwatched at the end of a turn.
 
 If the response carries `pending_verdicts` from an earlier review, resolve
 them first: verify and confirm those findings before or alongside the new
