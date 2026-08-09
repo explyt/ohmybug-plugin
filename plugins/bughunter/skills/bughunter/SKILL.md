@@ -61,12 +61,20 @@ sees exactly what leaves the machine. Never include files matching
 
 ### 3. Submit
 
-Call `submit_review` with the diff, the context files, and repo metadata
-(language, framework, base branch). Also pass `meta.repo` (`owner/name`
-from `git remote get-url origin`, GitHub only) and `meta.ref` (`git
-rev-parse HEAD`) — when the user has the OhMyBug GitHub App installed for
-this repo, the server automatically upgrades to full-repository review
-(`mode: "full"` in the response). It returns `review_id` immediately.
+Call `submit_review` with the diff, the context files, and `meta`. The
+`meta` object is REQUIRED plumbing, not garnish — fill it every time:
+
+| meta field | value | command |
+|---|---|---|
+| `repo` | `owner/name` (GitHub only) | `git remote get-url origin` |
+| `ref` | HEAD sha | `git rev-parse HEAD` |
+| `language`, `framework`, `base` | repo facts | what you already know |
+
+`repo` + `ref` are what let the server auto-upgrade to full-repository
+review (`mode: "full"` in the response) when the OhMyBug GitHub App is
+installed. Omitting them silently downgrades EVERY review to light mode —
+the single most common integration mistake. It returns `review_id`
+immediately.
 
 Tell the user the review is running (typically 5-10 minutes), then poll
 `get_findings(review_id)` every 45-60 seconds until `status: done`. Keep
