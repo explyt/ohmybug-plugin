@@ -129,6 +129,14 @@ cheaply collect goes into `repo_hint` (a few paragraphs, ~2000 chars):
 2. What the change claims to do — from the PR title/body (`gh pr view N
    --json title,body`), compressed but keeping EVERY concrete number,
    timeout, threshold, and incident magnitude mentioned.
+2a. **The diff's REAL scope, which the body routinely understates.** Get the
+   file list (`gh api repos/O/R/pulls/N/files --paginate --jq '.[].filename'`
+   — or `git diff --name-only "$BASE"` when local) and name every subsystem
+   it touches beyond the stated subject. maximhq/bifrost#5768 titled itself
+   one SSRF fix; the branch carried 159 files (matviews, migrations, a
+   logging plugin, a whole dashboard). A briefing that repeats only the body
+   tells reviewers that everything else is out of scope, and they will kill
+   real findings there as off-topic.
 3. Linked issues: for each `#NNN` referenced by the PR (`gh issue view NNN
    --json title,body`), one-two sentences — especially observed magnitudes,
    client timeouts, incident data. A reviewer who knows "clients give up at
@@ -167,7 +175,13 @@ ones. Unresolved verdicts pause new reviews.
 ### 3a. If polling returns `status: needs_files`
 
 The cloud reviewers named concrete files they are missing (`requested_files`
-+ `reason`). Within ~10 minutes:
++ `reason`). For a repo the server can read (App-installed, or any public
+repo) it fetches those paths itself and you will usually never see this
+state; it reaches you only for paths the server could not fetch — a private
+repo without the App, a generated file, or a path that does not exist at
+that ref. Never read source into your own context just to echo it back when
+the server already has access; check the `requested_files` list against what
+is actually unavailable to it. Within ~10 minutes:
 
 1. Read the requested paths that exist locally. Apply the SAME exclusion
    rules as step 2 (no `.env*`, secrets, credentials, gitignored files).
