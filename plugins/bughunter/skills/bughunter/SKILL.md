@@ -14,7 +14,8 @@ Reviews, false positives and unclear findings cost $0. First 3 bug-finding
 reviews are free.
 
 The MCP server `ohmybug` provides: `submit_review`, `get_findings`,
-`provide_files`, `confirm_findings`, `get_balance`.
+`provide_files`, `confirm_findings`, `get_balance`, `redeem_code` (closed-beta
+invite codes).
 
 ## If a tool call fails with an authentication error
 
@@ -243,6 +244,12 @@ Re-stamp after applying fixes (the diff changed) — same two lines.
 
 ### 8. Money states
 
+- `beta_required` from `submit_review`: OhMyBug is in closed beta. Ask the
+  user IN CHAT whether they have an invite code (from a blogger link or an
+  invite). If yes — call `redeem_code` with it exactly as typed, then retry
+  `submit_review` once. If no — tell them their GitHub sign-in already put
+  them on the waitlist and accounts are activated in waves; stop gracefully.
+  Never invent or brute-force codes.
 - `payment_required` from any tool: credits are exhausted. Tell the user to
   top up at https://app.ohmybug.ai/billing and stop the flow gracefully.
 - First 3 bug-finding reviews are free; no card is required until they are
