@@ -228,6 +228,17 @@ finding describes, and decide:
   guard upstream, an invariant that prevents the state).
 - `UNCLEAR` — cannot be established either way; say what is missing.
 
+**Severity is yours to correct.** The cloud reviewer priced each finding
+without ever seeing the real codebase; you just traced it. Pass `severity`
+in the verdict (either direction) whenever the trace changes the
+consequence, and say why in `reason` — the finder's original is kept
+alongside. Severity describes the CONSEQUENCE, not the finding's category: a
+missing test whose mutation reopens a security hole, loses data or misbills
+is P0/P1, never "just a test gap". Correct downward just as readily when the
+failure turns out to need an unreachable state. P0/P1 makes the review
+billable, P2 is free — so this decision is the bill, and the user sees the
+table before you send it.
+
 Honesty rules (non-negotiable):
 - The verdict is the billing meter. A review with at least one `REAL` P0/P1
   costs the user $10 flat (extra REALs and P2 minors are free); `NOT_REAL`
