@@ -76,12 +76,14 @@ the machine, no size limits, no upload step.
 This works in two cases, checked server-side in this order:
 1. The OhMyBug GitHub App is installed on the repo (private or public).
 2. The repo is PUBLIC — no App needed at all. Any open-source checkout
-   (e.g. `gh pr checkout N` on someone else's repo) gets full-repo review
-   automatically: `meta.repo` = the upstream `owner/name`, `ref` = the PR
-   head sha. PR head SHAs count as pushed.
+   (e.g. `gh pr checkout N` on someone else's repo) works: `meta.repo` = the
+   upstream `owner/name`, `ref` = the PR head sha. PR head SHAs count as
+   pushed.
 
-- Response `mode: "full"` → it worked; skip context packing entirely, go to
-  the monitor step.
+- No error and a `review_id` → it worked; skip context packing entirely, go
+  to the monitor step. The mode is `light` — that is stage one and it is
+  always light (see 3b); readable repo access means the reviewers fetch the
+  files they need themselves instead of asking you.
 - Error `diff_required` (private repo without the App) or `diff_fetch_failed`
   (head not pushed / fetch broke) → fall back to the normal diff flow below.
   Include unpushed local changes in the local diff if the user wanted them
@@ -108,8 +110,9 @@ curl -sf -X POST -H 'content-type: application/json' --data-binary @/tmp/omb-pay
 ```
 
 3. The review starts on upload — arm the background monitor on `status_url`
-   as usual. In full-repo mode context files are mostly redundant (reviewers
-   read the connected repo themselves) — diff + meta is enough.
+   as usual. When the server can read the repo, context files are mostly
+   redundant (reviewers fetch what they need themselves) — diff + meta is
+   enough.
 
 Call `submit_review` with the diff, the context files, and `meta`. The
 `meta` object is REQUIRED plumbing, not garnish — fill it every time:
@@ -148,14 +151,14 @@ cheaply collect goes into `repo_hint` (a few paragraphs, ~2000 chars):
 This is what separates a calibrated review from a blind one — do not skip
 it to save a minute.
 
-`repo` + `ref` are what let the server auto-upgrade to full-repository
-review (`mode: "full"` in the response) when the OhMyBug GitHub App is
-installed. Omitting them silently downgrades EVERY review to light mode —
+`repo` + `ref` are what let the server fetch the diff itself, answer the
+reviewers' file requests without coming back to you, and — after a clean
+pass — offer the deep hunt at all. Omitting them costs you all three and is
 the single most common integration mistake. It returns `review_id`
 immediately.
 
-Tell the user the review is running (typically 5-10 min light, 15-45 min
-full), then ARM A BACKGROUND MONITOR — do not silently end your turn and
+Tell the user the review is running (~15 min for the light hunt, ~1 hour if
+it was escalated to the deep hunt), then ARM A BACKGROUND MONITOR — do not silently end your turn and
 wait to be prodded. The response carries `status_url` (plain HTTPS, no
 auth). If your harness supports background shell tasks (Claude Code:
 `Bash` with `run_in_background`), start:
@@ -197,21 +200,36 @@ Do not stall: if the user is away and the files pass the exclusion rules,
 send them — the manifest keeps it auditable. If nothing can be sent, call
 `provide_files` with an empty list so the review proceeds without waiting.
 
-### 3b. Requesting full-repo access (`connect_repo` / `upsell` blocks)
+### 3b. Two stages: the light hunt, then maybe the deep one
 
-YOU ask for this permission — it is part of the flow, not a website step.
+**Every review starts light** — the diff plus whatever files the reviewers
+ask for mid-run, about 15 minutes. You never request the deep hunt yourself
+and never as a first review: it pulls the whole repository into a throwaway
+VM, takes about an hour, and only makes sense once the cheap pass has come
+back empty.
 
-- `submit_review` response carries `connect_repo` when the repo is not yet
-  connected: while the light review runs, show the user the `pitch` and ask
-  ONE yes/no question: open the install page? On yes, run
-  `open "<install_url>"` (macOS) / `xdg-open` (Linux) — the user picks the
-  repo and clicks Install on GitHub; nothing else is needed. Ask at most
-  once per repo per session; a "no" is final, do not nag.
-- `get_findings` carries `upsell` when a light review ends with 0 findings —
-  same handling, stronger moment: zero findings in light mode is exactly
-  when blind spots matter. After the user installs, resubmit with
-  `submit_review` (same diff) — the server switches to `mode: "full"`
-  automatically.
+- `submit_review` carries `connect_repo` when the repo is not readable:
+  while the light review runs, show the user the `pitch` and ask ONE yes/no
+  question: open the install page? On yes, run `open "<install_url>"`
+  (macOS) / `xdg-open` (Linux) — the user picks the repo and clicks Install
+  on GitHub; nothing else is needed. Ask at most once per repo per session;
+  a "no" is final, do not nag.
+- `get_findings` on a clean light pass carries `summary` — say it plainly
+  first: the hunt went after this diff and found nothing, which on this
+  evidence looks like a clean PR. That is the result. Do not turn it into a
+  preamble for the offer.
+- The same response may carry `deep_offer`. May: when every deep slot is
+  busy it is simply absent, and then there is nothing to offer — do not
+  invent it, do not poll for one. When present, relay `pitch` (it names the
+  hour of waiting and the repo copy out loud) and ask once. On yes, follow
+  its `how`: call `submit_review` again with `deep: "<review_id>"` and the
+  same `meta` — the server re-fetches the diff, so you send no payload. If
+  it carries `install_url`, the App install is the missing step first.
+- Escalation errors are final answers, not retry conditions:
+  `deep_at_capacity` (tell the user the light result stands, deep can be
+  tried later), `repo_too_big` (send context files instead),
+  `repo_required` (the App install), `light_not_finished` (let stage one
+  finish).
 
 ### 3c. Show the review report
 
