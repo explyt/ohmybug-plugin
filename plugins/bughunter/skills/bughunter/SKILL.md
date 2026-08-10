@@ -109,6 +109,24 @@ Call `submit_review` with the diff, the context files, and `meta`. The
 | `base_branch` | base branch name | `git remote show origin \| sed -n 's/.*HEAD branch: //p'` |
 | `pr` | PR number, if reviewing a PR | `gh pr view --json number` |
 | `language`, `framework` | repo facts | what you already know |
+| `repo_hint` | the briefing (below) | composed by you |
+
+### The briefing (`repo_hint`) — the reviewers' only window into intent
+
+Cloud reviewers see code, not conversations. Every number and claim you can
+cheaply collect goes into `repo_hint` (a few paragraphs, ~2000 chars):
+
+1. One line on the repo (stack, what it is).
+2. What the change claims to do — from the PR title/body (`gh pr view N
+   --json title,body`), compressed but keeping EVERY concrete number,
+   timeout, threshold, and incident magnitude mentioned.
+3. Linked issues: for each `#NNN` referenced by the PR (`gh issue view NNN
+   --json title,body`), one-two sentences — especially observed magnitudes,
+   client timeouts, incident data. A reviewer who knows "clients give up at
+   ~330s" can judge a 300s default; one who doesn't, cannot.
+
+This is what separates a calibrated review from a blind one — do not skip
+it to save a minute.
 
 `repo` + `ref` are what let the server auto-upgrade to full-repository
 review (`mode: "full"` in the response) when the OhMyBug GitHub App is
