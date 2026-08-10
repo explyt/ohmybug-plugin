@@ -62,7 +62,7 @@ sees exactly what leaves the machine. Never include files matching
 
 ### 3. Submit
 
-### GitHub-connected repos: send NO diff at all (preferred)
+### GitHub repos: send NO diff at all (preferred)
 
 If the repo lives on GitHub and the head commit is PUSHED, try the zero-payload
 mode FIRST: call `submit_review` with NO diff, NO files, and full `meta`
@@ -70,11 +70,19 @@ including `repo`, `ref` (head sha), `base_branch` (and `pr` number if known).
 The server fetches the merge-base diff from GitHub itself — nothing leaves
 the machine, no size limits, no upload step.
 
+This works in two cases, checked server-side in this order:
+1. The OhMyBug GitHub App is installed on the repo (private or public).
+2. The repo is PUBLIC — no App needed at all. Any open-source checkout
+   (e.g. `gh pr checkout N` on someone else's repo) gets full-repo review
+   automatically: `meta.repo` = the upstream `owner/name`, `ref` = the PR
+   head sha. PR head SHAs count as pushed.
+
 - Response `mode: "full"` → it worked; skip context packing entirely, go to
   the monitor step.
-- Error `diff_required` (App not installed) or `diff_fetch_failed` (head not
-  pushed / fetch broke) → fall back to the normal diff flow below. Include
-  unpushed local changes in the local diff if the user wanted them reviewed.
+- Error `diff_required` (private repo without the App) or `diff_fetch_failed`
+  (head not pushed / fetch broke) → fall back to the normal diff flow below.
+  Include unpushed local changes in the local diff if the user wanted them
+  reviewed.
 
 ### Big payloads: NEVER push bytes through your own context
 
