@@ -61,6 +61,30 @@ sees exactly what leaves the machine. Never include files matching
 
 ### 3. Submit
 
+### Big payloads: NEVER push bytes through your own context
+
+If diff + files exceed ~30 KB, do NOT paste them into the tool call — huge
+tool arguments are slow, expensive and get truncated (failed submits). Use
+the out-of-band flow instead:
+
+1. `submit_review` with `upload: true`, full `meta`, and NO diff/files —
+   it returns `upload_url` (one-time) + `review_id` + `status_url`.
+2. Build the payload with a script, reading straight from disk:
+
+```bash
+git diff "$BASE" > /tmp/omb-diff.patch
+python3 - <<'PY'
+import json
+files = []  # [{'path': p, 'content': open(p).read()} for p in <your context list>]
+json.dump({'diff': open('/tmp/omb-diff.patch').read(), 'files': files}, open('/tmp/omb-payload.json', 'w'))
+PY
+curl -sf -X POST -H 'content-type: application/json' --data-binary @/tmp/omb-payload.json '<upload_url>'
+```
+
+3. The review starts on upload — arm the background monitor on `status_url`
+   as usual. In full-repo mode context files are mostly redundant (reviewers
+   read the connected repo themselves) — diff + meta is enough.
+
 Call `submit_review` with the diff, the context files, and `meta`. The
 `meta` object is REQUIRED plumbing, not garnish — fill it every time:
 
