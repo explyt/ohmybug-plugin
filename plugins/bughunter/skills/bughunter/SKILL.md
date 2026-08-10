@@ -61,6 +61,20 @@ sees exactly what leaves the machine. Never include files matching
 
 ### 3. Submit
 
+### GitHub-connected repos: send NO diff at all (preferred)
+
+If the repo lives on GitHub and the head commit is PUSHED, try the zero-payload
+mode FIRST: call `submit_review` with NO diff, NO files, and full `meta`
+including `repo`, `ref` (head sha), `base_branch` (and `pr` number if known).
+The server fetches the merge-base diff from GitHub itself — nothing leaves
+the machine, no size limits, no upload step.
+
+- Response `mode: "full"` → it worked; skip context packing entirely, go to
+  the monitor step.
+- Error `diff_required` (App not installed) or `diff_fetch_failed` (head not
+  pushed / fetch broke) → fall back to the normal diff flow below. Include
+  unpushed local changes in the local diff if the user wanted them reviewed.
+
 ### Big payloads: NEVER push bytes through your own context
 
 If diff + files exceed ~30 KB, do NOT paste them into the tool call — huge
@@ -92,7 +106,9 @@ Call `submit_review` with the diff, the context files, and `meta`. The
 |---|---|---|
 | `repo` | `owner/name` (GitHub only) | `git remote get-url origin` |
 | `ref` | HEAD sha | `git rev-parse HEAD` |
-| `language`, `framework`, `base` | repo facts | what you already know |
+| `base_branch` | base branch name | `git remote show origin \| sed -n 's/.*HEAD branch: //p'` |
+| `pr` | PR number, if reviewing a PR | `gh pr view --json number` |
+| `language`, `framework` | repo facts | what you already know |
 
 `repo` + `ref` are what let the server auto-upgrade to full-repository
 review (`mode: "full"` in the response) when the OhMyBug GitHub App is
