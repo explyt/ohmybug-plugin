@@ -129,6 +129,14 @@ YOU ask for this permission — it is part of the flow, not a website step.
   `submit_review` (same diff) — the server switches to `mode: "full"`
   automatically.
 
+### 3c. Show the review report
+
+When `get_findings` returns `status: done` it carries `review_report` — the
+reviewer's own work record (scope, per-axis coverage, candidates raised and
+killed, what was NOT checked, verdict). Relay it to the user verbatim or as
+a faithful tight summary — especially on 0-finding reviews, where it is the
+only evidence the hunt was real. Never paraphrase it into "all good".
+
 ### 4. Verify each finding honestly
 
 For every finding: open the referenced files, trace the failure scenario the
