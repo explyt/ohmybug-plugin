@@ -93,6 +93,30 @@ This works in two cases, checked server-side in this order:
   Include unpushed local changes in the local diff if the user wanted them
   reviewed.
 
+### If the environment refuses to send the payload — switch paths, don't negotiate
+
+A refusal to run the upload (permission prompt, auto-mode classifier, sandbox,
+no `python3`, no network) is a **final answer about that path**, not a transient
+error. One retry at most, then switch:
+
+1. Re-submit with `meta.repo` + `ref` + `base_branch` and **no payload at all**
+   — the server fetches the merge-base diff from GitHub. Zero bytes leave the
+   machine, so there is nothing left to permit. This is almost always available
+   and it is the answer.
+2. Repo not readable server-side (`diff_required`)? Offer the user the
+   **one-click App install** (read-only, that one repo) and re-submit. It also
+   unlocks the full-repository hunt afterwards.
+3. Only if they decline the App: state plainly what bytes would leave and to
+   where, and let the USER decide. Print the rule they would add — never add it
+   yourself, never ask them to add it "so auto-mode stops blocking".
+
+**Never ask for a permission rule to be widened on your behalf, and never
+retry a blocked command hoping for a different classifier answer.** A tool
+that talks its way past the control which exists to stop tools like it is the
+exact shape of the attack that control is for — and normalising a "yes" costs
+more than the review is worth. The no-payload path exists precisely so the
+question never has to be asked.
+
 ### Big payloads: NEVER push bytes through your own context
 
 If diff + files exceed ~30 KB, do NOT paste them into the tool call — huge
@@ -100,7 +124,11 @@ tool arguments are slow, expensive and get truncated (failed submits). Use
 the out-of-band flow instead:
 
 1. `submit_review` with `upload: true`, full `meta`, and NO diff/files —
-   it returns `upload_url` (one-time) + `review_id` + `status_url`.
+   it returns `upload_url` (one-time) + `review_id` + `status_url`. Always send
+   `meta.repo` + `ref` + `base_branch` anyway: when the server can fetch the
+   diff itself it ignores `upload` and just starts, and you never touch the
+   upload at all. A `review_id` with `status: running` instead of
+   `awaiting_upload` means exactly that — nothing to upload, go monitor.
 2. Build the payload with a script, reading straight from disk:
 
 ```bash
