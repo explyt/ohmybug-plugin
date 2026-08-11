@@ -355,6 +355,15 @@ each as `{finding_id, verdict, reason}` (one-sentence reason). Do this before
 starting fixes. Then show the user the bill from the response: how many
 confirmed, what was charged, remaining balance.
 
+**The balance belongs to the account, not to you.** One key is shared by every
+session, worktree and machine that uses it, so `balance_usd`, `reviews_total`
+and `billed_usd_total` move while you do nothing. The only figures describing
+YOUR call are `billed_usd` and `receipt_id` in that response. Never compute
+your own spend by comparing two balance readings, and never raise a
+money alarm from a difference between them: on 2026-08-11 an agent did exactly
+that, charged itself another session's $20, and spent a round of investigation
+disproving its own report. If a charge looks wrong, quote the receipt.
+
 ### 6. Fix
 
 Fix the confirmed bugs as part of the normal workflow. Findings include a
@@ -382,14 +391,30 @@ their behalf: the post is public and carries their GitHub handle.
   for whom. Describe the MECHANICS of the defect, not its setting. The server
   refuses posts containing paths, URLs, repo slugs or ticket numbers — but
   the vendor and the domain it cannot detect, so that part is on you.
-- Show the exact text and wait for a yes. Then `post_story(review_id, text,
-  lesson, rounds_survived)`.
-- **If you do not have `post_story`**, do not send the user to the website
-  and do not give up: MCP clients cache the tool list at connect, so a
-  session older than that tool never sees it. Post through the tool you
-  demonstrably have — call `confirm_findings` again with only
-  `{review_id, story: {text, lesson, rounds_survived}}` and no `verdicts`.
-  `share.how` states both shapes.
+- Show the user `share.show_progress` as-is — the star row (`★★★☆☆ 3/5`) says
+  how close they are to a free review without making them do arithmetic.
+- Show the exact text and wait for a yes. Then publish with **`share.how`**,
+  which carries a one-time URL:
+
+  ```bash
+  curl -sf -X POST -H 'content-type: application/json' \
+    -d '{"text":"…","lesson":"…","rounds_survived":N}' <share.how URL>
+  ```
+
+  `post_story(review_id, text, lesson, rounds_survived)` does the same when
+  your client has that tool. Prefer whichever you actually have; the URL
+  always works, because curl has no version.
+- **Never tell the user to paste it into the website by hand**, and never
+  smuggle the text through another field (a verdict `reason` is a verdict
+  justification — putting a story there is not publishing it). If the URL
+  itself fails, say plainly that publication failed and show the error.
+
+  Earlier guidance here named `confirm_findings` as the fallback "because you
+  demonstrably have that tool". That was wrong in the same way the first path
+  was: the tool exists, but a cached SCHEMA for it has no `story` field and
+  requires `verdicts`, so the call is impossible in exactly the session the
+  fallback was written for (owner report, 2026-08-11 — a user approved a
+  paragraph and nothing could publish it).
 - `rounds_survived` is the number of review passes — human or agent — this
   code went through before the hunt caught the bug. Count honestly: your own
   review rounds, CI, the human reviewer, previous agents. It is the score
