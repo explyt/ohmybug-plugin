@@ -69,6 +69,32 @@ sees exactly what leaves the machine. Never include files matching
 
 ### 3. Submit
 
+### How the diff gets here — in this order, always
+
+**What leaves the machine must be proportional to what we cannot already see.**
+Work down this list and stop at the first rung that applies:
+
+1. **Repo on GitHub, head pushed → send NO payload.** `meta.repo` + `ref` +
+   `base_branch`, empty `diff`, no `files`. Nothing leaves the machine, there is
+   no size limit, and the reviewers fetch whatever files they need instead of you
+   guessing which to attach. This is the normal path, not an optimisation.
+2. **`diff_required` came back → offer the App install, before packing anything.**
+   That error means the repo is not readable, and one browser click fixes it
+   permanently. Ask once; do not start assembling a payload while you wait.
+3. **Only then a payload** — and only for what rung 1 genuinely cannot serve:
+   a repo that is not on GitHub, changes that are **not pushed** (the usual case
+   is re-hunting your own fixes), or an org that will not install the App. Send
+   the smallest thing that carries the unseen work, not the whole PR: if the only
+   difference from a pushed commit is a two-file fix, the diff of that fix is the
+   payload.
+4. **`upload: true` only when that payload is genuinely large.** It is not a
+   preference for shipping bytes, and the server ignores it whenever rung 1
+   applies.
+
+Rung 1 is also the answer to every permission refusal: an agent sandbox can block
+a `curl` or a large tool argument, and it can never block a path that sends
+nothing. See "If the environment refuses to send the payload" below.
+
 ### GitHub repos: send NO diff at all (preferred)
 
 If the repo lives on GitHub and the head commit is PUSHED, try the zero-payload
@@ -88,10 +114,13 @@ This works in two cases, checked server-side in this order:
   to the monitor step. The mode is `light` — that is stage one and it is
   always light (see 3b); readable repo access means the reviewers fetch the
   files they need themselves instead of asking you.
-- Error `diff_required` (private repo without the App) or `diff_fetch_failed`
-  (head not pushed / fetch broke) → fall back to the normal diff flow below.
-  Include unpushed local changes in the local diff if the user wanted them
-  reviewed.
+- Error `diff_required` (private repo without the App) → this is rung 2 above:
+  offer the one-click App install FIRST and retry, because it removes the payload
+  question for every future review in this repo. Only if the user declines do you
+  pack a payload.
+- Error `diff_fetch_failed` (head not pushed / fetch broke) → the code genuinely
+  is not on GitHub yet. Either push it and retry rung 1, or send a payload
+  carrying only the unpushed part.
 
 ### If the environment refuses to send the payload — switch paths, don't negotiate
 
