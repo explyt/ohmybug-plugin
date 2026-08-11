@@ -158,6 +158,16 @@ Call `submit_review` with the diff, the context files, and `meta`. The
 | `language`, `framework` | repo facts | what you already know |
 | `repo_hint` | the briefing (below) | composed by you |
 
+**The `diff` field takes a diff, and nothing else.** Not a summary, not a file
+list, not "see attached files" — those go in `repo_hint`. A non-empty `diff`
+means "the payload is here", so writing prose into it silently cancels the
+GitHub fetch and the reviewers get a note instead of code. That cost a whole
+run on 2026-08-11: 2.5 KB of briefing, zero attached files, a VM spent hunting
+for a diff that did not exist. The server now refuses prose (`diff_not_a_diff`)
+or, when it can, fetches the real diff and tells you it overrode you — but the
+rule is simpler than the recovery: **if you are not sending diff bytes, send an
+empty diff.**
+
 ### The briefing (`repo_hint`) — the reviewers' only window into intent
 
 Cloud reviewers see code, not conversations. Every number and claim you can
