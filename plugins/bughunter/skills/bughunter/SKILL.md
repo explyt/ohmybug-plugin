@@ -402,28 +402,24 @@ their behalf: the post is public and carries their GitHub handle.
 - A "no" is final. Never post without approval, never re-ask in the same
   session.
 
-### 7. Stamp the review marker
+### 7. The review marker — nothing to do
 
-After `confirm_findings` succeeds — or immediately after a `done` review
-with ZERO findings (nothing to confirm) — write the marker the pre-merge
-gate checks. It lives under `~/.ohmybug/` (keyed by the git-dir path), so
-no write into the repo or `.git/` is ever needed:
+The pre-merge gate's marker is written by a `PostToolUse` hook on the review
+tools themselves: `submit_review` records which diff was sent, and the first
+`done` from `get_findings` (or a `confirm_findings` call) promotes it. It
+lives under `~/.ohmybug/`, keyed by the git-dir path, so nothing is ever
+written into the repo or `.git/`.
 
-```bash
-"$CLAUDE_PLUGIN_ROOT/hooks/diff-id.sh" stamp
-```
+This used to be a step here, and that was the bug: a hunt driven by calling
+the tools directly — a normal way to use them — left no marker, so the gate
+blocked a diff that HAD been hunted (owner report, 2026-08-11). Evidence that
+depends on someone remembering to file it will eventually accuse honest work,
+and each false accusation is an argument for disarming the control.
 
-It prints `ohmybug: hunted diff recorded <id>` on success and refuses to write
-anything it could not compute. Run it from the same directory the merge will
-run in (the worktree, if you are in one).
-
-Do NOT hand-roll the hash. The previous version of this step inlined it and
-referred to a `$BASE` set in an EARLIER shell — every Bash call is a fresh
-shell, so in practice it hashed `git diff ""`, wrote a marker matching
-nothing, and the gate blocked a merge whose diff had just been hunted clean
-(owner report, 2026-08-11).
-
-Re-stamp after applying fixes — the diff changed, so the old id is stale.
+So: never write the marker by hand, and never reach for `SKIP_BUGHUNT=1`
+because a hunt "already ran". If the gate blocks after a finished hunt, the
+diff changed since it (fixes count — hunt them too), or the hook is missing
+because the installed plugin predates it. Say which; do not paper over it.
 
 ### 8. Money states
 

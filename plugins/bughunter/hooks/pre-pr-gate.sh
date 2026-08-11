@@ -158,5 +158,5 @@ for M in "$MARKER" "$LEGACY_MARKER"; do
   fi
 done
 
-echo "OhMyBug: the current diff has not been hunted (or changed since the last hunt). Run the bughunter skill (/bughunter:review) — it hunts the FINAL post-review diff, you confirm findings, then merge is unblocked. If the hunt DID just run and came back clean, it only forgot to record itself: run \`$(dirname "$0")/diff-id.sh stamp\` and merge again. To skip once, prefix the command with SKIP_BUGHUNT=1 (ask the user first)." >&2
+echo "OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them). Run /bughunter:review, or call submit_review then get_findings directly; either way the hunt records itself when it finishes, no manual step. If a hunt did just finish on this exact diff and this still blocks, the recording hook is not installed (old plugin version) — say so rather than stamping by hand. To skip once, prefix the command with SKIP_BUGHUNT=1 (ask the user first)." >&2
 exit 2

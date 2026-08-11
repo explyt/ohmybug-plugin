@@ -50,5 +50,57 @@ t "( $V )"                               2
 t "if true; then $V; fi"                 2
 t "npm run build && (cd api && $V)"      2
 
+
+# --- the stamp half -----------------------------------------------------
+# The gate is only as honest as its evidence. When the marker was written by
+# the skill, a hunt driven straight through the MCP tools left none, and the
+# gate blocked work that HAD been hunted (owner report, 2026-08-11) — which is
+# how a control teaches people to disarm it. These rows pin the stamp to the
+# tool calls themselves.
+post() { # tool, done?, -> runs stamp-hunt.sh
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_response':{'content':[{'type':'text','text':json.dumps(
+       {'review_id':'rev_x','status':'done' if sys.argv[2]=='1' else 'running'})}]},
+    'cwd':sys.argv[3]}))" "$1" "$2" "$PWD" | bash "$G/stamp-hunt.sh"
+}
+. "$G/diff-id.sh"
+M=$(ohmybug_marker_path)
+s() { # label, expected marker content ('' = absent)
+  got=$([ -f "$M" ] && cat "$M")
+  if [ "$got" != "$2" ]; then
+    printf 'FAIL stamp %s: want=%s got=%s\n' "$1" "${2:-<none>}" "${got:-<none>}"
+    fails=$((fails + 1))
+  fi
+}
+
+rm -f "$M" "$M.pending"
+ID=$(ohmybug_diff_id)
+if [ -z "$ID" ]; then
+  echo "stamp: no working diff here, cannot exercise the stamp (commit something first)" >&2
+  fails=$((fails + 1))
+else
+  post get_findings 0; s "still running writes nothing" ""
+  post submit_review 0; s "submit alone does not authorise" ""
+  post get_findings 1; s "done promotes the submitted diff" "$ID"
+  t "$V" 0                                    # ...and the gate now lets it through
+  # Fixes written WHILE the review runs were never hunted. The marker must
+  # name the diff that was sent, not whatever the tree looks like when the
+  # answer arrives — otherwise the gate blesses code the hunt never saw.
+  rm -f "$M" "$M.pending"
+  post submit_review 0
+  echo "# stamp-test-race $$" >> README.md
+  post get_findings 1; s "done stamps the SENT diff, not the current one" "$ID"
+  t "$V" 2
+  git checkout -- README.md 2>/dev/null || true
+  rm -f "$M"
+  post confirm_findings 0; s "confirm stamps even with no pending" "$ID"
+  # The whole point of hashing the diff: fixes written after the hunt must
+  # re-block, or the gate authorises code nobody reviewed.
+  echo "# stamp-test $$" >> README.md
+  t "$V" 2
+  git checkout -- README.md 2>/dev/null || sed -i '' -e "/# stamp-test $$/d" README.md
+fi
+
 rm -rf "$HOME"
-if [ "$fails" = 0 ]; then echo "gate: 16/16 ok"; else echo "gate: $fails failing"; exit 1; fi
+if [ "$fails" = 0 ]; then echo "gate+stamp: ok"; else echo "gate+stamp: $fails failing"; exit 1; fi
