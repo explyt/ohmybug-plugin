@@ -292,11 +292,20 @@ gate checks. It lives under `~/.ohmybug/` (keyed by the git-dir path), so
 no write into the repo or `.git/` is ever needed:
 
 ```bash
-MARKER="$HOME/.ohmybug/markers/$(git rev-parse --absolute-git-dir | tr -d '\n' | shasum -a 256 | cut -c1-16)"
-mkdir -p "$HOME/.ohmybug/markers" && git diff "$BASE" | shasum -a 256 | cut -d' ' -f1 > "$MARKER"
+"$CLAUDE_PLUGIN_ROOT/hooks/diff-id.sh" stamp
 ```
 
-Re-stamp after applying fixes (the diff changed) — same two lines.
+It prints `ohmybug: hunted diff recorded <id>` on success and refuses to write
+anything it could not compute. Run it from the same directory the merge will
+run in (the worktree, if you are in one).
+
+Do NOT hand-roll the hash. The previous version of this step inlined it and
+referred to a `$BASE` set in an EARLIER shell — every Bash call is a fresh
+shell, so in practice it hashed `git diff ""`, wrote a marker matching
+nothing, and the gate blocked a merge whose diff had just been hunted clean
+(owner report, 2026-08-11).
+
+Re-stamp after applying fixes — the diff changed, so the old id is stale.
 
 ### 8. Money states
 
