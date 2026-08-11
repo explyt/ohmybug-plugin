@@ -102,5 +102,28 @@ else
   git checkout -- README.md 2>/dev/null || sed -i '' -e "/# stamp-test $$/d" README.md
 fi
 
+# --- no recorder, no accusation ----------------------------------------------
+# 0.8.1 shipped the gate without stamp-hunt.sh, so on those installs the gate
+# cannot know anything — and it blocked a diff that had been hunted four times
+# (owner report, twice). "Cannot tell" must not read as "you did not hunt".
+BK=$(mktemp -d)
+cp "$G/pre-pr-gate.sh" "$G/diff-id.sh" "$BK/"
+rm -f "$M" "$M.pending"
+if [ -n "$ID" ]; then
+  # With the recorder present and no marker: blocks (exit 2), as before.
+  t "$V" 2
+  # Same state, recorder missing: stands down.
+  hidden="$G/stamp-hunt.sh.hidden-for-test"
+  mv "$G/stamp-hunt.sh" "$hidden"
+  t "$V" 0
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"predates the hunt recorder"*) ;;
+    *) printf 'FAIL stand-down message did not name the cause: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  mv "$hidden" "$G/stamp-hunt.sh"
+fi
+rm -rf "$BK"
+
 rm -rf "$HOME"
 if [ "$fails" = 0 ]; then echo "gate+stamp: ok"; else echo "gate+stamp: $fails failing"; exit 1; fi

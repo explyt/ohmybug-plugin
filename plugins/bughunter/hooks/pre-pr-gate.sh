@@ -136,6 +136,25 @@ esac
 GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
 LEGACY_MARKER="$GITDIR/ohmybug/last-review"
 
+# Is the thing that RECORDS hunts even installed? Markers are written by a
+# PostToolUse hook (stamp-hunt.sh) that arrived in 0.12.0. Before it, only the
+# skill wrote them, so a hunt driven straight through the MCP tools left no
+# trace and this gate blocked work that had been hunted four times over (owner
+# report, 2026-08-11 — twice, on two different machines).
+#
+# With no recorder there is no evidence either way, and "I cannot tell" must not
+# be reported as "you did not hunt": a control that accuses honest work teaches
+# people to pass SKIP_BUGHUNT by reflex, and then it guards nothing. Same choice
+# as the missing-origin-base case below — stand down, say so loudly, name the
+# fix. Both streams, because a PreToolUse hook that exits 0 has no guaranteed
+# channel to the model.
+if [ ! -f "$(dirname "$0")/stamp-hunt.sh" ]; then
+  MSG="OhMyBug: this plugin predates the hunt recorder (0.12.0), so the merge gate has no way to know whether the diff was hunted — allowing the merge unchecked. Update the plugin (/plugin update bughunter) and restart the session to arm it again. Do NOT hand-write a marker and do not add SKIP_BUGHUNT anywhere."
+  echo "$MSG" >&2
+  echo "$MSG"
+  exit 0
+fi
+
 # Shared with the skill's stamp step: one definition, so a hunted diff can
 # never fail to match its own marker.
 . "$(dirname "$0")/diff-id.sh"
