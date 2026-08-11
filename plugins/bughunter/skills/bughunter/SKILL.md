@@ -327,13 +327,30 @@ suggested fix; treat it as a hint, not gospel.
 was confirmed. It is an offer to make to the USER, never a thing to do on
 their behalf: the post is public and carries their GitHub handle.
 
-- Relay `share.ask_user`, and **offer to draft it**. Most people will not
-  write a paragraph from scratch; almost everyone will approve one. Write
-  it in THEIR voice about THEIR bug — what it was, what it would have cost
-  in production, how many review rounds it had already survived. Two or
-  three sentences. Not marketing, not a changelog.
+- Relay `share.ask_user`, and **draft it yourself in the same message** —
+  finished, to the format in `share.format`. Do not ask the user how long it
+  should be, what to redact, or whether to translate it; do not make them ask
+  you to shorten it. They approve or edit; they do not brief you.
+- **Two fields, and the second is the point.** `text` = the defect in at most
+  3 lines: what could break, and why nothing caught it. `lesson` = at most 6
+  lines written as a **rule another engineer or agent could paste into their
+  own guidelines** — the general principle first, then what follows from it.
+  The story is why anyone reads the post; the lesson is why they keep it.
+- **Anonymise it, unasked.** The reader has no context on this project and
+  must learn nothing private from it: no repo or company name, no file paths,
+  no route or endpoint names, no vendor names, no URLs, no PR/ticket numbers,
+  no test counts, no domain specifics that identify what the product does or
+  for whom. Describe the MECHANICS of the defect, not its setting. The server
+  refuses posts containing paths, URLs, repo slugs or ticket numbers — but
+  the vendor and the domain it cannot detect, so that part is on you.
 - Show the exact text and wait for a yes. Then `post_story(review_id, text,
-  rounds_survived)`.
+  lesson, rounds_survived)`.
+- **If you do not have `post_story`**, do not send the user to the website
+  and do not give up: MCP clients cache the tool list at connect, so a
+  session older than that tool never sees it. Post through the tool you
+  demonstrably have — call `confirm_findings` again with only
+  `{review_id, story: {text, lesson, rounds_survived}}` and no `verdicts`.
+  `share.how` states both shapes.
 - `rounds_survived` is the number of review passes — human or agent — this
   code went through before the hunt caught the bug. Count honestly: your own
   review rounds, CI, the human reviewer, previous agents. It is the score
