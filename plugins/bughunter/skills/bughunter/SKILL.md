@@ -379,11 +379,19 @@ their behalf: the post is public and carries their GitHub handle.
   finished, to the format in `share.format`. Do not ask the user how long it
   should be, what to redact, or whether to translate it; do not make them ask
   you to shorten it. They approve or edit; they do not brief you.
-- **Two fields, and the second is the point.** `text` = the defect in at most
-  3 lines: what could break, and why nothing caught it. `lesson` = at most 6
-  lines written as a **rule another engineer or agent could paste into their
-  own guidelines** — the general principle first, then what follows from it.
-  The story is why anyone reads the post; the lesson is why they keep it.
+- **Two fields, and the second is the point.** The story is why anyone reads
+  the post; the lesson is why they keep it. Write both ONCE, to these budgets —
+  "at most 3 lines" is not a length, and drafts written to it had to be
+  shortened twice by hand (owner, 2026-08-11):
+  - `text` — exactly **2 sentences, ≤320 characters**. First: the trap,
+    concretely. Second: what happens when it fires.
+  - `lesson` — up to **3 rules, one line each, ≤340 characters total**:
+    **bold imperative rule** then half a sentence of why. Each line must be
+    pasteable into someone else's guidelines unchanged.
+  - Voice: plain short words, active, present tense. No hedging, no filler, no
+    adverbs holding up a weak verb. Name the failure so the reader sees it
+    happen. `share.format` carries a worked example at exactly this length —
+    match its register, don't invent your own.
 - **Anonymise it, unasked.** The reader has no context on this project and
   must learn nothing private from it: no repo or company name, no file paths,
   no route or endpoint names, no vendor names, no URLs, no PR/ticket numbers,
