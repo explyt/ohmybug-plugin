@@ -16,7 +16,12 @@
 #   - it needs full history (a shallow clone counts what it has);
 #   - two branches can produce the same count, so it identifies a release only
 #     together with the sha, which is why publish also tags.
+#   - the number is the count at the commit it was COMPUTED on, so the manifest
+#     reads one behind the commit that records it. That is why --check does not
+#     compare for equality.
 set -euo pipefail
+
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 
 usage() {
   cat >&2 <<'EOF'
@@ -69,21 +74,43 @@ case "${1:-}" in
     ;;
   --write)
     V=$(compute)
-    for m in "${MANIFESTS[@]}"; do [ -f "$m" ] && write_version "$m" "$V"; done
+    # `[ -f ] && write` would leave the loop's status at 1 when the LAST
+    # manifest is the absent one, and under `set -e` that is a --write that
+    # wrote the version and then reported failure.
+    for m in "${MANIFESTS[@]}"; do
+      if [ -f "$m" ]; then write_version "$m" "$V"; fi
+    done
     ;;
   --check)
-    V=$(compute)
+    # NOT equality with `compute`. The write is computed before the commit that
+    # records it, so the manifest is permanently one behind the count and an
+    # equality check could never pass on any commit — a check nobody can
+    # satisfy gets deleted, and then nothing checks.
+    #
+    # The defect worth catching is the plugin changing without the version
+    # changing: the marketplace then never offers the update, and nothing looks
+    # broken. So: nothing under plugins/ may have changed since the manifest
+    # last did.
     bad=0
+    count=$(git rev-list --count HEAD)
     for m in "${MANIFESTS[@]}"; do
       [ -f "$m" ] || continue
       cur=$(read_version "$m")
       # An empty version field means the manifest does not carry one (the
       # marketplace file may not), which is not a disagreement.
-      if [ -n "$cur" ] && [ "$cur" != "$V" ]; then
-        echo "$m says $cur, this commit is $V — run scripts/version.sh --write" >&2
+      [ -n "$cur" ] || continue
+      n=${cur#0.}; n=${n%.0}
+      if ! [ "$n" -le "$count" ] 2>/dev/null; then
+        echo "$m says $cur, which is not a commit count this history has reached ($count)" >&2
         bad=1
       fi
     done
+    since=$(git log -1 --format=%H -- "${MANIFESTS[0]}")
+    if [ -n "$since" ] && [ -n "$(git log --format=%H "$since..HEAD" -- plugins/)" ]; then
+      echo "plugins/ changed since the version was last written — run scripts/version.sh --write" >&2
+      git log --oneline "$since..HEAD" -- plugins/ >&2
+      bad=1
+    fi
     exit $bad
     ;;
   --self-test)
@@ -108,6 +135,23 @@ case "${1:-}" in
     write_version "$tmp/n.json" "0.42.0" >/dev/null
     python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$tmp/n.json" \
       || { echo "self-test: rewrite broke a manifest with no version field" >&2; rm -rf "$tmp"; exit 1; }
+    # --check is the half that runs unattended, so it gets a real history:
+    # a commit under plugins/ that leaves the manifest alone must be caught,
+    # and writing the version must clear it.
+    repo=$tmp/repo
+    mkdir -p "$repo/plugins/bughunter/.claude-plugin"
+    git -C "$repo" init -q -b main
+    gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+    printf '{"version":"0.1.0"}\n' > "$repo/plugins/bughunter/.claude-plugin/plugin.json"
+    gitc add -A; gitc commit -qm one
+    echo hook > "$repo/plugins/bughunter/hooks.sh"
+    gitc add -A; gitc commit -qm two
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || { echo "self-test: --check passed a plugin change with a stale version (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+    (cd "$repo" && bash "$SELF" --write) >/dev/null
+    gitc add -A; gitc commit -qm three
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check still failing after a version write (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
     rm -rf "$tmp"
     echo "version self-test: ok ($V)"
     ;;
