@@ -28,7 +28,7 @@ set -u
 INPUT=$(cat 2>/dev/null) || exit 0
 
 FIELDS=$(printf '%s' "$INPUT" | python3 -c '
-import json, re, sys
+import hashlib, json, re, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -39,14 +39,34 @@ tool = (d.get("tool_name") or "").split("__")[-1]
 # guessing a path into it. Escaped quotes survive that flattening, hence \\\\?.
 blob = json.dumps(d.get("tool_response"))
 done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
+
+# The identity of a hunt, taken from the hunt itself.
+#
+# Deriving it from `git diff` in the hook cwd is what broke: the work can live
+# in a worktree while this hook stands in the main checkout, where there are no
+# local changes at all — so the id came out empty and the hunt was recorded
+# NOWHERE, silently, and the gate then blocked a diff that had been reviewed.
+# These bytes are the ones the server saw, whatever directory anyone is in.
+inp = d.get("tool_input") or {}
+diff = inp.get("diff")
+sent = hashlib.sha256(diff.encode()).hexdigest() if isinstance(diff, str) and diff else ""
+
+# The no-payload path sends no diff at all — the server fetches it from GitHub
+# for repo@ref — so there the commit IS the identity.
+meta = inp.get("meta") or {}
+ref = meta.get("ref") if isinstance(meta, dict) else None
+ref = ref if isinstance(ref, str) and ref else ""
+
 # One field per line: a cwd may contain spaces, and a newline in a path is not
 # something this hook needs to survive.
-print(tool, done, d.get("cwd") or "", sep="\n")
+print(tool, done, d.get("cwd") or "", sent, ref, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
 DONE=$(printf '%s' "$FIELDS" | sed -n 2p)
 CWD=$(printf '%s' "$FIELDS" | sed -n 3p)
+SENT=$(printf '%s' "$FIELDS" | sed -n 4p)
+REF=$(printf '%s' "$FIELDS" | sed -n 5p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -57,22 +77,48 @@ PENDING="$MARKER.pending"
 
 case "$TOOL" in
   submit_review)
-    ID=$(ohmybug_diff_id) || exit 0
-    [ -n "$ID" ] || exit 0
-    mkdir -p "$(dirname "$PENDING")" && printf '%s\n' "$ID" > "$PENDING"
+    # Every id this submit could legitimately be known by, newline-separated.
+    # The sent bytes first, because that one is true from any directory; the
+    # working diff second, for a client that reformatted what it sent; the ref
+    # last, for the no-payload path where there are no bytes to hash.
+    mkdir -p "$(dirname "$PENDING")" 2>/dev/null || exit 0
+    {
+      [ -n "$SENT" ] && printf '%s\n' "$SENT"
+      ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
+      [ -n "$REF" ] && printf 'ref:%s\n' "$REF"
+      true
+    } > "$PENDING.tmp" 2>/dev/null || exit 0
+    if [ -s "$PENDING.tmp" ]; then
+      mv "$PENDING.tmp" "$PENDING"
+    else
+      rm -f "$PENDING.tmp"
+      # Nothing identifiable was sent. Say so: this used to exit silently, and a
+      # silent non-recording is indistinguishable from a hunt that never ran —
+      # which is how the gate came to accuse work that had been reviewed.
+      echo "ohmybug: submit carried no diff and no meta.ref, so this hunt cannot be recorded; the merge gate will not see it" >&2
+    fi
     ;;
   get_findings|confirm_findings)
     # confirm_findings only exists after a done review, so it needs no status
     # check; get_findings is polled while the review is still running.
     [ "$TOOL" = 'confirm_findings' ] || [ "${DONE:-0}" = '1' ] || exit 0
     if [ -s "$PENDING" ]; then
-      mkdir -p "$(dirname "$MARKER")" && cp "$PENDING" "$MARKER" && rm -f "$PENDING"
+      # Promote what was SENT, not what the tree looks like now: fixes written
+      # while the review ran were never hunted.
+      while IFS= read -r line; do
+        [ -n "$line" ] && ohmybug_record_hunt "$line"
+      done < "$PENDING"
+      # The single-slot marker stays written for one more release: a gate from an
+      # older install still reads only that file.
+      mkdir -p "$(dirname "$MARKER")" && head -n 1 "$PENDING" > "$MARKER"
+      rm -f "$PENDING"
     else
-      # No pending: the review was submitted from another session or another
-      # directory. The working diff is the best available claim, and the gate
-      # re-blocks the moment it changes.
+      # No pending: submitted from another session or another directory. The
+      # working diff is the best available claim, and the gate re-blocks the
+      # moment it changes.
       ID=$(ohmybug_diff_id) || exit 0
       [ -n "$ID" ] || exit 0
+      ohmybug_record_hunt "$ID"
       mkdir -p "$(dirname "$MARKER")" && printf '%s\n' "$ID" > "$MARKER"
     fi
     ;;

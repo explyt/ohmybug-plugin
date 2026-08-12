@@ -14,6 +14,23 @@ export HOME=$(mktemp -d)
 cd "$(git -C "$G" rev-parse --show-toplevel)" || exit 1
 fails=0
 
+# Make our own dirty state instead of hoping for one.
+#
+# EVERY row in this file needs a working diff to speak about: with a clean tree
+# the gate correctly stands down ("this gate speaks about the working diff, and
+# there isn't one"), so every block row reads as allow and the whole stamp half
+# was skipped and counted as a single failure. This file only ever worked because
+# someone happened to have edits lying around — that is, it was off precisely
+# when the tree is in the state you release from.
+SCRATCH=".ohmybug-gate-test-scratch"
+# `git add -N` is what makes the file visible to `git diff`, and it leaves an
+# index entry behind — so the cleanup has to undo both, or this test dirties the
+# repository it just finished testing.
+cleanup_scratch() { rm -f "$SCRATCH"; git reset -q -- "$SCRATCH" 2>/dev/null || true; }
+trap 'cleanup_scratch' EXIT
+printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
+git add -N "$SCRATCH" 2>/dev/null || true
+
 mk() { python3 -c "import json,sys;print(json.dumps({'tool_input':{'command':sys.argv[1]},'cwd':sys.argv[2]}))" "$1" "$2"; }
 t() {
   want=$2
@@ -74,10 +91,10 @@ s() { # label, expected marker content ('' = absent)
   fi
 }
 
-rm -f "$M" "$M.pending"
+rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)"
 ID=$(ohmybug_diff_id)
 if [ -z "$ID" ]; then
-  echo "stamp: no working diff here, cannot exercise the stamp (commit something first)" >&2
+  echo "stamp: the scratch file did not produce a working diff — is origin/HEAD resolvable here?" >&2
   fails=$((fails + 1))
 else
   post get_findings 0; s "still running writes nothing" ""
@@ -87,13 +104,13 @@ else
   # Fixes written WHILE the review runs were never hunted. The marker must
   # name the diff that was sent, not whatever the tree looks like when the
   # answer arrives — otherwise the gate blesses code the hunt never saw.
-  rm -f "$M" "$M.pending"
+  rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)"
   post submit_review 0
   echo "# stamp-test-race $$" >> README.md
   post get_findings 1; s "done stamps the SENT diff, not the current one" "$ID"
   t "$V" 2
   git checkout -- README.md 2>/dev/null || true
-  rm -f "$M"
+  rm -rf "$M" "$(ohmybug_hunt_dir)"
   post confirm_findings 0; s "confirm stamps even with no pending" "$ID"
   # The whole point of hashing the diff: fixes written after the hunt must
   # re-block, or the gate authorises code nobody reviewed.
@@ -102,13 +119,100 @@ else
   git checkout -- README.md 2>/dev/null || sed -i '' -e "/# stamp-test $$/d" README.md
 fi
 
+# --- the worktree rows -------------------------------------------------------
+# The failure the owner hit on 2026-08-12, third occurrence of this class: the
+# work lives in a git worktree, the hunt is driven from a session whose cwd is
+# the MAIN checkout, and the merge runs in the worktree. Two ways that used to
+# break, both fixed by taking the id from the bytes we SENT and keying the record
+# on the repository rather than the working tree:
+#
+#   1. the stamp derived the id from `git diff` in ITS cwd — the main checkout,
+#      which is clean, so the id came out empty and nothing was recorded at all,
+#      silently;
+#   2. even a correct record was filed under the worktree's own git-dir, a
+#      different file from the one the gate read.
+WT=$(mktemp -d)/wt
+if git worktree add -q --detach "$WT" HEAD 2>/dev/null; then
+  # A real change, committed in the worktree, so its diff-vs-base is non-empty
+  # while the main checkout stays clean.
+  printf 'worktree change %s\n' "$$" > "$WT/.ohmybug-wt-scratch"
+  git -C "$WT" add .ohmybug-wt-scratch 2>/dev/null
+  git -C "$WT" -c user.email=t@t -c user.name=t commit -qm 'worktree scratch' 2>/dev/null
+
+  WT_DIFF=$(git -C "$WT" diff "$(git -C "$WT" merge-base HEAD origin/main 2>/dev/null || git -C "$WT" rev-parse HEAD~1)")
+  rm -rf "$(cd "$WT" && ohmybug_hunt_dir)" "$(ohmybug_hunt_dir)"
+
+  # submit_review carrying the worktree's diff, reported with the MAIN checkout
+  # as cwd — the exact shape that recorded nothing.
+  wpost() { # tool, done?, cwd, diff-text
+    python3 -c "import json,sys;print(json.dumps({
+      'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+      'tool_input':{'diff':sys.argv[4]},
+      'tool_response':{'content':[{'type':'text','text':json.dumps(
+         {'review_id':'rev_wt','status':'done' if sys.argv[2]=='1' else 'running'})}]},
+      'cwd':sys.argv[3]}))" "$1" "$2" "$3" "$4" | bash "$G/stamp-hunt.sh"
+  }
+  wpost submit_review 0 "$PWD" "$WT_DIFF"
+  wpost get_findings 1 "$PWD" "$WT_DIFF"
+
+  # ...and the merge happens in the worktree. Before the fix: 2.
+  rc=$(mk "$V" "$WT" | perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  if [ "$rc" != 0 ]; then
+    printf 'FAIL worktree: hunt recorded from the main checkout is invisible in the worktree (rc=%s)\n' "$rc"
+    fails=$((fails + 1))
+  fi
+
+  # And an edit made in the worktree AFTER that hunt must block again.
+  printf 'unhunted %s\n' "$$" >> "$WT/.ohmybug-wt-scratch"
+  rc=$(mk "$V" "$WT" | perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  if [ "$rc" != 2 ]; then
+    printf 'FAIL worktree: an edit written after the hunt was allowed through (rc=%s)\n' "$rc"
+    fails=$((fails + 1))
+  fi
+
+  git worktree remove --force "$WT" 2>/dev/null
+  git worktree prune 2>/dev/null
+else
+  echo "worktree rows skipped: could not create a worktree here" >&2
+  fails=$((fails + 1))
+fi
+
+# --- the no-payload path -----------------------------------------------------
+# The DEFAULT submit sends no diff at all — the server fetches it for repo@ref —
+# so there the commit is the only identity available, and a hunt that records
+# nothing is a gate that blocks reviewed work.
+#
+# Asserted on the record itself rather than through the gate: the gate's answer
+# here also depends on whether the tree is clean, and mixing the two would leave
+# a green row that proves neither.
+rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)"
+NP_SHA=$(git rev-parse HEAD)
+npost() { # tool, status
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'diff':'','meta':{'repo':'x/y','ref':sys.argv[3]}},
+    'tool_response':{'content':[{'type':'text','text':json.dumps(
+       {'review_id':'rev_np','status':sys.argv[2]})}]},
+    'cwd':sys.argv[4]}))" "$1" "$2" "$NP_SHA" "$PWD" | bash "$G/stamp-hunt.sh"
+}
+npost submit_review running
+if ohmybug_hunted "ref:$NP_SHA"; then
+  printf 'FAIL no-payload: submit alone authorised the commit\n'; fails=$((fails + 1))
+fi
+npost get_findings done
+if ! ohmybug_hunted "ref:$NP_SHA"; then
+  printf 'FAIL no-payload: a finished review left the commit unrecorded\n'; fails=$((fails + 1))
+fi
+
 # --- no recorder, no accusation ----------------------------------------------
 # 0.8.1 shipped the gate without stamp-hunt.sh, so on those installs the gate
 # cannot know anything — and it blocked a diff that had been hunted four times
 # (owner report, twice). "Cannot tell" must not read as "you did not hunt".
 BK=$(mktemp -d)
 cp "$G/pre-pr-gate.sh" "$G/diff-id.sh" "$BK/"
-rm -f "$M" "$M.pending"
+# No evidence of ANY hunt is this row's premise, so clear the hunt set too — not
+# only the legacy single-slot marker.
+rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)"
 if [ -n "$ID" ]; then
   # With the recorder present and no marker: blocks (exit 2), as before.
   t "$V" 2

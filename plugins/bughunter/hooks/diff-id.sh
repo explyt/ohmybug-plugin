@@ -45,6 +45,54 @@ ohmybug_marker_path() {
     "$(printf '%s' "$gitdir" | shasum -a 256 | cut -c1-16)"
 }
 
+# Everything below is keyed on the REPOSITORY, not the working tree.
+#
+# `--absolute-git-dir` answers `<main>/.git/worktrees/<name>` inside a worktree,
+# so a hunt recorded from the main checkout was invisible to a gate running in a
+# worktree and the reverse — two files, same repository, and a merge blocked on
+# work that had been hunted (owner report, 2026-08-12, third occurrence of this
+# class). `--git-common-dir` answers the same path from both.
+ohmybug_repo_key() {
+  local d
+  d=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+    || d=$(git rev-parse --absolute-git-dir 2>/dev/null) \
+    || return 1
+  printf '%s' "$d" | shasum -a 256 | cut -c1-16
+}
+
+ohmybug_hunt_dir() {
+  local k
+  k=$(ohmybug_repo_key) || return 1
+  # `hunts/`, not `markers/`: in the main checkout the old key and the new one
+  # are the same string, and the old scheme left a FILE exactly where this needs
+  # a directory.
+  printf '%s/.ohmybug/hunts/%s' "$HOME" "$k"
+}
+
+# A hunt is one empty file named after what was hunted. A set, not a slot: two
+# worktrees of one repository can be mid-review at the same time without
+# overwriting each other's evidence, and the lookup is a file test.
+ohmybug_record_hunt() {
+  local dir
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  mkdir -p "$dir" && : > "$dir/$1"
+}
+
+ohmybug_hunted() {
+  local dir
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  [ -f "$dir/$1" ]
+}
+
+# sha256 of stdin. The identity of a hunt is the BYTES WE SENT, which is the one
+# description of "which diff" that does not depend on which directory a hook
+# happened to be standing in.
+ohmybug_id_of_stdin() {
+  shasum -a 256 | cut -d' ' -f1
+}
+
 # `diff-id.sh stamp` — record that the current diff was hunted.
 if [ "${1:-}" = "stamp" ]; then
   if ! id=$(ohmybug_diff_id); then
@@ -57,5 +105,6 @@ if [ "${1:-}" = "stamp" ]; then
   fi
   m=$(ohmybug_marker_path) || exit 1
   mkdir -p "$(dirname "$m")" && printf '%s\n' "$id" > "$m"
+  ohmybug_record_hunt "$id"
   echo "ohmybug: hunted diff recorded ($id)"
 fi

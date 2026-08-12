@@ -171,11 +171,31 @@ fi
 # one. (Merging an unrelated PR from a clean tree is outside what it can see.)
 [ -n "$CURRENT" ] || exit 0
 
+# The hunt set, keyed on the repository rather than the working tree, so a hunt
+# recorded from the main checkout is visible to a merge run in a worktree and the
+# reverse. That mismatch blocked reviewed work three times.
+if ohmybug_hunted "$CURRENT"; then
+  exit 0
+fi
+
+# The no-payload path sends repo@ref and no bytes, so the commit is the identity
+# — but only while nothing is uncommitted, because an edit after the hunt is a
+# diff nobody reviewed.
+HEAD_SHA=$(git rev-parse HEAD 2>/dev/null)
+if [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && ohmybug_hunted "ref:$HEAD_SHA"; then
+  exit 0
+fi
+
 for M in "$MARKER" "$LEGACY_MARKER"; do
   if [ -f "$M" ] && [ "$(cat "$M")" = "$CURRENT" ]; then
     exit 0
   fi
 done
 
-echo "OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them). Run /bughunter:review, or call submit_review then get_findings directly; either way the hunt records itself when it finishes, no manual step. If a hunt did just finish on this exact diff and this still blocks, the recording hook is not installed (old plugin version) — say so rather than stamping by hand. To skip once, prefix the command with SKIP_BUGHUNT=1 (ask the user first)." >&2
+# Name the id and where we looked. Without this a false block is
+# indistinguishable from a real one, and the only way to tell them apart was to
+# read the hook — which is how an operator ends up reaching for SKIP_BUGHUNT to
+# find out.
+echo "OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them). Run /bughunter:review, or call submit_review then get_findings directly; either way the hunt records itself when it finishes, no manual step. To skip once, prefix the command with SKIP_BUGHUNT=1 (ask the user first)." >&2
+echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $(ohmybug_hunt_dir 2>/dev/null || echo '(no repo key)')." >&2
 exit 2
