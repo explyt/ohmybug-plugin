@@ -229,5 +229,19 @@ if [ -n "$ID" ]; then
 fi
 rm -rf "$BK"
 
+# --- the first-run notice speaks once, and not to someone who already decided -
+# A plugin that repeats advice you have taken is a plugin you turn off, and the
+# advice here is about the user's own permission settings — the one place this
+# plugin must never write.
+FR=$(mktemp -d)
+say() { OMB_STATE_DIR="$FR/state" HOME="$FR" bash "$G/first-run.sh"; }
+[ -n "$(say)" ] || { printf 'FAIL first-run: said nothing on a fresh install\n'; fails=$((fails + 1)); }
+[ -z "$(say)" ] || { printf 'FAIL first-run: said it twice\n'; fails=$((fails + 1)); }
+rm -rf "$FR/state"
+mkdir -p "$FR/.claude"
+printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
+[ -z "$(say)" ] || { printf 'FAIL first-run: nagged a user who had already decided\n'; fails=$((fails + 1)); }
+rm -rf "$FR"
+
 rm -rf "$HOME"
 if [ "$fails" = 0 ]; then echo "gate+stamp: ok"; else echo "gate+stamp: $fails failing"; exit 1; fi
