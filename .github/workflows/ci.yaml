@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Verify hooks
+    runs-on: ubuntu-latest
+    # The suite is shell and finishes in seconds; past this it is a hang, and a
+    # hang must report as a failure rather than as six hours of runner.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # The gate derives ids from git history, and version.sh counts commits —
+      # a shallow clone would make both of them measure the clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: bash plugins/bughunter/hooks/gate-test.sh
+      - run: bash scripts/version.sh --self-test
+      # The manifest carries the version a marketplace reads, so it is the one
+      # thing here that is wrong silently: nothing breaks, the plugin just
+      # never appears to update.
+      - run: bash scripts/version.sh --check
