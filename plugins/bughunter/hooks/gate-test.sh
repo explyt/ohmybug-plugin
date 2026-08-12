@@ -28,6 +28,11 @@ SCRATCH=".ohmybug-gate-test-scratch"
 # repository it just finished testing.
 cleanup_scratch() { rm -f "$SCRATCH"; git reset -q -- "$SCRATCH" 2>/dev/null || true; }
 trap 'cleanup_scratch' EXIT
+# What the tree looked like before we touched anything. A test that runs against
+# the real repository has to leave it exactly as it found it: this file once put
+# a tracked file back with `git checkout --`, which is data loss for anyone with
+# uncommitted work in it, and CI never noticed because CI's tree is always clean.
+TREE_BEFORE=$(git status --porcelain | grep -v "$SCRATCH" || true)
 printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
 git add -N "$SCRATCH" 2>/dev/null || true
 
@@ -106,17 +111,23 @@ else
   # answer arrives — otherwise the gate blesses code the hunt never saw.
   rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)"
   post submit_review 0
-  echo "# stamp-test-race $$" >> README.md
+  # The scratch file, never a tracked one. This row used to edit README.md and
+  # put it back with `git checkout --`, which DELETES whatever the person running
+  # the suite had not committed there — and, more quietly, made the whole stamp
+  # half fail on a dirty tree: the restore changed the working diff out from
+  # under the id captured above, so every later row compared against a hash the
+  # tree no longer had.
+  printf 'edited while the review was running\n' >> "$SCRATCH"
   post get_findings 1; s "done stamps the SENT diff, not the current one" "$ID"
   t "$V" 2
-  git checkout -- README.md 2>/dev/null || true
+  printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
   rm -rf "$M" "$(ohmybug_hunt_dir)"
   post confirm_findings 0; s "confirm stamps even with no pending" "$ID"
   # The whole point of hashing the diff: fixes written after the hunt must
   # re-block, or the gate authorises code nobody reviewed.
-  echo "# stamp-test $$" >> README.md
+  printf 'a fix written after the hunt\n' >> "$SCRATCH"
   t "$V" 2
-  git checkout -- README.md 2>/dev/null || sed -i '' -e "/# stamp-test $$/d" README.md
+  printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
 fi
 
 # --- the worktree rows -------------------------------------------------------
@@ -242,6 +253,12 @@ mkdir -p "$FR/.claude"
 printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
 [ -z "$(say)" ] || { printf 'FAIL first-run: nagged a user who had already decided\n'; fails=$((fails + 1)); }
 rm -rf "$FR"
+
+cleanup_scratch
+if [ "$(git status --porcelain | grep -v "$SCRATCH" || true)" != "$TREE_BEFORE" ]; then
+  printf 'FAIL the suite changed the working tree it was run in:\n%s\n' "$(git status --porcelain)"
+  fails=$((fails + 1))
+fi
 
 rm -rf "$HOME"
 if [ "$fails" = 0 ]; then echo "gate+stamp: ok"; else echo "gate+stamp: $fails failing"; exit 1; fi
