@@ -82,9 +82,10 @@ t "npm run build && (cd api && $V)"      2
 post() { # tool, done?, -> runs stamp-hunt.sh
   python3 -c "import json,sys;print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'review_id':'rev_x','diff':open(sys.argv[3]).read()},
     'tool_response':{'content':[{'type':'text','text':json.dumps(
        {'review_id':'rev_x','status':'done' if sys.argv[2]=='1' else 'running'})}]},
-    'cwd':sys.argv[3]}))" "$1" "$2" "$PWD" | bash "$G/stamp-hunt.sh"
+    'cwd':sys.argv[4]}))" "$1" "$2" "$SCRATCH" "$PWD" | bash "$G/stamp-hunt.sh"
 }
 . "$G/diff-id.sh"
 M=$(ohmybug_marker_path)
