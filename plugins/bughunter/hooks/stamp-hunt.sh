@@ -41,7 +41,11 @@ blob = json.dumps(d.get("tool_response"))
 done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
 review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
 if not isinstance(review, str) or not review:
-    m = re.search(r"\\\\?\"review_id\\\\?\":\\s*\\\\?\"([^\\\\?\"]+)", blob)
+    # Same escaping rules as the `done` match above: \s, not \\s — the latter
+    # is a literal backslash in a raw string and never matches, which recorded
+    # NOTHING for every flow whose review_id lives only in the response
+    # (worktree and no-payload submits, plugin#2).
+    m = re.search(r"\\\\?\"review_id\\\\?\":\s*\\\\?\"([^\\\\\"]+)", blob)
     review = m.group(1) if m else ""
 
 # The identity of a hunt, taken from the hunt itself.
