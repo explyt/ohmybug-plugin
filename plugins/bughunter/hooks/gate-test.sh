@@ -80,8 +80,14 @@ t "npm run build && (cd api && $V)"      2
 # how a control teaches people to disarm it. These rows pin the stamp to the
 # tool calls themselves.
 post() { # tool, done?, -> runs stamp-hunt.sh
-  python3 -c "import json,sys;print(json.dumps({
+  # The payload is the WORKING DIFF's bytes, exactly what a client sends: the
+  # whole point of payload-based stamping is that sha256(sent bytes) equals the
+  # diff-id a gate computes locally. A file's raw content hashes to something
+  # no gate ever computes and turns every marker row into noise.
+  OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
+  python3 -c "import json,os,sys;print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'review_id':'rev_x','diff':os.environ.get('OMB_DIFF','')},
     'tool_response':{'content':[{'type':'text','text':json.dumps(
        {'review_id':'rev_x','status':'done' if sys.argv[2]=='1' else 'running'})}]},
     'cwd':sys.argv[3]}))" "$1" "$2" "$PWD" | bash "$G/stamp-hunt.sh"
@@ -122,12 +128,12 @@ else
   t "$V" 2
   printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
   rm -rf "$M" "$(ohmybug_hunt_dir)"
-  post confirm_findings 0; s "confirm stamps even with no pending" "$ID"
-  # The whole point of hashing the diff: fixes written after the hunt must
-  # re-block, or the gate authorises code nobody reviewed.
-  printf 'a fix written after the hunt\n' >> "$SCRATCH"
+  # The other side of the worktree fix (plugin#2): with no pending for this
+  # review, confirm must NOT bless whatever tree this session happens to sit
+  # in — in a worktree flow that cwd may be a different checkout entirely.
+  # The owning session promotes the recorded payload; this one records nothing.
+  post confirm_findings 0; s "confirm without a pending stamps nothing" ""
   t "$V" 2
-  printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
 fi
 
 # --- the worktree rows -------------------------------------------------------

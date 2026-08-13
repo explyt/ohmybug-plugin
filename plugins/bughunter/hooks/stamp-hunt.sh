@@ -39,6 +39,14 @@ tool = (d.get("tool_name") or "").split("__")[-1]
 # guessing a path into it. Escaped quotes survive that flattening, hence \\\\?.
 blob = json.dumps(d.get("tool_response"))
 done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
+review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
+if not isinstance(review, str) or not review:
+    # Same escaping rules as the `done` match above: \s, not \\s — the latter
+    # is a literal backslash in a raw string and never matches, which recorded
+    # NOTHING for every flow whose review_id lives only in the response
+    # (worktree and no-payload submits, plugin#2).
+    m = re.search(r"\\\\?\"review_id\\\\?\":\s*\\\\?\"([^\\\\\"]+)", blob)
+    review = m.group(1) if m else ""
 
 # The identity of a hunt, taken from the hunt itself.
 #
@@ -47,7 +55,6 @@ done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
 # local changes at all — so the id came out empty and the hunt was recorded
 # NOWHERE, silently, and the gate then blocked a diff that had been reviewed.
 # These bytes are the ones the server saw, whatever directory anyone is in.
-inp = d.get("tool_input") or {}
 diff = inp.get("diff")
 sent = hashlib.sha256(diff.encode()).hexdigest() if isinstance(diff, str) and diff else ""
 
@@ -59,7 +66,7 @@ ref = ref if isinstance(ref, str) and ref else ""
 
 # One field per line: a cwd may contain spaces, and a newline in a path is not
 # something this hook needs to survive.
-print(tool, done, d.get("cwd") or "", sent, ref, sep="\n")
+print(tool, done, d.get("cwd") or "", sent, ref, review, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -67,13 +74,16 @@ DONE=$(printf '%s' "$FIELDS" | sed -n 2p)
 CWD=$(printf '%s' "$FIELDS" | sed -n 3p)
 SENT=$(printf '%s' "$FIELDS" | sed -n 4p)
 REF=$(printf '%s' "$FIELDS" | sed -n 5p)
+REVIEW=$(printf '%s' "$FIELDS" | sed -n 6p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
 
 . "$(dirname "$0")/diff-id.sh" 2>/dev/null || exit 0
 MARKER=$(ohmybug_marker_path) || exit 0
-PENDING="$MARKER.pending"
+REPO_HUNTS=$(ohmybug_hunt_dir) || exit 0
+PENDING_DIR="$REPO_HUNTS.pending"
+PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 
 case "$TOOL" in
   submit_review)
@@ -81,7 +91,8 @@ case "$TOOL" in
     # The sent bytes first, because that one is true from any directory; the
     # working diff second, for a client that reformatted what it sent; the ref
     # last, for the no-payload path where there are no bytes to hash.
-    mkdir -p "$(dirname "$PENDING")" 2>/dev/null || exit 0
+    [ -n "$REVIEW" ] || exit 0
+    mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
       ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
@@ -113,13 +124,10 @@ case "$TOOL" in
       mkdir -p "$(dirname "$MARKER")" && head -n 1 "$PENDING" > "$MARKER"
       rm -f "$PENDING"
     else
-      # No pending: submitted from another session or another directory. The
-      # working diff is the best available claim, and the gate re-blocks the
-      # moment it changes.
-      ID=$(ohmybug_diff_id) || exit 0
-      [ -n "$ID" ] || exit 0
-      ohmybug_record_hunt "$ID"
-      mkdir -p "$(dirname "$MARKER")" && printf '%s\n' "$ID" > "$MARKER"
+      # No pending: another session owns the submit. Never hash this cwd: in a
+      # worktree flow it may be a different checkout and would bless the wrong
+      # diff. The owning session will promote the recorded payload.
+      exit 0
     fi
     ;;
 esac
