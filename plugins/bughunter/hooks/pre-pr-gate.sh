@@ -88,12 +88,19 @@ def join_quoted_newlines(cmd):
     return "".join(out)
 
 def code_only(cmd):
-    """The command with its DATA blanked out: quoted spans become spaces and
-    heredoc bodies become empty lines. What survives is the text a shell would
-    execute — the only place a command, or an opt-out, can really begin."""
+    """The command with its DATA blanked out: heredoc bodies become empty lines
+    and quoted spans become spaces. What survives is the text a shell would
+    execute — the only place a command, or an opt-out, can really begin.
+
+    Heredocs go FIRST. Doing quotes first destroyed the very recognition this
+    depends on: one apostrophe in a body swallowed the terminator line, so
+    blank_heredocs found no terminator and blanked nothing, and the body then
+    reached the opt-out regex — which is the whole attack this function exists
+    to stop. A quoted terminator (`<<EOF` written as <<{q}EOF{q}) broke the
+    opener match the same way."""
     out = []
     quote = ""
-    for ch in cmd:
+    for ch in blank_heredocs(cmd):
         if quote:
             if ch == quote:
                 quote = ""
@@ -102,7 +109,7 @@ def code_only(cmd):
         elif ch in QUOTE_CHARS:
             quote = ch
         out.append(ch)
-    return blank_heredocs("".join(out))
+    return "".join(out)
 
 def segments(cmd, depth=0, quiet=False):
     """Yield token lists, one per command position, recursing into `sh -c`."""
@@ -222,7 +229,11 @@ for seg in segments(cmd):
 # bash that ships with macOS is 3.2 and does not split IFS on that byte, so the
 # whole answer arrived as field one and every verdict read as "not a merge" —
 # a gate that silently allows everything, on the majority platform.
-print(data.get("cwd") or "", verdict, looks_merge, opts_out, sep="\n")
+# The cwd is the one free-text field here, and a newline in it would shift the
+# verdict into a field nobody reads — the gate then stands down in silence. The
+# recorder learned this in the same change; this protocol is the same shape.
+cwd_line = (data.get("cwd") or "").replace("\n", " ").replace("\r", " ")
+print(cwd_line, verdict, looks_merge, opts_out, sep="\n")
 ' 2>/dev/null)
 
 if [ -z "$DECIDE" ]; then

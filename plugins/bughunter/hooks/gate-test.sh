@@ -123,6 +123,16 @@ rc=$(python3 -c "import json,sys;print(json.dumps({'cwd':sys.argv[1],'tool_input
 # Nor about where it sits: mentioning it mid-sentence is not opting out.
 t "echo about SKIP_BUGHUNT=1 policy; $V" 2
 
+# A newline in the cwd must not shift the verdict out of the field the shell
+# reads: the gate then exits 0 on an unhunted merge, silently, which is the one
+# outcome this file's header forbids.
+NLDIR="$HOME/nl
+dir"
+mkdir -p "$NLDIR" 2>/dev/null
+rc=$(mk "$V" "$NLDIR" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL a newline in cwd shifted the verdict (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$HOME/nl"
+
 # --- the merge rule, in every spelling the tokenizer accepts -------------------
 # The rule lives in two places (the python tuple and the unparsed-branch regex);
 # rows that only ever use one spelling let the other drift. Every line here is a
@@ -155,6 +165,14 @@ SKIP_BUGHUNT=1 is the operator hatch
 EOF
 $V"                                      2
 t "cd /tmp && SKIP_BUGHUNT=1 $V"         0  # where a human actually types it
+t "cat > /tmp/doc.md <<EOF
+policy; SKIP_BUGHUNT=1 is the hatch, don't use it
+EOF
+$V"                                      2  # apostrophe AFTER the opt-out
+t "cat > /tmp/doc.md <<'EOF'
+policy; SKIP_BUGHUNT=1 is the hatch
+EOF
+echo it's done; $V"                      2  # quoted terminator
 # A separator INSIDE data is not a command boundary. One apostrophe makes the
 # command unparsable, and the opt-out then came from a document the model wrote.
 t "cat > /tmp/doc.md <<EOF
@@ -295,6 +313,15 @@ if [ -n "$ID" ]; then
   t "$V" 2                        # never asked at all: still a block
   pre submit_review
   t "$V" 0                        # asked, never finished: warn, let it through
+  # stdout, not stderr: on an exit-0 PreToolUse the stdout copy is the one the
+  # transcript surfaces, and every other assertion here captures stderr only —
+  # so deleting the stdout echo was free.
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>/dev/null)
+  case "$out" in
+    *"no findings came back"*) ;;
+    *) printf 'FAIL the warn-through said nothing on stdout: %s\n' "$out"
+       fails=$((fails + 1)) ;;
+  esac
   out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
   case "$out" in
     *"no findings came back"*) ;;
@@ -305,9 +332,23 @@ if [ -n "$ID" ]; then
   # allow rule in the user's own settings the tools work, so an unfinished hunt
   # means the hunt is the thing to finish — otherwise the warn is a switch the
   # agent flips for itself by making one call it can be sure will fail.
-  mkdir -p "$HOME/.claude"
-  printf '{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$HOME/.claude/settings.json"
+  mkdir -p "$HOME/.claude" "$CLAUDE_PROJECT_DIR/.claude"
+  RULE='{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__submit_review"]}}'
+  printf '%s\n' "$RULE" > "$HOME/.claude/settings.json"
   t "$V" 2
+  rm -f "$HOME/.claude/settings.json"
+  t "$V" 0
+  # The project half of the lookup is where /permissions writes by default, so a
+  # team that granted these tools repo-wide must get the block, not the warning.
+  # Sandboxing that path without asserting it only sterilised the branch.
+  printf '%s\n' "$RULE" > "$CLAUDE_PROJECT_DIR/.claude/settings.json"
+  t "$V" 2
+  rm -f "$CLAUDE_PROJECT_DIR/.claude/settings.json"
+  # A DENY is not an allow. Reading the settings as text (or scanning the whole
+  # permissions object) would read a deliberate refusal as permission, and the
+  # gate would then block forever on a hunt nobody in that session can run.
+  printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$HOME/.claude/settings.json"
+  t "$V" 0
   rm -f "$HOME/.claude/settings.json"
   t "$V" 0
   # The warning covers the diff that was attempted, not whatever came after it.
@@ -425,6 +466,13 @@ if [ -n "$ID" ]; then
   ohmybug_attempted "ref:some-branch-name" && { printf 'FAIL a ref that is not this commit still recorded an attempt\n'; fails=$((fails + 1)); }
   npre "$HEAD_NOW"
   ohmybug_attempted "ref:$HEAD_NOW" || { printf 'FAIL the no-payload attempt was not recorded\n'; fails=$((fails + 1)); }
+  # ...and so is any spelling of it. The preferred flow sends meta.ref, and a
+  # model that sends the branch name or a short sha is offering the same commit;
+  # matching the full sha as a STRING made that offer vanish, leaving the merge
+  # blocked with nothing the session could do about it.
+  reset_state
+  npre "$(git rev-parse --short HEAD)"
+  ohmybug_attempted "ref:$HEAD_NOW" || { printf 'FAIL a short sha for this very commit recorded nothing\n'; fails=$((fails + 1)); }
   t "$V" 2   # the tree is dirty, so a commit-keyed attempt says nothing about it
   reset_state
 fi

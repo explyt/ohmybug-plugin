@@ -154,8 +154,18 @@ PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 if [ "${PRE:-0}" = "1" ]; then
   [ "$TOOL" = submit_review ] || exit 0
   [ -n "$SENT" ] && ohmybug_record_attempt "$SENT"
-  if [ -n "$REF" ] && [ "$REF" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
-    ohmybug_record_attempt "ref:$REF"
+  # Resolve the ref rather than string-comparing it: `meta.ref` is documented as
+  # the head, and a branch name or a short sha that points AT this commit is the
+  # same offer. Matching only the full sha meant the no-payload flow — the one
+  # the skill calls preferred — recorded nothing, so a refused hunt there left
+  # the merge blocked with no way out, which is the trap this whole change
+  # exists to remove.
+  if [ -n "$REF" ]; then
+    RESOLVED=$(git rev-parse --verify --quiet "$REF^{commit}" 2>/dev/null)
+    # Record under the RESOLVED sha, which is the key the gate looks up. A
+    # branch name filed under its own name is a record nothing ever reads.
+    [ -n "$RESOLVED" ] && [ "$RESOLVED" = "$(git rev-parse HEAD 2>/dev/null)" ] &&
+      ohmybug_record_attempt "ref:$RESOLVED"
   fi
   exit 0
 fi
