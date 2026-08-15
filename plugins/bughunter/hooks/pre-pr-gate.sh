@@ -29,17 +29,8 @@
 
 INPUT=$(cat)
 
-# Cheapest test first: `gh pr merge` and `glab mr merge` both contain the word,
-# so a payload without it cannot be a merge. This also keeps the parser — and
-# python3 start-up — away from the ~99% of Bash calls that were never this
-# hook's business.
-case "$INPUT" in
-  *merge*) ;;
-  *) exit 0 ;;
-esac
-
 DECIDE=$(printf '%s' "$INPUT" | python3 -c '
-import json, shlex, sys
+import json, re, shlex, sys
 
 MERGERS = (("gh", "pr", "merge"), ("glab", "mr", "merge"))
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
@@ -49,7 +40,7 @@ SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 SEPS = {";", "&&", "||", "|", "&", "(", ")", "{", "}", "\n", "then", "do",
         "else", "elif", "fi", "done", "in", "!"}
 
-def segments(cmd, depth=0):
+def segments(cmd, depth=0, quiet=False):
     """Yield token lists, one per command position, recursing into `sh -c`."""
     if depth > 3:
         return
@@ -59,7 +50,10 @@ def segments(cmd, depth=0):
         tokens = list(lex)
     except ValueError:
         # Unbalanced quotes: we cannot tokenize, so we cannot rule a merge out.
-        yield ["\x00unparsed"]
+        # Only the top-level parse gets to say that; a per-line retry that fails
+        # is just a line we could not read, not a verdict about the command.
+        if not quiet:
+            yield ["\x00unparsed"]
         return
     cur = []
     for t in tokens:
@@ -71,6 +65,15 @@ def segments(cmd, depth=0):
             cur.append(t)
     if cur:
         yield cur
+    # A newline ends a command as surely as `;` does, but shlex eats it as
+    # whitespace, so `npm test<newline>gh pr merge 5` arrives here as ONE
+    # segment whose head is ("npm", "test", "gh") and walks straight through.
+    # Listing "\n" in SEPS never helped: the token never reaches that test.
+    # Re-read each line on its own; failures there are quiet by design.
+    if "\n" in cmd:
+        for line in cmd.split("\n"):
+            if line.strip():
+                yield from segments(line, depth + 1, quiet=True)
     # A shell invoked with -c carries a whole command line in one argument.
     for seg in list(segments_inner(tokens)):
         yield from segments(seg, depth + 1)
@@ -101,10 +104,19 @@ def strip_env(seg):
 try:
     data = json.load(sys.stdin)
 except Exception:
-    print("unparsed")
+    # Not even JSON: print nothing, which the shell reads as "the parser did not
+    # answer" and treats like a missing python3 — stand down and say so.
     sys.exit(0)
 cmd = (data.get("tool_input") or {}).get("command") or ""
-print(data.get("cwd") or "", end="\x01")
+# Two facts about the COMMAND, for the branch where tokenizing failed. Read from
+# the command and nowhere else: the payload also carries `description`, which the
+# model writes itself, and a `cwd` the model chose — an opt-out honoured from
+# either of those is an opt-out the agent grants itself, which is exactly what
+# the escape hatch must not be.
+looks_merge = "1" if re.search(r"\b(?:pr|mr)[ \t]+merge\b", cmd) else "0"
+# Position matters: `SKIP_BUGHUNT=1` counts as an opt-out only where a command
+# starts, never because the words appear inside a message someone is writing.
+opts_out = "1" if re.search(r"(?:\A|[;&|\n]\s*)SKIP_BUGHUNT=1[ \t]", cmd) else "0"
 verdict = "none"
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
@@ -118,43 +130,45 @@ for seg in segments(cmd):
         verdict = "skip" if skip else "merge"
         if verdict == "merge":
             break
-print(verdict)
+# One field per line, same convention as the recorder. Not \x01-separated: the
+# bash that ships with macOS is 3.2 and does not split IFS on that byte, so the
+# whole answer arrived as field one and every verdict read as "not a merge" —
+# a gate that silently allows everything, on the majority platform.
+print(data.get("cwd") or "", verdict, looks_merge, opts_out, sep="\n")
 ' 2>/dev/null)
 
 if [ -z "$DECIDE" ]; then
-  # No python3 (or it failed): we cannot read the command, so we cannot tell a
-  # merge from an `ls`. Blocking everything would wedge the session; allowing
-  # everything would silently disarm the gate. So degrade to the substring test
-  # — but on the two-word shapes, not on the bare word: `*merge*` also matches
-  # `git merge-base`, `--no-merges` and any branch or path with "merge" in it.
+  # No python3, or it failed, or the payload was not JSON. Without python3 the
+  # RECORDER cannot write a hunt either (stamp-hunt.sh is the same interpreter),
+  # so on such a machine a block can never be lifted by hunting — it is a dead
+  # end by construction, and a dead end is what teaches people to disarm the
+  # gate. Stand down, loudly, and name the fix. The word test only decides
+  # whether to say anything: evading it costs nothing but the message.
   case "$INPUT" in
-    *SKIP_BUGHUNT=1*) exit 0 ;;
-    *"pr merge"*|*"mr merge"*)
-      echo "OhMyBug: cannot inspect this command (python3 unavailable), and it looks like a merge. Ask the operator to install python3, or to run the merge themselves with SKIP_BUGHUNT=1 in front of it after checking the diff was hunted." >&2
-      exit 2 ;;
-    *) exit 0 ;;
+    *merge*)
+      MSG="OhMyBug: python3 is unavailable here, so the gate cannot read this command — and the hunt recorder cannot run either, which means no hunt could ever lift a block. Allowing the merge unchecked. Install python3 to arm the gate again."
+      echo "$MSG" >&2
+      echo "$MSG" ;;
   esac
+  exit 0
 fi
 
-SESSION_CWD=${DECIDE%%$'\x01'*}
-VERDICT=${DECIDE##*$'\x01'}
-VERDICT=${VERDICT%%$'\n'*}
+SESSION_CWD=$(printf '%s' "$DECIDE" | sed -n 1p)
+VERDICT=$(printf '%s' "$DECIDE" | sed -n 2p)
+LOOKS_MERGE=$(printf '%s' "$DECIDE" | sed -n 3p)
+OPTS_OUT=$(printf '%s' "$DECIDE" | sed -n 4p)
 
 case "$VERDICT" in
   merge) ;;
   unparsed)
     # Unbalanced quotes are a fact about quoting, not about merging — and shlex
     # has no idea what a heredoc is, so every `cat <<'EOF'` whose body contains
-    # an apostrophe arrives here. Degrade to the same substring test as the
-    # no-python3 branch and let the hunt check below decide; do not accuse.
-    # The opt-out is read loosely here (anywhere in the payload, not on the
-    # merge segment) precisely because we could not find the segments: the
-    # alternative is a command with no way out at all.
-    case "$INPUT" in
-      *SKIP_BUGHUNT=1*) exit 0 ;;
-      *"pr merge"*|*"mr merge"*) ;;
-      *) exit 0 ;;
-    esac ;;
+    # an apostrophe arrives here. Fall back to the two flags the parser derived
+    # from the COMMAND (never from the payload around it) and let the hunt check
+    # below decide; do not accuse.
+    [ "$LOOKS_MERGE" = 1 ] || exit 0
+    [ "$OPTS_OUT" = 1 ] && exit 0
+    ;;
   *) exit 0 ;;
 esac
 
@@ -222,14 +236,34 @@ for M in "$MARKER" "$LEGACY_MARKER"; do
   fi
 done
 
+# A submit that WAS allowed and is still running is not a refusal — it is a
+# review whose findings have not arrived. Merging now is merging ahead of them.
+if ohmybug_pending_has "$CURRENT" ||
+   { [ -n "$HEAD_SHA" ] && ohmybug_pending_has "ref:$HEAD_SHA"; }; then
+  echo "OhMyBug: a hunt is RUNNING for this diff and has not returned yet. Poll get_findings until it says done, then merge. Nothing else is needed." >&2
+  exit 2
+fi
+
 # Asked for, and never finished. In auto mode the permission classifier refuses
 # these tools by design — correctly, they send a diff off the machine — and an
 # agent that has been refused has no move left: the escape hatch this hook used
 # to recommend is an env prefix disabling a safety control, which the classifier
 # refuses too. That is a dead end, and a dead end gets the plugin uninstalled.
 # So: block "never tried", warn on "tried and the environment said no".
-if ohmybug_attempted "$CURRENT" ||
-   { [ -n "$HEAD_SHA" ] && ohmybug_attempted "ref:$HEAD_SHA"; }; then
+#
+# The commit-keyed attempt carries the same clean-tree condition as the
+# commit-keyed HUNT seventeen lines above, and for the same reason: it speaks
+# about a commit, so anything uncommitted on top of it was never offered to
+# anybody. Without that condition one attempt at a commit would authorise every
+# edit ever written on top of it.
+ATTEMPT=""
+if ohmybug_attempted "$CURRENT"; then
+  ATTEMPT=$CURRENT
+elif [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] &&
+     ohmybug_attempted "ref:$HEAD_SHA"; then
+  ATTEMPT="ref:$HEAD_SHA"
+fi
+if [ -n "$ATTEMPT" ]; then
   MSG="OhMyBug: a hunt was requested for this diff but never finished — the call was refused or it failed, so the gate has no findings to stand on. Allowing the merge. To arm the gate for next time, add one permission rule yourself: /permissions -> mcp__plugin_bughunter_ohmybug__*"
   echo "$MSG" >&2
   echo "$MSG"
@@ -248,5 +282,5 @@ fi
 echo "OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them)." >&2
 echo "OhMyBug (agent): run /bughunter:review, or call submit_review then get_findings directly; the hunt records itself when it finishes, there is no manual step. If those calls are refused by this environment, say so and stop — do not retry them, do not add an env prefix, and never carry a prefix onto another command." >&2
 echo "OhMyBug (operator): to merge without a hunt, run the merge yourself with SKIP_BUGHUNT=1 in front of it." >&2
-echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $(ohmybug_hunt_dir 2>/dev/null || echo '(no repo key)')." >&2
+echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $(ohmybug_hunt_dir 2>/dev/null | sed "s|^$HOME|~|" || echo '(no repo key)')." >&2
 exit 2

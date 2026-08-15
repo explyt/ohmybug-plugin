@@ -39,10 +39,17 @@ tool = (d.get("tool_name") or "").split("__")[-1]
 # guessing a path into it. Escaped quotes survive that flattening, hence \\\\?.
 blob = json.dumps(d.get("tool_response"))
 done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
-# Which event fired, asked of the payload rather than of an argument: only
-# PostToolUse carries a response. Deriving it here means the wiring in
-# hooks.json is the same line for both events and cannot be half-installed.
-pre = "0" if "tool_response" in d else "1"
+# Which event fired. The explicit field when the client sends it; the absence of
+# a response as the fallback, since only PostToolUse carries one. Deriving it
+# here rather than from an argument means the wiring in hooks.json is the same
+# line for both events and cannot be half-installed. Key PRESENCE, not
+# truthiness: an errored call may carry an empty response, and reading that as
+# "no response" would file a finished hunt as a mere attempt.
+event = d.get("hook_event_name")
+if event in ("PreToolUse", "PostToolUse"):
+    pre = "1" if event == "PreToolUse" else "0"
+else:
+    pre = "0" if "tool_response" in d else "1"
 review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
 if not isinstance(review, str) or not review:
     # Same escaping rules as the `done` match above: \s, not \\s — the latter
@@ -88,21 +95,36 @@ PRE=$(printf '%s' "$FIELDS" | sed -n 7p)
 MARKER=$(ohmybug_marker_path) || exit 0
 REPO_HUNTS=$(ohmybug_hunt_dir) || exit 0
 PENDING_DIR="$REPO_HUNTS.pending"
+# The review id is the one model-authored string that becomes a path here, and
+# `..` in it would walk out of ~/.ohmybug/ and overwrite a file elsewhere. Real
+# ids are alphanumeric; anything else is not an id we need to preserve.
+REVIEW=$(printf '%s' "$REVIEW" | tr -c 'A-Za-z0-9_.-' '_')
 PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 
-# PreToolUse: the model ASKED for a hunt on this diff.
+# PreToolUse: the model OFFERED this diff for hunting.
 # Recorded before anyone gets to allow or refuse the call, because the refusal is
 # exactly the case that matters: in auto mode the permission classifier turns
 # these tools down by design, and until now that left the merge gate blocking
 # forever with no move the agent could make — its own advice, an env prefix on
 # the merge, is a control-disabling prefix that the classifier also refuses.
-# Block "never tried"; warn on "tried, and the environment said no". The only
-# way to forge an attempt is to actually call the tool, which is the behaviour
-# we want anyway.
+# Block "never tried"; warn on "tried, and the environment said no".
+#
+# What counts as an offer is deliberately narrow, because this record authorises
+# a merge and the party it constrains writes it:
+#   - only submit_review. A get_findings poll offers nothing — it names a review
+#     id and no diff — so honouring it would mean one throwaway call with an
+#     invented id disarms the gate. The tool is checked HERE and not only in the
+#     matcher, so widening hooks.json cannot widen the authorisation by accident.
+#   - only ids the call itself carries: the bytes in `diff`, or `meta.ref` when
+#     it names the commit this tree is actually on. Hashing the working tree
+#     instead would mean any call, carrying anything, blesses whatever happens to
+#     be checked out — including fixes written after the offer.
 if [ "${PRE:-0}" = "1" ]; then
+  [ "$TOOL" = submit_review ] || exit 0
   [ -n "$SENT" ] && ohmybug_record_attempt "$SENT"
-  [ -n "$REF" ] && ohmybug_record_attempt "ref:$REF"
-  ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && ohmybug_record_attempt "$ID"
+  if [ -n "$REF" ] && [ "$REF" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
+    ohmybug_record_attempt "ref:$REF"
+  fi
   exit 0
 fi
 

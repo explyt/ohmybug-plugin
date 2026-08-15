@@ -21,7 +21,7 @@
         ]
       },
       {
-        "matcher": "mcp__.*ohmybug.*__(submit_review|get_findings)",
+        "matcher": "mcp__.*ohmybug.*__submit_review",
         "hooks": [
           {
             "type": "command",

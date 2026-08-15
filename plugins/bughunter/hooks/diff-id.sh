@@ -86,13 +86,43 @@ ohmybug_hunted() {
   [ -f "$dir/$1" ]
 }
 
-# An ATTEMPT is "the model asked for a hunt on this id", recorded before the
+# An ATTEMPT is "the model offered this diff for hunting", recorded before the
 # environment gets to say yes or no. It lives in the same set under a prefixed
 # key: one place to look, and a prefixed name can never satisfy a lookup for a
 # finished hunt. The gate needs the distinction because "never tried" and "tried
 # and was refused" are different facts and only the first deserves a block.
-ohmybug_record_attempt() { ohmybug_record_hunt "attempt:${1:-}"; }
-ohmybug_attempted() { ohmybug_hunted "attempt:${1:-}"; }
+#
+# The empty guard is repeated rather than inherited: `attempt:` prepended to
+# nothing is a non-empty string, so the guard inside ohmybug_record_hunt can no
+# longer fire — and an id-less record would be a file that answers every lookup.
+ohmybug_record_attempt() {
+  [ -n "${1:-}" ] || return 1
+  ohmybug_record_hunt "attempt:$1"
+}
+
+# Attempts EXPIRE. A refusal is a statement about the environment right now; a
+# permanent one would mean a single refused call authorises every future merge of
+# that diff on this machine, and diff ids are content hashes, so a revert that
+# recreates old bytes would inherit an authorisation from weeks ago.
+OHMYBUG_ATTEMPT_TTL_MIN=${OHMYBUG_ATTEMPT_TTL_MIN:-720}
+ohmybug_attempted() {
+  local dir
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  [ -f "$dir/attempt:$1" ] || return 1
+  [ -n "$(find "$dir" -maxdepth 1 -name "attempt:$1" -mmin "-$OHMYBUG_ATTEMPT_TTL_MIN" 2>/dev/null)" ]
+}
+
+# Is a hunt for this id still in flight? A submit that WAS allowed leaves a
+# pending record naming every id it could be known by; until it is promoted the
+# review is running, and "running" must not read as "refused" — merging then is
+# merging before the findings arrive.
+ohmybug_pending_has() {
+  local dir
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  grep -qxF "$1" "$dir.pending"/* 2>/dev/null
+}
 
 # sha256 of stdin. The identity of a hunt is the BYTES WE SENT, which is the one
 # description of "which diff" that does not depend on which directory a hook
