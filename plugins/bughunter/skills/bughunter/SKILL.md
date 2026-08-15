@@ -459,11 +459,11 @@ because the installed plugin predates it. Say which; do not paper over it.
 - `beta_required` from `submit_review`: OhMyBug is in closed beta until
   September 1 and this account is not activated yet. The sign-in already
   worked, so nothing is broken — only activation is missing. In order:
-  1. Look for an invite already on this machine:
-     `cat "${OMB_STATE_DIR:-$HOME/.ohmybug}/invite"`. An invite link writes the
-     code there while the plugin is being installed, so this usually costs the
-     user nothing. Found one? `redeem_code` with it, then retry `submit_review`
-     once.
+  1. Look for an invite already on this machine: `cat ~/.ohmybug/invite`. An
+     invite link writes the code there while the plugin is being installed, so
+     this usually costs the user nothing. Found one? `redeem_code` with it, then
+     retry `submit_review` once. If `redeem_code` rejects it, that file is
+     stale: do not retry it or try variants of it, go to step 2.
   2. Otherwise ask the user IN CHAT for their invite. The whole invite link and
      the bare code are equally good — pass what they give you to `redeem_code`
      unchanged; the code is taken out of a link server-side.
