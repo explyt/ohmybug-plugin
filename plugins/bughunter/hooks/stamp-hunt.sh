@@ -187,6 +187,9 @@ case "$TOOL" in
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
       ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
+      # ...and the same diff with docs, tests and skills taken out, so that
+      # editing prose after the hunt does not read as unhunted code.
+      SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
       [ -n "$REF" ] && printf 'ref:%s\n' "$REF"
       true
     } > "$PENDING.tmp" 2>/dev/null || exit 0

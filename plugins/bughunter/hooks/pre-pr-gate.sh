@@ -321,6 +321,23 @@ if ohmybug_hunted "$CURRENT"; then
   exit 0
 fi
 
+# What a hunt can actually speak about: the diff without docs, tests and skills.
+#
+# Nothing significant at all means there is nothing to hunt — a docs-only branch
+# should land without paying for a review of prose. And a hunted diff whose only
+# later changes were prose is still hunted: the gate keys on a hash, so before
+# this it demanded a fresh review (money, and a quarter of an hour) because
+# someone fixed a typo in a README.
+SIG=$(ohmybug_sig_id 2>/dev/null)
+if [ -n "$SIG" ] && ohmybug_hunted "sig:$SIG"; then
+  echo "OhMyBug: this diff was hunted; everything changed since then is documentation, tests or skills, which a hunt does not speak about. Allowing the merge." >&2
+  exit 0
+fi
+if [ -z "$SIG" ] && [ "${OHMYBUG_HUNT_ALL:-0}" != "1" ]; then
+  echo "OhMyBug: nothing in this diff can change behaviour — documentation, tests and skills only — so there is nothing to hunt. Allowing the merge." >&2
+  exit 0
+fi
+
 # The no-payload path sends repo@ref and no bytes, so the commit is the identity
 # — but only while nothing is uncommitted, because an edit after the hunt is a
 # diff nobody reviewed.
