@@ -19,6 +19,15 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-pr-gate.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*ohmybug.*__(submit_review|get_findings)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [

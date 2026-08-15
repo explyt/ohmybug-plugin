@@ -222,10 +222,31 @@ for M in "$MARKER" "$LEGACY_MARKER"; do
   fi
 done
 
+# Asked for, and never finished. In auto mode the permission classifier refuses
+# these tools by design — correctly, they send a diff off the machine — and an
+# agent that has been refused has no move left: the escape hatch this hook used
+# to recommend is an env prefix disabling a safety control, which the classifier
+# refuses too. That is a dead end, and a dead end gets the plugin uninstalled.
+# So: block "never tried", warn on "tried and the environment said no".
+if ohmybug_attempted "$CURRENT" ||
+   { [ -n "$HEAD_SHA" ] && ohmybug_attempted "ref:$HEAD_SHA"; }; then
+  MSG="OhMyBug: a hunt was requested for this diff but never finished — the call was refused or it failed, so the gate has no findings to stand on. Allowing the merge. To arm the gate for next time, add one permission rule yourself: /permissions -> mcp__plugin_bughunter_ohmybug__*"
+  echo "$MSG" >&2
+  echo "$MSG"
+  exit 0
+fi
+
 # Name the id and where we looked. Without this a false block is
 # indistinguishable from a real one, and the only way to tell them apart was to
 # read the hook — which is how an operator ends up reaching for SKIP_BUGHUNT to
 # find out.
-echo "OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them). Run /bughunter:review, or call submit_review then get_findings directly; either way the hunt records itself when it finishes, no manual step. To skip once, prefix the command with SKIP_BUGHUNT=1 (ask the user first)." >&2
+#
+# One action per addressee, because the previous text told the AGENT to prefix
+# the command with SKIP_BUGHUNT=1 — something only a human can do. The agent
+# tried anyway, and then carried the prefix onto unrelated commands, which is
+# how a bug hunter came to interfere with posting a ticket comment.
+echo "OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them)." >&2
+echo "OhMyBug (agent): run /bughunter:review, or call submit_review then get_findings directly; the hunt records itself when it finishes, there is no manual step. If those calls are refused by this environment, say so and stop — do not retry them, do not add an env prefix, and never carry a prefix onto another command." >&2
+echo "OhMyBug (operator): to merge without a hunt, run the merge yourself with SKIP_BUGHUNT=1 in front of it." >&2
 echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $(ohmybug_hunt_dir 2>/dev/null || echo '(no repo key)')." >&2
 exit 2

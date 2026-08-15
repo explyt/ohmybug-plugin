@@ -86,6 +86,14 @@ ohmybug_hunted() {
   [ -f "$dir/$1" ]
 }
 
+# An ATTEMPT is "the model asked for a hunt on this id", recorded before the
+# environment gets to say yes or no. It lives in the same set under a prefixed
+# key: one place to look, and a prefixed name can never satisfy a lookup for a
+# finished hunt. The gate needs the distinction because "never tried" and "tried
+# and was refused" are different facts and only the first deserves a block.
+ohmybug_record_attempt() { ohmybug_record_hunt "attempt:${1:-}"; }
+ohmybug_attempted() { ohmybug_hunted "attempt:${1:-}"; }
+
 # sha256 of stdin. The identity of a hunt is the BYTES WE SENT, which is the one
 # description of "which diff" that does not depend on which directory a hook
 # happened to be standing in.

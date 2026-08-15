@@ -39,6 +39,10 @@ tool = (d.get("tool_name") or "").split("__")[-1]
 # guessing a path into it. Escaped quotes survive that flattening, hence \\\\?.
 blob = json.dumps(d.get("tool_response"))
 done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
+# Which event fired, asked of the payload rather than of an argument: only
+# PostToolUse carries a response. Deriving it here means the wiring in
+# hooks.json is the same line for both events and cannot be half-installed.
+pre = "0" if "tool_response" in d else "1"
 review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
 if not isinstance(review, str) or not review:
     # Same escaping rules as the `done` match above: \s, not \\s — the latter
@@ -66,7 +70,7 @@ ref = ref if isinstance(ref, str) and ref else ""
 
 # One field per line: a cwd may contain spaces, and a newline in a path is not
 # something this hook needs to survive.
-print(tool, done, d.get("cwd") or "", sent, ref, review, sep="\n")
+print(tool, done, d.get("cwd") or "", sent, ref, review, pre, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -75,6 +79,7 @@ CWD=$(printf '%s' "$FIELDS" | sed -n 3p)
 SENT=$(printf '%s' "$FIELDS" | sed -n 4p)
 REF=$(printf '%s' "$FIELDS" | sed -n 5p)
 REVIEW=$(printf '%s' "$FIELDS" | sed -n 6p)
+PRE=$(printf '%s' "$FIELDS" | sed -n 7p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -84,6 +89,22 @@ MARKER=$(ohmybug_marker_path) || exit 0
 REPO_HUNTS=$(ohmybug_hunt_dir) || exit 0
 PENDING_DIR="$REPO_HUNTS.pending"
 PENDING="$PENDING_DIR/${REVIEW:-unknown}"
+
+# PreToolUse: the model ASKED for a hunt on this diff.
+# Recorded before anyone gets to allow or refuse the call, because the refusal is
+# exactly the case that matters: in auto mode the permission classifier turns
+# these tools down by design, and until now that left the merge gate blocking
+# forever with no move the agent could make — its own advice, an env prefix on
+# the merge, is a control-disabling prefix that the classifier also refuses.
+# Block "never tried"; warn on "tried, and the environment said no". The only
+# way to forge an attempt is to actually call the tool, which is the behaviour
+# we want anyway.
+if [ "${PRE:-0}" = "1" ]; then
+  [ -n "$SENT" ] && ohmybug_record_attempt "$SENT"
+  [ -n "$REF" ] && ohmybug_record_attempt "ref:$REF"
+  ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && ohmybug_record_attempt "$ID"
+  exit 0
+fi
 
 case "$TOOL" in
   submit_review)

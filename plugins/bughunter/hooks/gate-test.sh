@@ -185,6 +185,57 @@ else
   t "$V" 2
 fi
 
+# --- block -> warn: a refused hunt must not dead-end the merge ---------------
+# In auto mode the permission classifier refuses these tools by design, and the
+# gate's own advice (an env prefix on the merge) is a control-disabling prefix
+# the classifier refuses too. That combination has no exit: the merge is blocked
+# forever and the plugin gets uninstalled. So a recorded ATTEMPT downgrades the
+# block to a warning — and only for the diff that was attempted.
+# No tool_response in the payload — that, and not an argument in hooks.json, is
+# what tells the script a PreToolUse fired. Wiring both events to the same
+# command line is one thing that cannot be half-installed.
+pre() { # tool -> what the PreToolUse hook sees, before anyone allows or refuses
+  OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
+  python3 -c "import json,os,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'diff':os.environ.get('OMB_DIFF','')},
+    'cwd':sys.argv[2]}))" "$1" "$PWD" | bash "$G/stamp-hunt.sh"
+}
+rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)"
+if [ -n "$ID" ]; then
+  t "$V" 2                        # never asked at all: still a block
+  pre submit_review
+  t "$V" 0                        # asked, never finished: warn, let it through
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"never finished"*) ;;
+    *) printf 'FAIL warn message did not say the hunt was requested: %s\n' "$out"
+       fails=$((fails + 1)) ;;
+  esac
+  # The warning covers the diff that was attempted, not whatever came after it.
+  printf 'written after the attempt\n' >> "$SCRATCH"
+  t "$V" 2
+  printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
+  rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)"
+fi
+
+# --- the block text speaks to one addressee per line --------------------------
+# The old single paragraph told the AGENT to prefix the merge with an env var it
+# cannot use; it tried, failed, and carried the prefix onto unrelated commands.
+if [ -n "$ID" ]; then
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"(operator): to merge without a hunt"*) ;;
+    *) printf 'FAIL block text gives the human no way out: %s\n' "$out"
+       fails=$((fails + 1)) ;;
+  esac
+  case "$out" in
+    *"never carry a prefix onto another command"*) ;;
+    *) printf 'FAIL block text does not forbid prefix carry-over: %s\n' "$out"
+       fails=$((fails + 1)) ;;
+  esac
+fi
+
 # --- the worktree rows -------------------------------------------------------
 # The failure the owner hit on 2026-08-12, third occurrence of this class: the
 # work lives in a git worktree, the hunt is driven from a session whose cwd is
