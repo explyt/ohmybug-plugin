@@ -17,8 +17,26 @@
 # an unrelated earlier segment disarming the gate, and `bash -c "gh pr merge"`
 # walking straight through. shlex already knows what a quote is; we do not need
 # to learn it again here.
+#
+# ONE reason to exit 2: "this is a merge AND the diff has not been hunted."
+# Every other outcome — cannot parse, no python3, no origin base, no recorder —
+# exits 0 and says why. That invariant is not style. It held in three branches
+# out of four, and the fourth (cannot parse) blocked 20 commands in one
+# operator's transcripts, none of them a merge: heredoc bodies with an
+# apostrophe in them, `git commit -F -`, `python3 - <<PY`, a ticket comment.
+# Each one taught the agent to reach for SKIP_BUGHUNT=1 on the NEXT command,
+# which is how a gate ends up guarding nothing.
 
 INPUT=$(cat)
+
+# Cheapest test first: `gh pr merge` and `glab mr merge` both contain the word,
+# so a payload without it cannot be a merge. This also keeps the parser — and
+# python3 start-up — away from the ~99% of Bash calls that were never this
+# hook's business.
+case "$INPUT" in
+  *merge*) ;;
+  *) exit 0 ;;
+esac
 
 DECIDE=$(printf '%s' "$INPUT" | python3 -c '
 import json, shlex, sys
@@ -106,11 +124,13 @@ print(verdict)
 if [ -z "$DECIDE" ]; then
   # No python3 (or it failed): we cannot read the command, so we cannot tell a
   # merge from an `ls`. Blocking everything would wedge the session; allowing
-  # everything would silently disarm the gate. So degrade to the paranoid
-  # substring test — loud on anything merge-shaped, out of the way otherwise.
+  # everything would silently disarm the gate. So degrade to the substring test
+  # — but on the two-word shapes, not on the bare word: `*merge*` also matches
+  # `git merge-base`, `--no-merges` and any branch or path with "merge" in it.
   case "$INPUT" in
-    *merge*)
-      echo "OhMyBug: cannot inspect this command (python3 unavailable), and it mentions a merge. Install python3, or prefix the command with SKIP_BUGHUNT=1 after checking the diff was hunted." >&2
+    *SKIP_BUGHUNT=1*) exit 0 ;;
+    *"pr merge"*|*"mr merge"*)
+      echo "OhMyBug: cannot inspect this command (python3 unavailable), and it looks like a merge. Ask the operator to install python3, or to run the merge themselves with SKIP_BUGHUNT=1 in front of it after checking the diff was hunted." >&2
       exit 2 ;;
     *) exit 0 ;;
   esac
@@ -123,8 +143,18 @@ VERDICT=${VERDICT%%$'\n'*}
 case "$VERDICT" in
   merge) ;;
   unparsed)
-    echo "OhMyBug: could not parse this command well enough to tell whether it merges (unbalanced quotes?). If it does merge, hunt the diff first; to proceed, prefix with SKIP_BUGHUNT=1." >&2
-    exit 2 ;;
+    # Unbalanced quotes are a fact about quoting, not about merging — and shlex
+    # has no idea what a heredoc is, so every `cat <<'EOF'` whose body contains
+    # an apostrophe arrives here. Degrade to the same substring test as the
+    # no-python3 branch and let the hunt check below decide; do not accuse.
+    # The opt-out is read loosely here (anywhere in the payload, not on the
+    # merge segment) precisely because we could not find the segments: the
+    # alternative is a command with no way out at all.
+    case "$INPUT" in
+      *SKIP_BUGHUNT=1*) exit 0 ;;
+      *"pr merge"*|*"mr merge"*) ;;
+      *) exit 0 ;;
+    esac ;;
   *) exit 0 ;;
 esac
 

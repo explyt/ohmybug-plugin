@@ -72,6 +72,55 @@ t "( $V )"                               2
 t "if true; then $V; fi"                 2
 t "npm run build && (cd api && $V)"      2
 
+# --- the corpus: not merges, and once blocked anyway --------------------------
+# Every row below is the shape of a real command this hook exited 2 on: 20 of
+# them in one operator's transcripts (2026-08-15), none a merge. shlex does not
+# know what a heredoc is, so an apostrophe in a body — a commit message, a
+# ticket comment, a review note — read as an unbalanced quote, and the "cannot
+# parse" branch treated that as an accusation. The one before it passed only
+# because its heredoc body happened to contain no quote at all: coverage of the
+# shape, not of the failure.
+# Odd number of apostrophes on purpose: two of them pair up in shlex and the
+# row proves nothing. Each of these must be red on the pre-fix hook.
+t "cat > /tmp/x.md <<'EOF'
+it's here
+EOF"                                     0
+t "git commit -F - <<'EOF'
+fix: Review C's finding
+EOF"                                     0
+t "python3 - <<'PY'
+s = '''don't'''
+PY"                                      0
+t "gh issue comment 36 --body-file - <<'EOF'
+lessons: the pre-check's own layer
+EOF"                                     0
+t "git merge-base HEAD origin/main"      0  # the bare word is not a merge
+t "git log --no-merges"                  0
+t "cd /tmp/wt-merge-cache && npm test"   0  # nor is a path that contains it
+# ...and an unparsable command that DOES merge still blocks, opt-out still opts.
+t "echo it's time; $V"                   2
+t "SKIP_BUGHUNT=1 echo it's time; $V"    0
+
+# --- degraded: python3 missing or broken --------------------------------------
+# Same narrowing, tested where it is easiest to get wrong. The fallback matched
+# the bare word, so on a machine without python3 it blocked `git merge-base` —
+# and told the agent to fix that with an env prefix it cannot use.
+NOPY=$(mktemp -d)
+printf '#!/bin/sh\nexit 1\n' > "$NOPY/python3"
+chmod +x "$NOPY/python3"
+tp() { # command, expected rc, with a python3 that fails
+  rc=$(mk "$1" "$PWD" | PATH="$NOPY:$PATH" perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  if [ "$rc" != "$2" ]; then
+    printf 'FAIL (no python3) want=%s got=%s : %s\n' "$2" "$rc" "$(printf '%s' "$1" | tr '\n' '~')"
+    fails=$((fails + 1))
+  fi
+}
+tp "$V"                                  2  # the real thing still blocks
+tp "SKIP_BUGHUNT=1 $V"                   0  # and the operator can still get out
+tp "git merge-base HEAD origin/main"     0
+tp "git log --no-merges"                 0
+rm -rf "$NOPY"
+
 
 # --- the stamp half -----------------------------------------------------
 # The gate is only as honest as its evidence. When the marker was written by
