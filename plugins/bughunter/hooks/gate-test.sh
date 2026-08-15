@@ -148,6 +148,9 @@ t "npm test
 $V"                                      2  # a newline ends a command too
 t "env $V"                               2  # wrappers do not hide the head
 t "sudo $V"                              2
+t "env FOO=bar $V"                       2  # ...nor does a wrapper plus a prefix
+t "sudo FOO=bar $V"                      2
+t "FOO=bar env $V"                       2
 t "gh pr me''rge 5; echo it's here"      2  # unparsable AND quote-split
 # ...but a line break inside DATA is not a command break. shlex has no idea it
 # is reading a heredoc body, so re-reading raw lines turns a document that
@@ -460,6 +463,19 @@ if [ -n "$ID" ]; then
       'cwd':sys.argv[2]}))" "$1" "$PWD" | bash "$G/stamp-hunt.sh"
   }
   HEAD_NOW=$(git rev-parse HEAD)
+  # The offer is filed under the RESOLVED sha, so it has to be cleared under the
+  # resolved sha too: clearing under the raw ref removed nothing, and the stale
+  # attempt then told the gate the environment had refused a hunt it permitted.
+  reset_state
+  npre "$(git rev-parse --short HEAD)"
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+    'tool_input':{'review_id':'rev_ref','diff':'','meta':{'repo':'x/y','ref':sys.argv[1]}},
+    'tool_response':{'review_id':'rev_ref','status':'running'},
+    'cwd':sys.argv[2]}))" "$(git rev-parse --short HEAD)" "$PWD" | bash "$G/stamp-hunt.sh"
+  ohmybug_attempted "ref:$HEAD_NOW" && {
+    printf 'FAIL a permitted submit left its attempt record standing\n'; fails=$((fails + 1)); }
+  reset_state
   npre "some-branch-name"
   # Assert on the key the bogus ref would have written, not on HEAD's key: a
   # lookup for HEAD is false either way, so it passes while recording anything.

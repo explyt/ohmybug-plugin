@@ -166,20 +166,30 @@ def segments_inner(tokens):
 WRAPPERS = {"env", "command", "sudo", "nohup", "time", "exec", "builtin"}
 
 def strip_env(seg):
-    """Drop leading VAR=value words; report whether one of them opts out."""
+    """Drop leading VAR=value words and command wrappers; report an opt-out.
+
+    ONE walk, taking whichever comes next. Two passes in a fixed order — first
+    assignments, then wrappers — meant `env FOO=bar gh pr merge` ended the walk
+    at FOO=bar and the head read as ("FOO=bar", "gh", "pr"), which matches no
+    merger, so the merge ran with the gate silent."""
     skip = False
     i = 0
-    while i < len(seg) and "=" in seg[i]:
-        name = seg[i].split("=", 1)[0]
-        if not name or not (name[0].isalpha() or name[0] == "_"):
-            break
-        if not all(c.isalnum() or c == "_" for c in name):
-            break
-        if name == "SKIP_BUGHUNT" and seg[i].split("=", 1)[1] == "1":
-            skip = True
-        i += 1
-    while i < len(seg) and seg[i].split("/")[-1] in WRAPPERS:
-        i += 1
+    while i < len(seg):
+        word = seg[i]
+        if "=" in word:
+            name = word.split("=", 1)[0]
+            if not name or not (name[0].isalpha() or name[0] == "_"):
+                break
+            if not all(c.isalnum() or c == "_" for c in name):
+                break
+            if name == "SKIP_BUGHUNT" and word.split("=", 1)[1] == "1":
+                skip = True
+            i += 1
+            continue
+        if word.split("/")[-1] in WRAPPERS:
+            i += 1
+            continue
+        break
     return seg[i:], skip
 
 try:
