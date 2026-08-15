@@ -456,12 +456,22 @@ because the installed plugin predates it. Say which; do not paper over it.
 
 ### 8. Money states
 
-- `beta_required` from `submit_review`: OhMyBug is in closed beta. Ask the
-  user IN CHAT whether they have an invite code (from a blogger link or an
-  invite). If yes — call `redeem_code` with it exactly as typed, then retry
-  `submit_review` once. If no — tell them their GitHub sign-in already put
-  them on the waitlist and accounts are activated in waves; stop gracefully.
-  Never invent or brute-force codes.
+- `beta_required` from `submit_review`: OhMyBug is in closed beta until
+  September 1 and this account is not activated yet. The sign-in already
+  worked, so nothing is broken — only activation is missing. In order:
+  1. Look for an invite already on this machine: `cat ~/.ohmybug/invite`. An
+     invite link writes the code there while the plugin is being installed, so
+     this usually costs the user nothing. Found one? `redeem_code` with it, then
+     retry `submit_review` once. If `redeem_code` rejects it, that file is
+     stale: do not retry it or try variants of it, go to step 2.
+  2. Otherwise ask the user IN CHAT for their invite. The whole invite link and
+     the bare code are equally good — pass what they give you to `redeem_code`
+     unchanged; the code is taken out of a link server-side.
+  3. No invite, or the answer comes back `invalid_code` / `code_exhausted`? Do
+     not loop and do not guess. Say that their GitHub sign-in already holds
+     their place in the queue (accounts open in waves), that codes ride the
+     links handed out at x.com/ohmybug, and that hi@ohmybug.ai asks for one
+     directly. Then stop gracefully.
 - `payment_required` from any tool: credits are exhausted. Tell the user to
   top up at https://app.ohmybug.ai/billing and stop the flow gracefully.
 - First 3 bug-finding reviews are free; no card is required until they are
