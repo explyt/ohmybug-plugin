@@ -544,7 +544,10 @@ if [ -n "$ID" ]; then
   printf 'export const load = () => 1\n' > "$CODEFILE"
   git add -N "$CODEFILE" 2>/dev/null
   t "$V" 2
-  git reset -q -- "$CODEFILE" 2>/dev/null; rm -rf src
+  # `rmdir`, never `rm -rf`: this runs in the maintainer's real checkout, and a
+  # top-level src/ that was already there is not this suite's to delete. Same
+  # rule the header states after this file once destroyed uncommitted work.
+  git reset -q -- "$CODEFILE" 2>/dev/null; rm -f "$CODEFILE"; rmdir src 2>/dev/null
   # The strict mode is still there for a repo whose prose IS behaviour.
   rc=$(mk "$V" "$PWD" | OHMYBUG_HUNT_ALL=1 bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 2 ] || { printf 'FAIL OHMYBUG_HUNT_ALL did not restore the strict gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
@@ -584,6 +587,70 @@ printf 'export const two = 2\n' >> "$DOCREPO/code.js"
 rc=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL code alongside the docs did not re-arm the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$DOCREPO")"
+
+# The same question, asked from a subdirectory. `git diff -- .` resolves against
+# the CURRENT directory, so the significant diff came out empty in any package
+# below the root — and empty is the answer that ALLOWS the merge. The gate cds
+# into the session cwd before it asks, and an agent session sits wherever the
+# last `cd` left it.
+SUBREPO=$(mktemp -d)/repo
+mkdir -p "$SUBREPO" && (
+  cd "$SUBREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  mkdir -p api service
+  printf 'base\n' > api/code.js
+  printf 'base\n' > service/code.js
+  git add api service && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  # Unhunted code, in a package the merge command is NOT standing in.
+  printf 'export const risky = 1\n' >> service/code.js
+)
+rc=$(mk "$V" "$SUBREPO/api" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL merging from a subdirectory hid unhunted code (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$SUBREPO")"
+
+# `.claude/` is prose-shaped and deliberately in scope: its settings decide
+# whether this gate stands down at all, and its hooks are commands that run.
+CLREPO=$(mktemp -d)/repo
+mkdir -p "$CLREPO" && (
+  cd "$CLREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  printf 'base\n' > code.js
+  mkdir -p .claude
+  printf '{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > .claude/settings.json
+  git add code.js .claude && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  # The only change: the rule that decides whether the gate can stand down.
+  printf '{"permissions":{}}\n' > .claude/settings.json
+)
+rc=$(mk "$V" "$CLREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL a change to the gate own permission input skipped review (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$CLREPO")"
+
+# ...and a test tree that is not at the repository root is still a test tree.
+NESTREPO=$(mktemp -d)/repo
+mkdir -p "$NESTREPO" && (
+  cd "$NESTREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  mkdir -p packages/api/tests
+  printf 'base\n' > packages/api/code.js
+  git add packages && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  printf 'def test_auth(): pass\n' > packages/api/tests/test_auth.py
+  git add -N packages/api/tests/test_auth.py
+)
+rc=$(mk "$V" "$NESTREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a nested tests/ directory demanded a paid hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$NESTREPO")"
 reset_state
 
 # --- the worktree rows -------------------------------------------------------

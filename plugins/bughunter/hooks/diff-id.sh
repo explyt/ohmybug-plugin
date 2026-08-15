@@ -50,23 +50,27 @@ ohmybug_diff_id() {
 # IS behaviour in some repositories — a skill, a prompt, a bundle this very
 # plugin ships — so OHMYBUG_HUNT_ALL=1 turns the whole idea off and returns the
 # strict "every byte counts" gate.
+#
+# `.claude/` is deliberately NOT on this list, though it is prose-shaped: its
+# settings decide whether this gate stands down at all (see
+# ohmybug_tools_allowed below) and its hook definitions are commands that run.
+# A change to the control itself is the last thing that should skip review.
 OHMYBUG_SKIP_GLOBS="
-:(exclude,glob)**/*.md
-:(exclude,glob)**/*.mdx
-:(exclude,glob)**/*.rst
-:(exclude,glob)**/*.txt
-:(exclude,glob)docs/**
-:(exclude,glob)**/LICENSE*
-:(exclude,glob)**/CHANGELOG*
-:(exclude,glob)test/**
-:(exclude,glob)tests/**
-:(exclude,glob)spec/**
-:(exclude,glob)**/__tests__/**
-:(exclude,glob)**/*.test.*
-:(exclude,glob)**/*.spec.*
-:(exclude,glob)**/*_test.*
-:(exclude,glob)**/skills/**
-:(exclude,glob).claude/**
+:(top,exclude,glob)**/*.md
+:(top,exclude,glob)**/*.mdx
+:(top,exclude,glob)**/*.rst
+:(top,exclude,glob)**/*.txt
+:(top,exclude,glob)**/docs/**
+:(top,exclude,glob)**/LICENSE*
+:(top,exclude,glob)**/CHANGELOG*
+:(top,exclude,glob)**/test/**
+:(top,exclude,glob)**/tests/**
+:(top,exclude,glob)**/spec/**
+:(top,exclude,glob)**/__tests__/**
+:(top,exclude,glob)**/*.test.*
+:(top,exclude,glob)**/*.spec.*
+:(top,exclude,glob)**/*_test.*
+:(top,exclude,glob)**/skills/**
 "
 
 # exit 0 + a hash -> this is the part of the diff a hunt would speak about
@@ -76,8 +80,16 @@ ohmybug_sig_id() {
   local base diff
   [ "${OHMYBUG_HUNT_ALL:-0}" = "1" ] && { ohmybug_diff_id; return $?; }
   base=$(ohmybug_base) || return 1
+  # `:(top)` on every entry, and no `.` beside them: a bare `.` and plain globs
+  # resolve against the CURRENT DIRECTORY, so the same tree hashed from the repo
+  # root and from a package subdirectory gave two different answers — and the
+  # subdirectory one came out EMPTY, which this gate reads as "nothing here can
+  # change behaviour, allow the merge". Its sibling ohmybug_diff_id passes no
+  # pathspec at all for exactly this reason; three comments in this file already
+  # record what cwd-dependent identity costs.
+  #
   # Unquoted on purpose: each line of the list is one pathspec argument.
-  diff=$(git diff "$base" -- . $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
+  diff=$(git diff "$base" -- $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
   [ -n "$diff" ] || return 0
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
 }
