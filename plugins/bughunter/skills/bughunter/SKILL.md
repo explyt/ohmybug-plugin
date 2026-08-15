@@ -91,9 +91,12 @@ Work down this list and stop at the first rung that applies:
    preference for shipping bytes, and the server ignores it whenever rung 1
    applies.
 
-Rung 1 is also the answer to every permission refusal: an agent sandbox can block
-a `curl` or a large tool argument, and it can never block a path that sends
-nothing. See "If the environment refuses to send the payload" below.
+Rung 1 is the cheapest path, not a way around a permission refusal. Measured
+twice: the classifier judges the TOOL from its schema, and `submit_review`
+declares `diff`, `files` and `upload` whether or not you fill them in — so a
+no-payload call is refused exactly like a payload one. See "If the environment
+refuses the hunt" below for what to do instead, which is to stop rather than to
+reformulate.
 
 ### GitHub repos: send NO diff at all (preferred)
 
@@ -122,29 +125,36 @@ This works in two cases, checked server-side in this order:
   is not on GitHub yet. Either push it and retry rung 1, or send a payload
   carrying only the unpushed part.
 
-### If the environment refuses to send the payload — switch paths, don't negotiate
+### If the environment refuses the hunt — say it once and stop
 
-A refusal to run the upload (permission prompt, auto-mode classifier, sandbox,
-no `python3`, no network) is a **final answer about that path**, not a transient
-error. One retry at most, then switch:
+A refusal (permission prompt answered no, auto-mode classifier, sandbox, no
+network) is a **final answer for this session**, and it is about the tool rather
+than about what you passed to it: the classifier reads the schema, so re-sending
+the same call with an empty `diff` changes nothing. Measured twice.
 
-1. Re-submit with `meta.repo` + `ref` + `base_branch` and **no payload at all**
-   — the server fetches the merge-base diff from GitHub. Zero bytes leave the
-   machine, so there is nothing left to permit. This is almost always available
-   and it is the answer.
-2. Repo not readable server-side (`diff_required`)? Offer the user the
-   **one-click App install** (read-only, that one repo) and re-submit. It also
-   unlocks the full-repository hunt afterwards.
-3. Only if they decline the App: state plainly what bytes would leave and to
-   where, and let the USER decide. Print the rule they would add — never add it
-   yourself, never ask them to add it "so auto-mode stops blocking".
+1. **Say it once**, in one line: the hunt tools are refused in this environment,
+   and the rule that would change that is `/permissions` →
+   `mcp__plugin_bughunter_ohmybug__*`. Adding it is the user's own click in
+   their own settings — never add it yourself, never ask for it to be widened
+   "so auto-mode stops blocking". A tool that talks its way past the control
+   built to stop tools like it is the exact shape of the attack that control is
+   for.
+2. **Then stop.** No retry with different arguments, no second tool, no env
+   prefix in front of anything: `SKIP_BUGHUNT=1` disables a safety control, so
+   the same classifier refuses it too — correctly. Above all, never carry a
+   prefix from a refused command onto the next command. That is how a bug hunter
+   ends up interfering with posting a ticket comment.
+3. **Do not engineer around it.** Whether the merge waits for a hunt, goes ahead
+   without one, or waits for a permission rule is the operator's call, not
+   yours — report the refusal and let them make it. Never touch the gate's
+   records to make the block go away.
+4. If the repo is on GitHub with the head pushed, `meta.repo` + `ref` +
+   `base_branch` and no payload is still the right call to have made — fewer
+   bytes, no size limits, no upload step. It is simply not a way past a refusal.
 
-**Never ask for a permission rule to be widened on your behalf, and never
-retry a blocked command hoping for a different classifier answer.** A tool
-that talks its way past the control which exists to stop tools like it is the
-exact shape of the attack that control is for — and normalising a "yes" costs
-more than the review is worth. The no-payload path exists precisely so the
-question never has to be asked.
+A refusal for one repo is not a refusal for the next one, and a refusal now is
+not a refusal after the user adds a rule: state it, and let the next call be the
+next call.
 
 ### Big payloads: NEVER push bytes through your own context
 
@@ -453,6 +463,12 @@ So: never write the marker by hand, and never reach for `SKIP_BUGHUNT=1`
 because a hunt "already ran". If the gate blocks after a finished hunt, the
 diff changed since it (fixes count — hunt them too), or the hook is missing
 because the installed plugin predates it. Say which; do not paper over it.
+
+`SKIP_BUGHUNT=1` belongs to the operator, not to you. You cannot run it — a
+prefix that disables a safety control is what the classifier is there to refuse
+— and carrying it onto an unrelated command is what once made this plugin block
+a ticket comment. If the gate blocks and you cannot hunt, say both facts in one
+line and stop; the person reading has the hatch, and it is theirs to use.
 
 ### 8. Money states
 
