@@ -144,10 +144,10 @@ the same call with an empty `diff` changes nothing. Measured twice.
    the same classifier refuses it too — correctly. Above all, never carry a
    prefix from a refused command onto the next command. That is how a bug hunter
    ends up interfering with posting a ticket comment.
-3. **The merge is not stuck**, so do not treat it as an emergency. The gate
-   records the attempt you just made and downgrades its block to a warning for
-   this exact diff; the work can land, and the warning says the hunt did not run.
-   Report that plainly instead of engineering around it.
+3. **Do not engineer around it.** Whether the merge waits for a hunt, goes ahead
+   without one, or waits for a permission rule is the operator's call, not
+   yours — report the refusal and let them make it. Never touch the gate's
+   records to make the block go away.
 4. If the repo is on GitHub with the head pushed, `meta.repo` + `ref` +
    `base_branch` and no payload is still the right call to have made — fewer
    bytes, no size limits, no upload step. It is simply not a way past a refusal.
@@ -467,9 +467,8 @@ because the installed plugin predates it. Say which; do not paper over it.
 `SKIP_BUGHUNT=1` belongs to the operator, not to you. You cannot run it — a
 prefix that disables a safety control is what the classifier is there to refuse
 — and carrying it onto an unrelated command is what once made this plugin block
-a ticket comment. You never need it either: a hunt the environment refused is
-recorded as an attempt, and the gate downgrades that block to a warning by
-itself.
+a ticket comment. If the gate blocks and you cannot hunt, say both facts in one
+line and stop; the person reading has the hatch, and it is theirs to use.
 
 ### 8. Money states
 

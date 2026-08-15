@@ -130,6 +130,25 @@ t "gh pr 'merge' 5"                      2
 t "gh pr me''rge 5"                      2  # shlex joins it; a substring test does not
 t "npm test
 $V"                                      2  # a newline ends a command too
+t "env $V"                               2  # wrappers do not hide the head
+t "sudo $V"                              2
+t "gh pr me''rge 5; echo it's here"      2  # unparsable AND quote-split
+# ...but a line break inside DATA is not a command break. shlex has no idea it
+# is reading a heredoc body, so re-reading raw lines turns a document that
+# happens to quote the command into a merge — a false block in the fix whose
+# whole purpose is removing them.
+t "cat > /tmp/note.md <<EOF
+$V
+EOF"                                     0
+t "echo \"step one
+$V
+step three\""                            0
+# The opt-out is a command position, and a heredoc body line is not one.
+t "cat > /tmp/doc.md <<EOF
+SKIP_BUGHUNT=1 is the operator hatch
+EOF
+$V"                                      2
+t "cd /tmp && SKIP_BUGHUNT=1 $V"         0  # where a human actually types it
 
 # --- degraded: python3 missing or broken --------------------------------------
 # Without python3 the hook cannot read a command — and stamp-hunt.sh cannot
@@ -249,10 +268,19 @@ if [ -n "$ID" ]; then
   t "$V" 0                        # asked, never finished: warn, let it through
   out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
   case "$out" in
-    *"never finished"*) ;;
-    *) printf 'FAIL warn message did not say the hunt was requested: %s\n' "$out"
+    *"no findings came back"*) ;;
+    *) printf 'FAIL warn message did not say what the record actually proves: %s\n' "$out"
        fails=$((fails + 1)) ;;
   esac
+  # ...and the downgrade only applies where the hunt could not have run. With an
+  # allow rule in the user's own settings the tools work, so an unfinished hunt
+  # means the hunt is the thing to finish — otherwise the warn is a switch the
+  # agent flips for itself by making one call it can be sure will fail.
+  mkdir -p "$HOME/.claude"
+  printf '{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$HOME/.claude/settings.json"
+  t "$V" 2
+  rm -f "$HOME/.claude/settings.json"
+  t "$V" 0
   # The warning covers the diff that was attempted, not whatever came after it.
   printf 'written after the attempt\n' >> "$SCRATCH"
   t "$V" 2
@@ -272,6 +300,22 @@ if [ -n "$ID" ]; then
   pre submit_review
   find "$(ohmybug_hunt_dir)" -name 'attempt:*' -exec touch -t 202001010000 {} \; 2>/dev/null
   t "$V" 2
+  reset_state
+
+  # A review that ends `failed` is over, and its pending record must not keep
+  # saying "a hunt is RUNNING" — that is a permanent block whose instruction
+  # (poll until done) can never come true.
+  post submit_review 0
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__get_findings',
+    'tool_input':{'review_id':'rev_x'},
+    'tool_response':{'content':[{'type':'text','text':json.dumps(
+       {'review_id':'rev_x','status':'failed'})}]},
+    'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh"
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *RUNNING*) printf 'FAIL a failed review still reads as a running hunt\n'; fails=$((fails + 1)) ;;
+  esac
   reset_state
 
   # A submit that WAS allowed and is still running is not a refusal. Merging on

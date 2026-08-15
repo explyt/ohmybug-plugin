@@ -39,6 +39,7 @@ tool = (d.get("tool_name") or "").split("__")[-1]
 # guessing a path into it. Escaped quotes survive that flattening, hence \\\\?.
 blob = json.dumps(d.get("tool_response"))
 done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
+failed = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"failed", blob) else "0"
 # Which event fired. The explicit field when the client sends it; the absence of
 # a response as the fallback, since only PostToolUse carries one. Deriving it
 # here rather than from an argument means the wiring in hooks.json is the same
@@ -77,7 +78,7 @@ ref = ref if isinstance(ref, str) and ref else ""
 
 # One field per line: a cwd may contain spaces, and a newline in a path is not
 # something this hook needs to survive.
-print(tool, done, d.get("cwd") or "", sent, ref, review, pre, sep="\n")
+print(tool, done, d.get("cwd") or "", sent, ref, review, pre, failed, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -87,6 +88,7 @@ SENT=$(printf '%s' "$FIELDS" | sed -n 4p)
 REF=$(printf '%s' "$FIELDS" | sed -n 5p)
 REVIEW=$(printf '%s' "$FIELDS" | sed -n 6p)
 PRE=$(printf '%s' "$FIELDS" | sed -n 7p)
+FAILED=$(printf '%s' "$FIELDS" | sed -n 8p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -98,7 +100,7 @@ PENDING_DIR="$REPO_HUNTS.pending"
 # The review id is the one model-authored string that becomes a path here, and
 # `..` in it would walk out of ~/.ohmybug/ and overwrite a file elsewhere. Real
 # ids are alphanumeric; anything else is not an id we need to preserve.
-REVIEW=$(printf '%s' "$REVIEW" | tr -c 'A-Za-z0-9_.-' '_')
+REVIEW=$(printf '%s' "$REVIEW" | tr -c 'A-Za-z0-9_.-' '_' | sed 's/^[.-]*//')
 PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 
 # PreToolUse: the model OFFERED this diff for hunting.
@@ -153,6 +155,13 @@ case "$TOOL" in
     fi
     ;;
   get_findings|confirm_findings)
+    # A review that ends `failed` is over. Left in place its pending record says
+    # "a hunt is RUNNING" forever, which is a permanent block carrying an
+    # instruction — poll until done — that will never come true.
+    if [ "${FAILED:-0}" = '1' ]; then
+      rm -f "$PENDING"
+      exit 0
+    fi
     # confirm_findings only exists after a done review, so it needs no status
     # check; get_findings is polled while the review is still running.
     [ "$TOOL" = 'confirm_findings' ] || [ "${DONE:-0}" = '1' ] || exit 0

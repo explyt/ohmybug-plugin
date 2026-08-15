@@ -40,6 +40,32 @@ SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 SEPS = {";", "&&", "||", "|", "&", "(", ")", "{", "}", "\n", "then", "do",
         "else", "elif", "fi", "done", "in", "!"}
 
+# A heredoc body is DATA. shlex has no idea it is reading one, and the per-line
+# retry below reads raw lines, so without this a document that quotes the merge
+# command — a runbook, a lessons comment, this project talking about itself —
+# reads as a merge and the writing of it gets blocked. Blank the bodies out and
+# keep everything else, so a merge that follows a heredoc is still seen.
+QUOTE_CHARS = "\"" + chr(39)
+HEREDOC_START = re.compile(r"<<-?\s*[" + QUOTE_CHARS + r"]?(\w+)")
+
+def blank_heredocs(cmd):
+    lines = cmd.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        for m in HEREDOC_START.finditer(line):
+            term = m.group(1)
+            i += 1
+            while i < len(lines) and lines[i].strip() != term:
+                out.append("")
+                i += 1
+            if i < len(lines):
+                out.append("")
+        i += 1
+    return "\n".join(out)
+
 def segments(cmd, depth=0, quiet=False):
     """Yield token lists, one per command position, recursing into `sh -c`."""
     if depth > 3:
@@ -69,14 +95,16 @@ def segments(cmd, depth=0, quiet=False):
     # whitespace, so `npm test<newline>gh pr merge 5` arrives here as ONE
     # segment whose head is ("npm", "test", "gh") and walks straight through.
     # Listing "\n" in SEPS never helped: the token never reaches that test.
-    # Re-read each line on its own; failures there are quiet by design.
-    if "\n" in cmd:
-        for line in cmd.split("\n"):
+    # So re-read the lines — but only where a line break really is a command
+    # break: heredoc bodies are blanked out first, and a command the top-level
+    # lex read as ONE multi-line token is a quoted paragraph, also data.
+    if "\n" in cmd and not any("\n" in t for t in tokens):
+        for line in blank_heredocs(cmd).split("\n"):
             if line.strip():
                 yield from segments(line, depth + 1, quiet=True)
     # A shell invoked with -c carries a whole command line in one argument.
     for seg in list(segments_inner(tokens)):
-        yield from segments(seg, depth + 1)
+        yield from segments(seg, depth + 1, quiet)
 
 def segments_inner(tokens):
     for i, t in enumerate(tokens):
@@ -85,6 +113,11 @@ def segments_inner(tokens):
                 if tokens[j] == "-c" and j + 1 < len(tokens):
                     yield tokens[j + 1]
                     break
+
+# Words that take a command as their argument and change nothing about it. Left
+# in place they hide the merge behind a head test that only reads three words:
+# `env gh pr merge` and `sudo gh pr merge` walked straight through.
+WRAPPERS = {"env", "command", "sudo", "nohup", "time", "exec", "builtin"}
 
 def strip_env(seg):
     """Drop leading VAR=value words; report whether one of them opts out."""
@@ -98,6 +131,8 @@ def strip_env(seg):
             break
         if name == "SKIP_BUGHUNT" and seg[i].split("=", 1)[1] == "1":
             skip = True
+        i += 1
+    while i < len(seg) and seg[i].split("/")[-1] in WRAPPERS:
         i += 1
     return seg[i:], skip
 
@@ -113,10 +148,19 @@ cmd = (data.get("tool_input") or {}).get("command") or ""
 # model writes itself, and a `cwd` the model chose — an opt-out honoured from
 # either of those is an opt-out the agent grants itself, which is exactly what
 # the escape hatch must not be.
-looks_merge = "1" if re.search(r"\b(?:pr|mr)[ \t]+merge\b", cmd) else "0"
-# Position matters: `SKIP_BUGHUNT=1` counts as an opt-out only where a command
-# starts, never because the words appear inside a message someone is writing.
-opts_out = "1" if re.search(r"(?:\A|[;&|\n]\s*)SKIP_BUGHUNT=1[ \t]", cmd) else "0"
+# Quotes come off first, because shlex would have joined them: `gh pr me"rge"`
+# tokenizes to a merge and must not read as "no merge here" just because the
+# bytes are split.
+# chr(39) rather than the character: this whole program is a single-quoted shell
+# argument, so one apostrophe here ends it and the hook stops parsing.
+QUOTES = "\"\\" + chr(39)
+bare = "".join(c for c in cmd if c not in QUOTES)
+looks_merge = "1" if re.search(r"\b(?:pr|mr)[ \t]+merge\b", bare) else "0"
+# Position matters: `SKIP_BUGHUNT=1` counts as an opt-out where a command starts
+# — the start of the line, or after a separator a person actually types. NOT
+# after a bare newline: heredoc bodies are newline-separated, so that would let
+# a document the model is writing opt the model out.
+opts_out = "1" if re.search(r"(?:\A|[;&|]\s*)SKIP_BUGHUNT=1[ \t]", cmd) else "0"
 verdict = "none"
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
@@ -145,7 +189,7 @@ if [ -z "$DECIDE" ]; then
   # gate. Stand down, loudly, and name the fix. The word test only decides
   # whether to say anything: evading it costs nothing but the message.
   case "$INPUT" in
-    *merge*)
+    *"pr merge"*|*"mr merge"*)
       MSG="OhMyBug: python3 is unavailable here, so the gate cannot read this command — and the hunt recorder cannot run either, which means no hunt could ever lift a block. Allowing the merge unchecked. Install python3 to arm the gate again."
       echo "$MSG" >&2
       echo "$MSG" ;;
@@ -240,7 +284,8 @@ done
 # review whose findings have not arrived. Merging now is merging ahead of them.
 if ohmybug_pending_has "$CURRENT" ||
    { [ -n "$HEAD_SHA" ] && ohmybug_pending_has "ref:$HEAD_SHA"; }; then
-  echo "OhMyBug: a hunt is RUNNING for this diff and has not returned yet. Poll get_findings until it says done, then merge. Nothing else is needed." >&2
+  echo "OhMyBug: a hunt is RUNNING for this diff and has not returned yet. Poll get_findings until it says done, then merge." >&2
+  echo "OhMyBug (operator): if that review died or was abandoned, the record ages out on its own; to merge before then, run the merge yourself with SKIP_BUGHUNT=1 in front of it." >&2
   exit 2
 fi
 
@@ -263,8 +308,22 @@ elif [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] &&
      ohmybug_attempted "ref:$HEAD_SHA"; then
   ATTEMPT="ref:$HEAD_SHA"
 fi
-if [ -n "$ATTEMPT" ]; then
-  MSG="OhMyBug: a hunt was requested for this diff but never finished — the call was refused or it failed, so the gate has no findings to stand on. Allowing the merge. To arm the gate for next time, add one permission rule yourself: /permissions -> mcp__plugin_bughunter_ohmybug__*"
+# ...and only where the hunt could not have run anyway.
+#
+# The attempt is written by the party this gate constrains: the model decides to
+# call, and the call carries the ids. On its own it says "a submit was made",
+# never "the environment refused it" — so on its own it is a switch the agent can
+# flip. What is NOT written by the model is the user's own permission settings.
+# With no allow-rule for these tools the refusal is the environment's default and
+# the block is a dead end worth stepping out of; with a rule, the tools work,
+# and an unfinished hunt means the hunt is the thing to finish.
+#
+# ponytail: settings files are read as text, not merged as Claude Code merges
+# them. A rule in an unusual location reads as "not permitted" and we warn where
+# we could have blocked — the harmless direction. Ask the client for the answer
+# if a hook API ever offers one.
+if [ -n "$ATTEMPT" ] && ! ohmybug_tools_allowed; then
+  MSG="OhMyBug: a submit_review call was made for this diff and no findings came back, and the hunt tools are not permitted in this environment — so the gate has nothing to stand on and is allowing the merge. To arm it, add one permission rule yourself: /permissions -> mcp__plugin_bughunter_ohmybug__*"
   echo "$MSG" >&2
   echo "$MSG"
   exit 0
@@ -282,5 +341,9 @@ fi
 echo "OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them)." >&2
 echo "OhMyBug (agent): run /bughunter:review, or call submit_review then get_findings directly; the hunt records itself when it finishes, there is no manual step. If those calls are refused by this environment, say so and stop — do not retry them, do not add an env prefix, and never carry a prefix onto another command." >&2
 echo "OhMyBug (operator): to merge without a hunt, run the merge yourself with SKIP_BUGHUNT=1 in front of it." >&2
-echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $(ohmybug_hunt_dir 2>/dev/null | sed "s|^$HOME|~|" || echo '(no repo key)')." >&2
+WHERE=$(ohmybug_hunt_dir 2>/dev/null || echo '(no repo key)')
+# `~`, not the absolute path: the home directory usually carries the operator's
+# name, and this line goes into a transcript.
+WHERE=${WHERE/#$HOME/\~}
+echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $WHERE." >&2
 exit 2

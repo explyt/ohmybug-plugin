@@ -48,9 +48,9 @@ never starts. One rule fixes it, and only you can add it — /permissions -> Add
 rule -> mcp__plugin_bughunter_ohmybug__* (or just
 mcp__plugin_bughunter_ohmybug__submit_review). Nothing will add it for you, and
 without it nothing else helps: the classifier reads the tool's schema, so even
-the mode that sends no bytes at all is refused the same way. Merges are not
-stuck meanwhile — a hunt that was requested and refused turns the merge gate
-into a warning, not a block.
+the mode that sends no bytes at all is refused the same way. Until you add it,
+the merge gate stands down rather than trapping you: it says the hunt could not
+run and lets the merge through.
 EOF
 
 # systemMessage is what the USER reads; additionalContext is what the assistant
