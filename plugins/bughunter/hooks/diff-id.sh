@@ -38,6 +38,50 @@ ohmybug_diff_id() {
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
 }
 
+# The SIGNIFICANT diff: the same diff with everything that cannot change what
+# the software does taken out.
+#
+# The gate keys on a hash of the whole diff, so editing a README after a hunt
+# read as "new, unhunted code" and blocked the merge — a re-hunt costs money and
+# a quarter of an hour to review prose the reviewers were never asked about.
+# Worse, a docs-only branch had to be hunted before it could land at all.
+#
+# ponytail: this is a path list, not an understanding of the code. A `.md` file
+# IS behaviour in some repositories — a skill, a prompt, a bundle this very
+# plugin ships — so OHMYBUG_HUNT_ALL=1 turns the whole idea off and returns the
+# strict "every byte counts" gate.
+OHMYBUG_SKIP_GLOBS="
+:(exclude,glob)**/*.md
+:(exclude,glob)**/*.mdx
+:(exclude,glob)**/*.rst
+:(exclude,glob)**/*.txt
+:(exclude,glob)docs/**
+:(exclude,glob)**/LICENSE*
+:(exclude,glob)**/CHANGELOG*
+:(exclude,glob)test/**
+:(exclude,glob)tests/**
+:(exclude,glob)spec/**
+:(exclude,glob)**/__tests__/**
+:(exclude,glob)**/*.test.*
+:(exclude,glob)**/*.spec.*
+:(exclude,glob)**/*_test.*
+:(exclude,glob)**/skills/**
+:(exclude,glob).claude/**
+"
+
+# exit 0 + a hash -> this is the part of the diff a hunt would speak about
+# exit 0 + nothing -> nothing here can change behaviour; there is nothing to hunt
+# exit 1          -> cannot tell (same as ohmybug_diff_id)
+ohmybug_sig_id() {
+  local base diff
+  [ "${OHMYBUG_HUNT_ALL:-0}" = "1" ] && { ohmybug_diff_id; return $?; }
+  base=$(ohmybug_base) || return 1
+  # Unquoted on purpose: each line of the list is one pathspec argument.
+  diff=$(git diff "$base" -- . $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
+  [ -n "$diff" ] || return 0
+  printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
+}
+
 ohmybug_marker_path() {
   local gitdir
   gitdir=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1

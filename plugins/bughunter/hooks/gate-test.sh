@@ -511,6 +511,81 @@ if [ -n "$ID" ]; then
   esac
 fi
 
+# --- what a hunt can speak about ----------------------------------------------
+# The gate keyed on a hash of the WHOLE diff, so a README edit after the hunt
+# read as unhunted code: another review, another 15 minutes, to look at prose
+# nobody asked the reviewers about. And a docs-only branch could not land at all
+# without paying for a hunt of it.
+if [ -n "$ID" ]; then
+  reset_state
+  post submit_review 0
+  post get_findings 1
+  t "$V" 0                                   # hunted, as before
+  # Prose, tests and skills after the hunt: still hunted.
+  DOCFILE=".ohmybug-gate-test-scratch.md"
+  TESTFILE="test/.ohmybug-gate-test-scratch.js"
+  mkdir -p test
+  printf 'a README edit after the hunt\n' > "$DOCFILE"
+  printf 'it("still counts as a test", () => {})\n' > "$TESTFILE"
+  git add -N "$DOCFILE" "$TESTFILE" 2>/dev/null
+  t "$V" 0
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"documentation, tests or skills"*) ;;
+    *) printf 'FAIL the docs-only pass did not say why: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # ...but one line of real code is a different diff again.
+  printf 'code written after the hunt\n' >> "$SCRATCH"
+  t "$V" 2
+  printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
+  # A file that merely has "docs" or "test" inside its NAME is code.
+  CODEFILE="src/docs-loader.js"
+  mkdir -p src
+  printf 'export const load = () => 1\n' > "$CODEFILE"
+  git add -N "$CODEFILE" 2>/dev/null
+  t "$V" 2
+  git reset -q -- "$CODEFILE" 2>/dev/null; rm -rf src
+  # The strict mode is still there for a repo whose prose IS behaviour.
+  rc=$(mk "$V" "$PWD" | OHMYBUG_HUNT_ALL=1 bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL OHMYBUG_HUNT_ALL did not restore the strict gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git reset -q -- "$DOCFILE" "$TESTFILE" 2>/dev/null
+  rm -f "$DOCFILE" "$TESTFILE"; rmdir test 2>/dev/null
+  reset_state
+fi
+
+# A branch that changes nothing but prose has nothing for a hunt to look at, so
+# it must land without one — that case used to cost a review.
+#
+# In a throwaway repository, not this one: the suite runs inside a checkout that
+# already carries the maintainer's own edits, so "the only change is a .md" is
+# not something this working tree can honestly demonstrate.
+DOCREPO=$(mktemp -d)/repo
+mkdir -p "$DOCREPO" && (
+  cd "$DOCREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  printf 'base\n' > code.js && git add code.js
+  git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  printf 'a documentation change, and nothing else\n' > README.md
+  git add -N README.md
+)
+rc=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a docs-only branch still needed a hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+out=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+case "$out" in
+  *"nothing to hunt"*) ;;
+  *) printf 'FAIL a docs-only diff was not named as such: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+# ...and one line of code in the same branch brings the gate straight back.
+printf 'export const two = 2\n' >> "$DOCREPO/code.js"
+rc=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL code alongside the docs did not re-arm the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$DOCREPO")"
+reset_state
+
 # --- the worktree rows -------------------------------------------------------
 # The failure the owner hit on 2026-08-12, third occurrence of this class: the
 # work lives in a git worktree, the hunt is driven from a session whose cwd is
