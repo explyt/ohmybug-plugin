@@ -46,25 +46,63 @@ SEPS = {";", "&&", "||", "|", "&", "(", ")", "{", "}", "\n", "then", "do",
 # reads as a merge and the writing of it gets blocked. Blank the bodies out and
 # keep everything else, so a merge that follows a heredoc is still seen.
 QUOTE_CHARS = "\"" + chr(39)
-HEREDOC_START = re.compile(r"<<-?\s*[" + QUOTE_CHARS + r"]?(\w+)")
+# `<<` only where a redirection can start, and never `<<<`: a here-string is not
+# a heredoc, and matching inside one made `grep -rn "<<<<<<< HEAD"` capture HEAD
+# as a terminator and blank every line after it — including a real merge.
+HEREDOC_START = re.compile(r"(?<![<\w])<<-?(?!<)\s*[" + QUOTE_CHARS + r"]?(\w+)")
 
 def blank_heredocs(cmd):
     lines = cmd.split("\n")
-    out = []
     i = 0
     while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        for m in HEREDOC_START.finditer(line):
+        for m in HEREDOC_START.finditer(lines[i]):
             term = m.group(1)
-            i += 1
-            while i < len(lines) and lines[i].strip() != term:
-                out.append("")
-                i += 1
-            if i < len(lines):
-                out.append("")
+            j = i + 1
+            while j < len(lines) and lines[j].strip() != term:
+                j += 1
+            if j >= len(lines):
+                # No terminator anywhere, so this was never a heredoc opener —
+                # a quoted `<<WORD` inside an argument, most likely. Blanking
+                # the rest of the command on that guess erased real merges.
+                continue
+            for k in range(i + 1, j + 1):
+                lines[k] = ""
+            i = j
         i += 1
-    return "\n".join(out)
+    return "\n".join(lines)
+
+def join_quoted_newlines(cmd):
+    """Newlines inside quotes are data. A multi-line commit message must not
+    turn the line after it into a fresh command position."""
+    out = []
+    quote = ""
+    for ch in cmd:
+        if quote:
+            if ch == quote:
+                quote = ""
+            elif ch == "\n":
+                ch = " "
+        elif ch in QUOTE_CHARS:
+            quote = ch
+        out.append(ch)
+    return "".join(out)
+
+def code_only(cmd):
+    """The command with its DATA blanked out: quoted spans become spaces and
+    heredoc bodies become empty lines. What survives is the text a shell would
+    execute — the only place a command, or an opt-out, can really begin."""
+    out = []
+    quote = ""
+    for ch in cmd:
+        if quote:
+            if ch == quote:
+                quote = ""
+            elif ch != "\n":
+                ch = " "
+        elif ch in QUOTE_CHARS:
+            quote = ch
+        out.append(ch)
+    return blank_heredocs("".join(out))
 
 def segments(cmd, depth=0, quiet=False):
     """Yield token lists, one per command position, recursing into `sh -c`."""
@@ -96,10 +134,11 @@ def segments(cmd, depth=0, quiet=False):
     # segment whose head is ("npm", "test", "gh") and walks straight through.
     # Listing "\n" in SEPS never helped: the token never reaches that test.
     # So re-read the lines — but only where a line break really is a command
-    # break: heredoc bodies are blanked out first, and a command the top-level
-    # lex read as ONE multi-line token is a quoted paragraph, also data.
-    if "\n" in cmd and not any("\n" in t for t in tokens):
-        for line in blank_heredocs(cmd).split("\n"):
+    # break. Newlines inside quotes are folded away and heredoc bodies blanked
+    # first; a global "does any token span lines" veto used to do this job, and
+    # one multi-line commit message then disabled the whole re-read.
+    if "\n" in cmd:
+        for line in blank_heredocs(join_quoted_newlines(cmd)).split("\n"):
             if line.strip():
                 yield from segments(line, depth + 1, quiet=True)
     # A shell invoked with -c carries a whole command line in one argument.
@@ -151,16 +190,21 @@ cmd = (data.get("tool_input") or {}).get("command") or ""
 # Quotes come off first, because shlex would have joined them: `gh pr me"rge"`
 # tokenizes to a merge and must not read as "no merge here" just because the
 # bytes are split.
-# chr(39) rather than the character: this whole program is a single-quoted shell
-# argument, so one apostrophe here ends it and the hook stops parsing.
-QUOTES = "\"\\" + chr(39)
-bare = "".join(c for c in cmd if c not in QUOTES)
+# Quotes and backslashes come off, because shlex would have joined them:
+# `gh pr me"rge"` tokenizes to a merge and must not read as "nothing to see".
+# Heredoc bodies come out first, though: a document that quotes the command is
+# the false block this whole change exists to remove, and on this path the
+# regex is the only decider.
+bare = "".join(c for c in blank_heredocs(cmd) if c not in QUOTE_CHARS + "\\")
 looks_merge = "1" if re.search(r"\b(?:pr|mr)[ \t]+merge\b", bare) else "0"
 # Position matters: `SKIP_BUGHUNT=1` counts as an opt-out where a command starts
 # — the start of the line, or after a separator a person actually types. NOT
 # after a bare newline: heredoc bodies are newline-separated, so that would let
 # a document the model is writing opt the model out.
-opts_out = "1" if re.search(r"(?:\A|[;&|]\s*)SKIP_BUGHUNT=1[ \t]", cmd) else "0"
+# ...and read from the code, never from the data: a `;` inside a heredoc body
+# used to count as a command boundary, so a document the model was writing could
+# hand the model the operator hatch.
+opts_out = "1" if re.search(r"(?:\A|[;&|]\s*)SKIP_BUGHUNT=1[ \t]", code_only(cmd)) else "0"
 verdict = "none"
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":

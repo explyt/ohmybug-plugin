@@ -34,12 +34,6 @@ try:
 except Exception:
     sys.exit(0)
 tool = (d.get("tool_name") or "").split("__")[-1]
-# The response shape differs between clients and MCP versions (raw object,
-# {content:[{text:"…json…"}]}, …), so ask the flattened text rather than
-# guessing a path into it. Escaped quotes survive that flattening, hence \\\\?.
-blob = json.dumps(d.get("tool_response"))
-done = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"done", blob) else "0"
-failed = "1" if re.search(r"\\\\?\"status\\\\?\":\s*\\\\?\"failed", blob) else "0"
 # Which event fired. The explicit field when the client sends it; the absence of
 # a response as the fallback, since only PostToolUse carries one. Deriving it
 # here rather than from an argument means the wiring in hooks.json is the same
@@ -51,6 +45,34 @@ if event in ("PreToolUse", "PostToolUse"):
     pre = "1" if event == "PreToolUse" else "0"
 else:
     pre = "0" if "tool_response" in d else "1"
+resp = d.get("tool_response")
+blob = json.dumps(resp)
+# WHICH STATUS, not "does this text contain the word". The response shape differs
+# between clients and MCP versions (raw object, {content:[{text:"…json…"}]}, …),
+# so look for the status field in both shapes — but never in the prose. A review
+# whose findings merely quote the characters status: failed used to delete the
+# pending record and lose a hunt the user had paid for, and hunting this very
+# repository produces exactly that prose.
+def status_of(r):
+    if isinstance(r, dict):
+        s = r.get("status")
+        if isinstance(s, str):
+            return s
+        parts = r.get("content")
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    try:
+                        inner = json.loads(part["text"])
+                    except Exception:
+                        continue
+                    if isinstance(inner, dict) and isinstance(inner.get("status"), str):
+                        return inner["status"]
+    return ""
+
+status = status_of(resp)
+done = "1" if status == "done" else "0"
+failed = "1" if status == "failed" else "0"
 review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
 if not isinstance(review, str) or not review:
     # Same escaping rules as the `done` match above: \s, not \\s — the latter
@@ -78,7 +100,15 @@ ref = ref if isinstance(ref, str) and ref else ""
 
 # One field per line: a cwd may contain spaces, and a newline in a path is not
 # something this hook needs to survive.
-print(tool, done, d.get("cwd") or "", sent, ref, review, pre, failed, sep="\n")
+# A newline in any field would shift every field after it, and `review_id` is
+# model-authored: one newline there made a PostToolUse read as a PreToolUse, so
+# the finished review never promoted. The path sanitiser downstream runs after
+# the split and cannot help.
+def one_line(v):
+    return (v if isinstance(v, str) else "").replace("\n", " ").replace("\r", " ")
+
+print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
+      pre, failed, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -132,6 +162,12 @@ fi
 
 case "$TOOL" in
   submit_review)
+    # This event only exists because the call was ALLOWED to run. So whatever the
+    # server answered, the attempt record has done its job and must go: left
+    # standing it says "the environment refused the hunt" about a call the
+    # environment permitted, and the next merge is waved through on that claim.
+    [ -n "$SENT" ] && ohmybug_clear_attempt "$SENT"
+    [ -n "$REF" ] && ohmybug_clear_attempt "ref:$REF"
     # Every id this submit could legitimately be known by, newline-separated.
     # The sent bytes first, because that one is true from any directory; the
     # working diff second, for a client that reformatted what it sent; the ref
@@ -155,16 +191,16 @@ case "$TOOL" in
     fi
     ;;
   get_findings|confirm_findings)
-    # A review that ends `failed` is over. Left in place its pending record says
-    # "a hunt is RUNNING" forever, which is a permanent block carrying an
-    # instruction — poll until done — that will never come true.
-    if [ "${FAILED:-0}" = '1' ]; then
-      rm -f "$PENDING"
-      exit 0
-    fi
     # confirm_findings only exists after a done review, so it needs no status
     # check; get_findings is polled while the review is still running.
-    [ "$TOOL" = 'confirm_findings' ] || [ "${DONE:-0}" = '1' ] || exit 0
+    #
+    # DONE is decided first. A review that ends `failed` is over and its pending
+    # record must not sit there saying "a hunt is RUNNING" forever — but asking
+    # that question first threw finished reviews away.
+    if [ "$TOOL" != 'confirm_findings' ] && [ "${DONE:-0}" != '1' ]; then
+      [ "${FAILED:-0}" = '1' ] && rm -f "$PENDING"
+      exit 0
+    fi
     if [ -s "$PENDING" ]; then
       # Promote what was SENT, not what the tree looks like now: fixes written
       # while the review ran were never hunted.

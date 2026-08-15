@@ -105,6 +105,13 @@ ohmybug_record_attempt() {
 # that diff on this machine, and diff ids are content hashes, so a revert that
 # recreates old bytes would inherit an authorisation from weeks ago.
 OHMYBUG_ATTEMPT_TTL_MIN=${OHMYBUG_ATTEMPT_TTL_MIN:-720}
+ohmybug_clear_attempt() {
+  local dir
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  rm -f "$dir/attempt:$1"
+}
+
 ohmybug_attempted() {
   local dir
   [ -n "${1:-}" ] || return 1

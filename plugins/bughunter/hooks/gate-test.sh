@@ -11,6 +11,12 @@
 set -u
 G=$(cd "$(dirname "$0")" && pwd)
 export HOME=$(mktemp -d)
+# Both halves of the settings lookup, not just the HOME one: a maintainer who
+# granted these MCP tools in PROJECT-local settings would otherwise fail the
+# warn-through rows on their own checkout, with a message naming none of that,
+# while CI on a clean clone stayed green.
+export CLAUDE_PROJECT_DIR=$HOME/project
+mkdir -p "$CLAUDE_PROJECT_DIR"
 cd "$(git -C "$G" rev-parse --show-toplevel)" || exit 1
 fails=0
 
@@ -149,6 +155,29 @@ SKIP_BUGHUNT=1 is the operator hatch
 EOF
 $V"                                      2
 t "cd /tmp && SKIP_BUGHUNT=1 $V"         0  # where a human actually types it
+# A separator INSIDE data is not a command boundary. One apostrophe makes the
+# command unparsable, and the opt-out then came from a document the model wrote.
+t "cat > /tmp/doc.md <<EOF
+it's the hatch; SKIP_BUGHUNT=1 noted
+EOF
+$V"                                      2
+# A multi-line quoted argument is data too — and a global "any token spans
+# lines" veto switched the whole line re-read off, hiding the merge after it.
+t "git commit -m \"fix: thing
+
+more detail\"
+$V"                                      2
+# `<<` that is not a heredoc opener: a conflict-marker grep and a here-string.
+# Blanking to a terminator that never comes erased the merge after them.
+t "grep -rn \"<<<<<<< HEAD\" src/
+$V"                                      2
+t "jq . <<<\"literal\"
+$V"                                      2
+# ...and the unparsed fallback reads the heredoc body no more than the parser
+# does: this one mentions a merge inside a commit message and merges nothing.
+t "git commit -F - <<'EOF'
+fix: don't let the gh pr merge gate block doc writes
+EOF"                                     0
 
 # --- degraded: python3 missing or broken --------------------------------------
 # Without python3 the hook cannot read a command — and stamp-hunt.sh cannot
@@ -191,10 +220,10 @@ post() { # tool, done?, -> runs stamp-hunt.sh
   OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
   python3 -c "import json,os,sys;print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
-    'tool_input':{'review_id':'rev_x','diff':os.environ.get('OMB_DIFF','')},
+    'tool_input':{'review_id':sys.argv[4],'diff':os.environ.get('OMB_DIFF','')},
     'tool_response':{'content':[{'type':'text','text':json.dumps(
-       {'review_id':'rev_x','status':'done' if sys.argv[2]=='1' else 'running'})}]},
-    'cwd':sys.argv[3]}))" "$1" "$2" "$PWD" | bash "$G/stamp-hunt.sh"
+       {'review_id':sys.argv[4],'status':'done' if sys.argv[2]=='1' else 'running'})}]},
+    'cwd':sys.argv[3]}))" "$1" "$2" "$PWD" "${3:-rev_x}" | bash "$G/stamp-hunt.sh"
 }
 . "$G/diff-id.sh"
 M=$(ohmybug_marker_path)
@@ -300,6 +329,49 @@ if [ -n "$ID" ]; then
   pre submit_review
   find "$(ohmybug_hunt_dir)" -name 'attempt:*' -exec touch -t 202001010000 {} \; 2>/dev/null
   t "$V" 2
+  reset_state
+
+  # A PostToolUse proves the call was PERMITTED, so the attempt it left behind
+  # is spent. Without that, a permitted review that later fails decayed into
+  # "the environment refused the hunt" — and waved the merge through.
+  pre submit_review
+  post submit_review 0
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__get_findings',
+    'tool_input':{'review_id':'rev_x'},
+    'tool_response':{'content':[{'type':'text','text':json.dumps(
+       {'review_id':'rev_x','status':'failed'})}]},
+    'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh"
+  t "$V" 2
+  reset_state
+
+  # A done review whose FINDINGS merely quote the word failed is still a done
+  # review. Grepping the flattened response for it threw the hunt away — and
+  # hunting this repository produces exactly that prose.
+  # The raw-object response shape, which is the one that carries the prose at a
+  # single level of escaping — exactly what a hunt of this repository returns.
+  post submit_review 0
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__get_findings',
+    'tool_input':{'review_id':'rev_x'},
+    'tool_response':{'review_id':'rev_x','status':'done','findings':[
+       {'failure_scenario':'a response whose text contains \"status\": \"failed\" anywhere'}]},
+    'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh"
+  t "$V" 0
+  reset_state
+
+  # The positional field protocol carries three free-text fields before the two
+  # flags, and review_id is model-authored: one newline in it made a PostToolUse
+  # read as a PreToolUse, so the finished review could never promote.
+  OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
+  python3 -c "import json,os,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+    'tool_input':{'review_id':'rev_nl\n1','diff':os.environ.get('OMB_DIFF','')},
+    'tool_response':{'review_id':'rev_nl','status':'running'},
+    'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh"
+  [ -n "$(ls -A "$(ohmybug_hunt_dir).pending" 2>/dev/null)" ] || {
+    printf 'FAIL a newline in review_id shifted the fields: no pending record\n'
+    fails=$((fails + 1)); }
   reset_state
 
   # A review that ends `failed` is over, and its pending record must not keep
@@ -514,6 +586,27 @@ mkdir -p "$FR/.claude"
 printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
 [ -z "$(say)" ] || { printf 'FAIL first-run: nagged a user who had already decided\n'; fails=$((fails + 1)); }
 rm -rf "$FR"
+
+# --- the one model-authored string that becomes a path ------------------------
+# `review_id` is written by the model and lands in `$PENDING_DIR/$REVIEW`, and
+# this file both WRITES and (on a failed review) DELETES that path. The
+# sanitiser is the only thing keeping either inside ~/.ohmybug, and it had no
+# row: every id in this suite is already alphanumeric, so deleting the line kept
+# the suite green.
+# The one model-authored string that becomes a path. `review_id` lands in
+# $PENDING_DIR/$REVIEW, and this file both writes and (on a failed review)
+# deletes that path, so the sanitiser is the only thing keeping either inside
+# ~/.ohmybug. One level of escape proves it; counting six `..` and hoping the
+# directories above happen to exist makes the row pass for the wrong reason.
+reset_state
+post submit_review 0 '../escaped'
+# One level up from the PENDING directory is `.../hunts/`, not the hunt dir
+# itself — `<key>.pending` is a sibling of `<key>`, not a child. Checking the
+# wrong parent is how this row first passed against a deleted sanitiser.
+[ -e "$(dirname "$(ohmybug_hunt_dir)")/escaped" ] && {
+  printf 'FAIL a model-authored review_id walked out of the pending directory\n'
+  fails=$((fails + 1)); }
+reset_state
 
 # --- the wiring ---------------------------------------------------------------
 # Everything above pipes payloads into the scripts by hand, so the file that
