@@ -125,6 +125,13 @@ case "${1:-}" in
     # last did.
     bad=0
     count=$(git rev-list --count HEAD)
+    # Bound by the same quantity `--write` stamps, not only by this history.
+    # `--write` moved onto `origin/main + 1`; this rule stayed on HEAD, and on
+    # a branch cut a few merges back that is the SMALLER number — so the script
+    # called its own correct stamp invalid seconds after writing it. Take
+    # whichever is larger: the rule exists to catch a number no history could
+    # reach, and both of these are histories this commit can reach.
+    if n=$(main_count) && [ "$((n + 1))" -gt "$count" ]; then count=$((n + 1)); fi
     for m in "${MANIFESTS[@]}"; do
       [ -f "$m" ] || continue
       cur=$(read_version "$m")
@@ -187,8 +194,8 @@ case "${1:-}" in
 
     # The squash case, driven end to end, because it is the one that shipped a
     # red main: a branch LONGER than the squash it becomes must still stamp the
-    # number its merge will produce. Counting HEAD gives 8 here and the merge
-    # gives 6, so this fails loudly on any return to that.
+    # number its merge will produce. Counting HEAD gives 7 here and the merge
+    # gives 4, so this fails loudly on any return to that.
     origin=$tmp/origin
     git clone -q --bare "$repo" "$origin"
     gitc remote add origin "$origin"
@@ -214,6 +221,41 @@ case "${1:-}" in
     gitc commit -qm "squashed"
     rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
     [ "$rc" = 0 ] || { echo "self-test: --check red on main right after a squash merge (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # The remote ref must beat a local `main` that is behind it. This is the
+    # half the change rests on and the half nothing above could see: everywhere
+    # earlier, `main` and `origin/main` sit on the same commit, so dropping
+    # `origin/main` from the ref list left the whole self-test green. What that
+    # mutation costs is the silent failure, not a red one — a laptop that
+    # fetches without fast-forwarding stamps BELOW the published number, and
+    # the marketplace, which only asks "is there something newer", stops
+    # offering the update to everyone.
+    gitc checkout -q main
+    echo ahead > "$repo/plugins/bughunter/ahead"
+    gitc add -A; gitc commit -qm "pushed by someone else"
+    gitc push -q origin main
+    gitc reset -q --hard HEAD~1
+    gitc fetch -q origin main
+    remote=$(git -C "$repo" rev-list --count --first-parent origin/main)
+    localn=$(git -C "$repo" rev-list --count --first-parent main)
+    [ "$remote" -gt "$localn" ] || {
+      echo "self-test: fixture failed to leave local main behind origin/main ($localn vs $remote)" >&2
+      rm -rf "$tmp"; exit 1
+    }
+    want="0.$((remote + 1)).0"
+    got=$(cd "$repo" && bash "$SELF")
+    [ "$got" = "$want" ] || {
+      echo "self-test: a stale local main stamped $got, but origin/main says the release will be $want" >&2
+      rm -rf "$tmp"; exit 1
+    }
+    # And --check must accept what --write just produced, on this very branch.
+    # The two were keyed on different quantities once: --write on origin/main,
+    # --check on HEAD, which on a branch behind main is the smaller number — so
+    # the script called its own stamp invalid, seconds after writing it.
+    (cd "$repo" && bash "$SELF" --write) >/dev/null
+    gitc add -A; gitc commit -qm "version"
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check rejects the version --write just stamped (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
 
     rm -rf "$tmp"
     echo "version self-test: ok ($V)"
