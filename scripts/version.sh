@@ -34,8 +34,40 @@ EOF
   exit 2
 }
 
+# The count of the history the version will LIVE in, which is not the history
+# it is computed on.
+#
+# Counting HEAD looked equivalent and is not, because we squash-merge: five
+# commits on a branch become one on main. `--write` also runs before the commit
+# that records it, so a branch stamps `base + k - 1` while the squash gives main
+# `base + 1` — the two agree only for k <= 2. A three-commit branch therefore
+# lands a number main's history has not reached, `--check` goes red on main
+# right after the merge (where nobody is looking), and the NEXT release computes
+# LOWER than the one already published — the marketplace only ever asks "is
+# there something newer", so users stop being offered updates until the count
+# catches up. Measured on this repo: a 5-commit branch stamped 0.50.0 onto a
+# main that would reach 48.
+#
+# `origin/main` first-parent + 1 is what the squash will produce, from any
+# branch, whatever its length. It is also monotonic, which is the property the
+# marketplace actually needs.
+#
+# ponytail: two branches in flight stamp the same number; the second must
+# re-run --write after rebasing, and `--check`'s first rule catches it if it
+# does not. Key on the published version instead if that ever stops being rare.
+main_count() {
+  local b n
+  for b in origin/main origin/master main master; do
+    n=$(git rev-list --count --first-parent "$b" 2>/dev/null) && [ -n "$n" ] && { printf '%s' "$n"; return 0; }
+  done
+  return 1
+}
+
 compute() {
   local n
+  # No main to predict (a bare `git init`, a detached CI checkout with no
+  # branches): fall back to counting HEAD, which is what this did before.
+  n=$(main_count) && printf '0.%s.0' "$((n + 1))" && return 0
   n=$(git rev-list --count HEAD) || { echo "not a git repository" >&2; exit 1; }
   printf '0.%s.0' "$n"
 }
@@ -152,6 +184,37 @@ case "${1:-}" in
     gitc add -A; gitc commit -qm three
     rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
     [ "$rc" = 0 ] || { echo "self-test: --check still failing after a version write (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # The squash case, driven end to end, because it is the one that shipped a
+    # red main: a branch LONGER than the squash it becomes must still stamp the
+    # number its merge will produce. Counting HEAD gives 8 here and the merge
+    # gives 6, so this fails loudly on any return to that.
+    origin=$tmp/origin
+    git clone -q --bare "$repo" "$origin"
+    gitc remote add origin "$origin"
+    gitc fetch -q origin main
+    base=$(git -C "$repo" rev-list --count --first-parent origin/main)
+    gitc checkout -q -b long
+    for i in 1 2 3 4; do
+      echo "$i" > "$repo/plugins/bughunter/f$i"
+      gitc add -A; gitc commit -qm "long $i"
+    done
+    want="0.$((base + 1)).0"
+    got=$(cd "$repo" && bash "$SELF")
+    [ "$got" = "$want" ] || {
+      echo "self-test: a 4-commit branch stamped $got, but its squash merge will make main $want" >&2
+      rm -rf "$tmp"; exit 1
+    }
+    # And the number must survive the merge it predicted: squash it and confirm
+    # --check, the rule that turns main red, is satisfied by what we stamped.
+    (cd "$repo" && bash "$SELF" --write) >/dev/null
+    gitc add -A; gitc commit -qm "long 5 (version)"
+    gitc checkout -q main
+    gitc merge -q --squash long
+    gitc commit -qm "squashed"
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check red on main right after a squash merge (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
     rm -rf "$tmp"
     echo "version self-test: ok ($V)"
     ;;
