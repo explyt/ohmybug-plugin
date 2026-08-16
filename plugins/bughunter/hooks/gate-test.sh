@@ -148,6 +148,9 @@ t "npm test
 $V"                                      2  # a newline ends a command too
 t "env $V"                               2  # wrappers do not hide the head
 t "sudo $V"                              2
+t "env FOO=bar $V"                       2  # ...nor does a wrapper plus a prefix
+t "sudo FOO=bar $V"                      2
+t "FOO=bar env $V"                       2
 t "gh pr me''rge 5; echo it's here"      2  # unparsable AND quote-split
 # ...but a line break inside DATA is not a command break. shlex has no idea it
 # is reading a heredoc body, so re-reading raw lines turns a document that
@@ -460,6 +463,19 @@ if [ -n "$ID" ]; then
       'cwd':sys.argv[2]}))" "$1" "$PWD" | bash "$G/stamp-hunt.sh"
   }
   HEAD_NOW=$(git rev-parse HEAD)
+  # The offer is filed under the RESOLVED sha, so it has to be cleared under the
+  # resolved sha too: clearing under the raw ref removed nothing, and the stale
+  # attempt then told the gate the environment had refused a hunt it permitted.
+  reset_state
+  npre "$(git rev-parse --short HEAD)"
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+    'tool_input':{'review_id':'rev_ref','diff':'','meta':{'repo':'x/y','ref':sys.argv[1]}},
+    'tool_response':{'review_id':'rev_ref','status':'running'},
+    'cwd':sys.argv[2]}))" "$(git rev-parse --short HEAD)" "$PWD" | bash "$G/stamp-hunt.sh"
+  ohmybug_attempted "ref:$HEAD_NOW" && {
+    printf 'FAIL a permitted submit left its attempt record standing\n'; fails=$((fails + 1)); }
+  reset_state
   npre "some-branch-name"
   # Assert on the key the bogus ref would have written, not on HEAD's key: a
   # lookup for HEAD is false either way, so it passes while recording anything.
@@ -510,6 +526,148 @@ if [ -n "$ID" ]; then
        fails=$((fails + 1)) ;;
   esac
 fi
+
+# --- what a hunt can speak about ----------------------------------------------
+# The gate keyed on a hash of the WHOLE diff, so a README edit after the hunt
+# read as unhunted code: another review, another 15 minutes, to look at prose
+# nobody asked the reviewers about. And a docs-only branch could not land at all
+# without paying for a hunt of it.
+if [ -n "$ID" ]; then
+  reset_state
+  post submit_review 0
+  post get_findings 1
+  t "$V" 0                                   # hunted, as before
+  # Prose, tests and skills after the hunt: still hunted.
+  DOCFILE=".ohmybug-gate-test-scratch.md"
+  TESTFILE="test/.ohmybug-gate-test-scratch.js"
+  mkdir -p test
+  printf 'a README edit after the hunt\n' > "$DOCFILE"
+  printf 'it("still counts as a test", () => {})\n' > "$TESTFILE"
+  git add -N "$DOCFILE" "$TESTFILE" 2>/dev/null
+  t "$V" 0
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"documentation, tests or skills"*) ;;
+    *) printf 'FAIL the docs-only pass did not say why: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # ...but one line of real code is a different diff again.
+  printf 'code written after the hunt\n' >> "$SCRATCH"
+  t "$V" 2
+  printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
+  # A file that merely has "docs" or "test" inside its NAME is code.
+  CODEFILE="src/docs-loader.js"
+  mkdir -p src
+  printf 'export const load = () => 1\n' > "$CODEFILE"
+  git add -N "$CODEFILE" 2>/dev/null
+  t "$V" 2
+  # `rmdir`, never `rm -rf`: this runs in the maintainer's real checkout, and a
+  # top-level src/ that was already there is not this suite's to delete. Same
+  # rule the header states after this file once destroyed uncommitted work.
+  git reset -q -- "$CODEFILE" 2>/dev/null; rm -f "$CODEFILE"; rmdir src 2>/dev/null
+  # The strict mode is still there for a repo whose prose IS behaviour.
+  rc=$(mk "$V" "$PWD" | OHMYBUG_HUNT_ALL=1 bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL OHMYBUG_HUNT_ALL did not restore the strict gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git reset -q -- "$DOCFILE" "$TESTFILE" 2>/dev/null
+  rm -f "$DOCFILE" "$TESTFILE"; rmdir test 2>/dev/null
+  reset_state
+fi
+
+# A branch that changes nothing but prose has nothing for a hunt to look at, so
+# it must land without one — that case used to cost a review.
+#
+# In a throwaway repository, not this one: the suite runs inside a checkout that
+# already carries the maintainer's own edits, so "the only change is a .md" is
+# not something this working tree can honestly demonstrate.
+DOCREPO=$(mktemp -d)/repo
+mkdir -p "$DOCREPO" && (
+  cd "$DOCREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  printf 'base\n' > code.js && git add code.js
+  git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  printf 'a documentation change, and nothing else\n' > README.md
+  git add -N README.md
+)
+rc=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a docs-only branch still needed a hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+out=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+case "$out" in
+  *"nothing to hunt"*) ;;
+  *) printf 'FAIL a docs-only diff was not named as such: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+# ...and one line of code in the same branch brings the gate straight back.
+printf 'export const two = 2\n' >> "$DOCREPO/code.js"
+rc=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL code alongside the docs did not re-arm the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$DOCREPO")"
+
+# The same question, asked from a subdirectory. `git diff -- .` resolves against
+# the CURRENT directory, so the significant diff came out empty in any package
+# below the root — and empty is the answer that ALLOWS the merge. The gate cds
+# into the session cwd before it asks, and an agent session sits wherever the
+# last `cd` left it.
+SUBREPO=$(mktemp -d)/repo
+mkdir -p "$SUBREPO" && (
+  cd "$SUBREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  mkdir -p api service
+  printf 'base\n' > api/code.js
+  printf 'base\n' > service/code.js
+  git add api service && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  # Unhunted code, in a package the merge command is NOT standing in.
+  printf 'export const risky = 1\n' >> service/code.js
+)
+rc=$(mk "$V" "$SUBREPO/api" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL merging from a subdirectory hid unhunted code (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$SUBREPO")"
+
+# `.claude/` is prose-shaped and deliberately in scope: its settings decide
+# whether this gate stands down at all, and its hooks are commands that run.
+CLREPO=$(mktemp -d)/repo
+mkdir -p "$CLREPO" && (
+  cd "$CLREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  printf 'base\n' > code.js
+  mkdir -p .claude
+  printf '{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > .claude/settings.json
+  git add code.js .claude && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  # The only change: the rule that decides whether the gate can stand down.
+  printf '{"permissions":{}}\n' > .claude/settings.json
+)
+rc=$(mk "$V" "$CLREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL a change to the gate own permission input skipped review (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$CLREPO")"
+
+# ...and a test tree that is not at the repository root is still a test tree.
+NESTREPO=$(mktemp -d)/repo
+mkdir -p "$NESTREPO" && (
+  cd "$NESTREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  mkdir -p packages/api/tests
+  printf 'base\n' > packages/api/code.js
+  git add packages && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  printf 'def test_auth(): pass\n' > packages/api/tests/test_auth.py
+  git add -N packages/api/tests/test_auth.py
+)
+rc=$(mk "$V" "$NESTREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a nested tests/ directory demanded a paid hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$NESTREPO")"
+reset_state
 
 # --- the worktree rows -------------------------------------------------------
 # The failure the owner hit on 2026-08-12, third occurrence of this class: the

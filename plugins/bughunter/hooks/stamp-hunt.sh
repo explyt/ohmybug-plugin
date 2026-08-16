@@ -176,8 +176,15 @@ case "$TOOL" in
     # server answered, the attempt record has done its job and must go: left
     # standing it says "the environment refused the hunt" about a call the
     # environment permitted, and the next merge is waved through on that claim.
+    # The SAME key the PreToolUse branch filed, which is the RESOLVED sha: the
+    # raw ref is whatever the model typed, so clearing under it removed nothing
+    # and the attempt outlived the call it described — a permitted hunt then
+    # read as a refused one and the next merge was waved through on that claim.
     [ -n "$SENT" ] && ohmybug_clear_attempt "$SENT"
-    [ -n "$REF" ] && ohmybug_clear_attempt "ref:$REF"
+    if [ -n "$REF" ]; then
+      CLEARED=$(git rev-parse --verify --quiet "$REF^{commit}" 2>/dev/null)
+      [ -n "$CLEARED" ] && ohmybug_clear_attempt "ref:$CLEARED"
+    fi
     # Every id this submit could legitimately be known by, newline-separated.
     # The sent bytes first, because that one is true from any directory; the
     # working diff second, for a client that reformatted what it sent; the ref
@@ -187,6 +194,9 @@ case "$TOOL" in
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
       ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
+      # ...and the same diff with docs, tests and skills taken out, so that
+      # editing prose after the hunt does not read as unhunted code.
+      SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
       [ -n "$REF" ] && printf 'ref:%s\n' "$REF"
       true
     } > "$PENDING.tmp" 2>/dev/null || exit 0

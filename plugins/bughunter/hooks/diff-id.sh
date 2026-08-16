@@ -38,6 +38,62 @@ ohmybug_diff_id() {
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
 }
 
+# The SIGNIFICANT diff: the same diff with everything that cannot change what
+# the software does taken out.
+#
+# The gate keys on a hash of the whole diff, so editing a README after a hunt
+# read as "new, unhunted code" and blocked the merge — a re-hunt costs money and
+# a quarter of an hour to review prose the reviewers were never asked about.
+# Worse, a docs-only branch had to be hunted before it could land at all.
+#
+# ponytail: this is a path list, not an understanding of the code. A `.md` file
+# IS behaviour in some repositories — a skill, a prompt, a bundle this very
+# plugin ships — so OHMYBUG_HUNT_ALL=1 turns the whole idea off and returns the
+# strict "every byte counts" gate.
+#
+# `.claude/` is deliberately NOT on this list, though it is prose-shaped: its
+# settings decide whether this gate stands down at all (see
+# ohmybug_tools_allowed below) and its hook definitions are commands that run.
+# A change to the control itself is the last thing that should skip review.
+OHMYBUG_SKIP_GLOBS="
+:(top,exclude,glob)**/*.md
+:(top,exclude,glob)**/*.mdx
+:(top,exclude,glob)**/*.rst
+:(top,exclude,glob)**/*.txt
+:(top,exclude,glob)**/docs/**
+:(top,exclude,glob)**/LICENSE*
+:(top,exclude,glob)**/CHANGELOG*
+:(top,exclude,glob)**/test/**
+:(top,exclude,glob)**/tests/**
+:(top,exclude,glob)**/spec/**
+:(top,exclude,glob)**/__tests__/**
+:(top,exclude,glob)**/*.test.*
+:(top,exclude,glob)**/*.spec.*
+:(top,exclude,glob)**/*_test.*
+:(top,exclude,glob)**/skills/**
+"
+
+# exit 0 + a hash -> this is the part of the diff a hunt would speak about
+# exit 0 + nothing -> nothing here can change behaviour; there is nothing to hunt
+# exit 1          -> cannot tell (same as ohmybug_diff_id)
+ohmybug_sig_id() {
+  local base diff
+  [ "${OHMYBUG_HUNT_ALL:-0}" = "1" ] && { ohmybug_diff_id; return $?; }
+  base=$(ohmybug_base) || return 1
+  # `:(top)` on every entry, and no `.` beside them: a bare `.` and plain globs
+  # resolve against the CURRENT DIRECTORY, so the same tree hashed from the repo
+  # root and from a package subdirectory gave two different answers — and the
+  # subdirectory one came out EMPTY, which this gate reads as "nothing here can
+  # change behaviour, allow the merge". Its sibling ohmybug_diff_id passes no
+  # pathspec at all for exactly this reason; three comments in this file already
+  # record what cwd-dependent identity costs.
+  #
+  # Unquoted on purpose: each line of the list is one pathspec argument.
+  diff=$(git diff "$base" -- $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
+  [ -n "$diff" ] || return 0
+  printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
+}
+
 ohmybug_marker_path() {
   local gitdir
   gitdir=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
