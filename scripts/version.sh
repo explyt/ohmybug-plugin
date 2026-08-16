@@ -1,24 +1,36 @@
 #!/bin/bash
 # The plugin's version, derived instead of chosen.
 #
-# `0.<commit-count>.0`. Hand-maintained semver on a plugin nobody depends on as
-# a library is a decision with no inputs: every release asked "is this a minor?"
-# about a marketplace that only ever compares for "is there something newer".
-# A count answers that and cannot be forgotten.
+# `0.N.0`, where N only ever goes UP. Hand-maintained semver on a plugin nobody
+# depends on as a library is a decision with no inputs: every release asked "is
+# this a minor?" about a marketplace that only ever compares for "is there
+# something newer". Increasing answers that and cannot be forgotten.
 #
-# Why a count and not the CI run number, which is what our other repositories
-# use for the human-facing build string: a Claude Code marketplace reads
-# `plugin.json` out of the repository, so the number has to be COMMITTED, and a
-# run number is not available to someone releasing from a laptop. The count is
-# reproducible from any checkout of the same commit.
+# N is the larger of two numbers, and which one wins says what went right:
+#
+#   main's commit count + 1   what the squash merge of this branch will produce,
+#                             so the number stays anchored to real history and
+#                             is the same from any branch, whatever its length;
+#   published + 1             the number already in main's manifest, plus one.
+#
+# The second exists because the first is not monotonic across a mistake. A stamp
+# that got ahead of the history — a long branch, before this script predicted
+# the squash — is PUBLISHED, and recomputing it back down to the count would
+# offer the marketplace a version older than what people already installed. It
+# only asks "is there something newer", so those users stop being offered
+# updates until the count catches up: silent, and invisible from here. Taking
+# the larger of the two costs nothing and cannot regress. Measured twice in two
+# days: 0.50.0 and then 0.55.0 onto a main that had reached 48.
+#
+# Why derived at all and not the CI run number, which is what our other
+# repositories use for the human-facing build string: a Claude Code marketplace
+# reads `plugin.json` out of the repository, so the number has to be COMMITTED,
+# and a run number is not available to someone releasing from a laptop.
 #
 # The known limits, so nobody is surprised:
-#   - it needs full history (a shallow clone counts what it has);
-#   - two branches can produce the same count, so it identifies a release only
-#     together with the sha, which is why publish also tags.
-#   - the number is the count at the commit it was COMPUTED on, so the manifest
-#     reads one behind the commit that records it. That is why --check does not
-#     compare for equality.
+#   - it needs main's history and main's manifest (a shallow clone sees less);
+#   - two branches in flight compute the same number, so it identifies a release
+#     only together with the sha, which is why publish also tags.
 set -euo pipefail
 
 SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
@@ -53,8 +65,9 @@ EOF
 # marketplace actually needs.
 #
 # ponytail: two branches in flight stamp the same number; the second must
-# re-run --write after rebasing, and `--check`'s first rule catches it if it
-# does not. Key on the published version instead if that ever stops being rare.
+# re-run --write after rebasing. Nothing catches that today — both numbers are
+# above what is published, so both are legal — and the cost is one release
+# identified by its sha rather than its number.
 main_count() {
   local b n
   for b in origin/main origin/master main master; do
@@ -63,13 +76,33 @@ main_count() {
   return 1
 }
 
+# The N already published on main, read from main's own manifest rather than
+# from the working tree — the working tree is what we are about to overwrite.
+published() {
+  local b json v
+  for b in origin/main origin/master main master; do
+    json=$(git show "$b:${MANIFESTS[0]}" 2>/dev/null) || continue
+    v=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))') || return 1
+    case "$v" in
+      0.*.0) v=${v#0.}; printf '%s' "${v%.0}"; return 0 ;;
+      *) return 1 ;;  # someone hand-wrote a version; not ours to reason about
+    esac
+  done
+  return 1
+}
+
 compute() {
-  local n
-  # No main to predict (a bare `git init`, a detached CI checkout with no
-  # branches): fall back to counting HEAD, which is what this did before.
-  n=$(main_count) && printf '0.%s.0' "$((n + 1))" && return 0
-  n=$(git rev-list --count HEAD) || { echo "not a git repository" >&2; exit 1; }
-  printf '0.%s.0' "$n"
+  local n p want=0
+  if p=$(published) && [ "$p" -ge 0 ] 2>/dev/null; then want=$((p + 1)); fi
+  if n=$(main_count) && [ "$((n + 1))" -gt "$want" ]; then want=$((n + 1)); fi
+  # Neither a main to predict nor a published number (a bare `git init`, a
+  # detached CI checkout with no branches): fall back to counting HEAD, which
+  # is what this did before any of it existed.
+  if [ "$want" -eq 0 ]; then
+    n=$(git rev-list --count HEAD) || { echo "not a git repository" >&2; exit 1; }
+    want=$n
+  fi
+  printf '0.%s.0' "$want"
 }
 
 MANIFESTS=(
@@ -115,23 +148,21 @@ case "${1:-}" in
     ;;
   --check)
     # NOT equality with `compute`. The write is computed before the commit that
-    # records it, so the manifest is permanently one behind the count and an
-    # equality check could never pass on any commit — a check nobody can
-    # satisfy gets deleted, and then nothing checks.
+    # records it, and two branches in flight legitimately compute the same
+    # number — an equality check could never pass on any commit, and a check
+    # nobody can satisfy gets deleted, and then nothing checks.
     #
-    # The defect worth catching is the plugin changing without the version
-    # changing: the marketplace then never offers the update, and nothing looks
-    # broken. So: nothing under plugins/ may have changed since the manifest
-    # last did.
+    # Two defects are worth catching, and neither is "the number disagrees with
+    # the history". Being ahead of the count is now legal by design: it is what
+    # a mistake looks like after the number has been published, and the fix for
+    # that is to keep going up, not to come back down.
+    #
+    #   1. going BACKWARDS. Below what main already published, the marketplace
+    #      simply stops offering updates — no error anywhere.
+    #   2. the plugin changing without the version changing: same silence, same
+    #      cause. Nothing under plugins/ may have changed since the manifest did.
     bad=0
-    count=$(git rev-list --count HEAD)
-    # Bound by the same quantity `--write` stamps, not only by this history.
-    # `--write` moved onto `origin/main + 1`; this rule stayed on HEAD, and on
-    # a branch cut a few merges back that is the SMALLER number — so the script
-    # called its own correct stamp invalid seconds after writing it. Take
-    # whichever is larger: the rule exists to catch a number no history could
-    # reach, and both of these are histories this commit can reach.
-    if n=$(main_count) && [ "$((n + 1))" -gt "$count" ]; then count=$((n + 1)); fi
+    pub=$(published) || pub=""
     for m in "${MANIFESTS[@]}"; do
       [ -f "$m" ] || continue
       cur=$(read_version "$m")
@@ -139,8 +170,8 @@ case "${1:-}" in
       # marketplace file may not), which is not a disagreement.
       [ -n "$cur" ] || continue
       n=${cur#0.}; n=${n%.0}
-      if ! [ "$n" -le "$count" ] 2>/dev/null; then
-        echo "$m says $cur, which is not a commit count this history has reached ($count)" >&2
+      if [ -n "$pub" ] && ! [ "$n" -ge "$pub" ] 2>/dev/null; then
+        echo "$m says $cur, which is BELOW the 0.$pub.0 already published on main — everyone holding the published version stops being offered updates" >&2
         bad=1
       fi
     done
@@ -256,6 +287,31 @@ case "${1:-}" in
     gitc add -A; gitc commit -qm "version"
     rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
     [ "$rc" = 0 ] || { echo "self-test: --check rejects the version --write just stamped (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # The incident itself, replayed: a number that got AHEAD of the history is
+    # already published, so the only way out is forward. Recomputing must climb
+    # from it, never back down to the count — coming down is what silently ends
+    # updates for everyone already holding the published version.
+    # The block above deliberately left local main behind origin/main; catch it
+    # up first, or this one's push is refused and the failure reads as ours.
+    gitc reset -q --hard origin/main
+    write_version "$repo/${MANIFESTS[0]}" "0.99.0" >/dev/null
+    gitc add -A; gitc commit -qm "a stamp from a long branch"
+    gitc push -q origin main
+    gitc fetch -q origin main
+    got=$(cd "$repo" && bash "$SELF")
+    [ "$got" = "0.100.0" ] || {
+      echo "self-test: with 0.99.0 published on a short history, the next version came out $got — not forward" >&2
+      rm -rf "$tmp"; exit 1
+    }
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check refuses a published number that is ahead of the count (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # And the one number it must refuse: below what main already published.
+    write_version "$repo/${MANIFESTS[0]}" "0.98.0" >/dev/null
+    gitc add -A; gitc commit -qm "backwards"
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || { echo "self-test: --check accepted 0.98.0 under a published 0.99.0 (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
 
     rm -rf "$tmp"
     echo "version self-test: ok ($V)"
