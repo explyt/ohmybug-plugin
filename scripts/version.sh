@@ -68,27 +68,31 @@ EOF
 # re-run --write after rebasing. Nothing catches that today — both numbers are
 # above what is published, so both are legal — and the cost is one release
 # identified by its sha rather than its number.
-main_count() {
-  local b n
+main_ref() {
+  local b
   for b in origin/main origin/master main master; do
-    n=$(git rev-list --count --first-parent "$b" 2>/dev/null) && [ -n "$n" ] && { printf '%s' "$n"; return 0; }
+    git rev-parse --verify -q "$b" >/dev/null && { printf '%s' "$b"; return 0; }
   done
   return 1
+}
+
+main_count() {
+  local b
+  b=$(main_ref) || return 1
+  git rev-list --count --first-parent "$b"
 }
 
 # The N already published on main, read from main's own manifest rather than
 # from the working tree — the working tree is what we are about to overwrite.
 published() {
   local b json v
-  for b in origin/main origin/master main master; do
-    json=$(git show "$b:${MANIFESTS[0]}" 2>/dev/null) || continue
-    v=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))') || return 1
-    case "$v" in
-      0.*.0) v=${v#0.}; printf '%s' "${v%.0}"; return 0 ;;
-      *) return 1 ;;  # someone hand-wrote a version; not ours to reason about
-    esac
-  done
-  return 1
+  b=$(main_ref) || return 1
+  json=$(git show "$b:${MANIFESTS[0]}" 2>/dev/null) || return 1
+  v=$(printf '%s' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))') || return 1
+  case "$v" in
+    0.*.0) v=${v#0.}; printf '%s' "${v%.0}"; return 0 ;;
+    *) return 1 ;;  # someone hand-wrote a version; not ours to reason about
+  esac
 }
 
 compute() {
@@ -175,11 +179,33 @@ case "${1:-}" in
         bad=1
       fi
     done
+    # Rule 2, by commit ORDER: nothing under plugins/ after the commit that last
+    # wrote the version. This is the only one that works on main itself, where
+    # there is no other history to compare against.
     since=$(git log -1 --format=%H -- "${MANIFESTS[0]}")
     if [ -n "$since" ] && [ -n "$(git log --format=%H "$since..HEAD" -- plugins/)" ]; then
       echo "plugins/ changed since the version was last written — run scripts/version.sh --write" >&2
       git log --oneline "$since..HEAD" -- plugins/ >&2
       bad=1
+    fi
+    # Rule 3, by DIFF against what main published — because rule 2 has one blind
+    # spot and it is the common case. `plugin.json` lives under plugins/ too, so
+    # a commit that touches the manifest and another plugin file TOGETHER is
+    # itself the manifest's last commit: the range is empty, rule 2 says
+    # nothing, and rule 1 accepts the equal number. The plugin then ships
+    # changed under a version the marketplace already has, so no one is ever
+    # offered it — the same silence, reached by the other door.
+    #
+    # Rules 2 and 3 cover for each other exactly: rule 3 cannot see a change on
+    # main (nothing to diff against), rule 2 cannot see a change that shares its
+    # commit with the manifest.
+    if [ -n "$pub" ] && ref=$(main_ref) && ! git diff --quiet "$ref" -- plugins/; then
+      cur=$(read_version "${MANIFESTS[0]}")
+      n=${cur#0.}; n=${n%.0}
+      if ! [ "$n" -gt "$pub" ] 2>/dev/null; then
+        echo "plugins/ differs from $ref, so this is a release, but 0.$n.0 is not newer than the published 0.$pub.0 — run scripts/version.sh --write" >&2
+        bad=1
+      fi
     fi
     exit $bad
     ;;
@@ -306,6 +332,25 @@ case "${1:-}" in
     }
     rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
     [ "$rc" = 0 ] || { echo "self-test: --check refuses a published number that is ahead of the count (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # The case commit order cannot see: the plugin and the manifest in ONE
+    # commit, with the version left at what is already published. Rule 2 reads
+    # that commit as the version's own, finds nothing after it, and passes.
+    gitc reset -q --hard origin/main
+    echo tweak >> "$repo/plugins/bughunter/hooks.sh"
+    # The manifest must really CHANGE in this commit while the version stays put
+    # — that is what makes the commit its own "last version write". Rewriting
+    # the same number leaves the file untouched, and then rule 2 catches it and
+    # this proves nothing.
+    python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["description"]="edited beside the plugin"; json.dump(d, open(sys.argv[1],"w"))' \
+      "$repo/${MANIFESTS[0]}"
+    gitc add -A; gitc commit -qm "plugin and manifest in one commit"
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || { echo "self-test: --check passed a plugin change carrying the already-published version (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+    (cd "$repo" && bash "$SELF" --write) >/dev/null
+    gitc add -A; gitc commit -qm "version"
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check still red after --write cleared it (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
 
     # And the one number it must refuse: below what main already published.
     write_version "$repo/${MANIFESTS[0]}" "0.98.0" >/dev/null
