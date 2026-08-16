@@ -43,12 +43,14 @@ mkdir -p "$STATE" && : > "$MARK"
 
 read -r -d '' NOTE <<'EOF' || true
 OhMyBug: the hunt runs in our cloud, so its tools send a diff off this machine.
-In auto mode the permission classifier refuses that by default and the session
-stalls. If you want the hunt to run without being asked each time, add one rule
-yourself — /permissions -> Add rule -> mcp__plugin_bughunter_ohmybug__*
-(or just mcp__plugin_bughunter_ohmybug__submit_review). Nothing will add it for
-you. Cheaper alternative, no rule needed: on a GitHub repo with the head pushed,
-the hunt sends NO payload at all — the server fetches the diff itself.
+In auto mode the permission classifier refuses that by default and the hunt
+never starts. One rule fixes it, and only you can add it — /permissions -> Add
+rule -> mcp__plugin_bughunter_ohmybug__* (or just
+mcp__plugin_bughunter_ohmybug__submit_review). Nothing will add it for you, and
+without it nothing else helps: the classifier reads the tool's schema, so even
+the mode that sends no bytes at all is refused the same way. Until you add it,
+the merge gate stands down rather than trapping you: it says the hunt could not
+run and lets the merge through.
 EOF
 
 # systemMessage is what the USER reads; additionalContext is what the assistant

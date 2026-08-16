@@ -86,6 +86,87 @@ ohmybug_hunted() {
   [ -f "$dir/$1" ]
 }
 
+# An ATTEMPT is "the model offered this diff for hunting", recorded before the
+# environment gets to say yes or no. It lives in the same set under a prefixed
+# key: one place to look, and a prefixed name can never satisfy a lookup for a
+# finished hunt. The gate needs the distinction because "never tried" and "tried
+# and was refused" are different facts and only the first deserves a block.
+#
+# The empty guard is repeated rather than inherited: `attempt:` prepended to
+# nothing is a non-empty string, so the guard inside ohmybug_record_hunt can no
+# longer fire — and an id-less record would be a file that answers every lookup.
+ohmybug_record_attempt() {
+  [ -n "${1:-}" ] || return 1
+  ohmybug_record_hunt "attempt:$1"
+}
+
+# Attempts EXPIRE. A refusal is a statement about the environment right now; a
+# permanent one would mean a single refused call authorises every future merge of
+# that diff on this machine, and diff ids are content hashes, so a revert that
+# recreates old bytes would inherit an authorisation from weeks ago.
+OHMYBUG_ATTEMPT_TTL_MIN=${OHMYBUG_ATTEMPT_TTL_MIN:-720}
+ohmybug_clear_attempt() {
+  local dir
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  rm -f "$dir/attempt:$1"
+}
+
+ohmybug_attempted() {
+  local dir
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  [ -f "$dir/attempt:$1" ] || return 1
+  [ -n "$(find "$dir" -maxdepth 1 -name "attempt:$1" -mmin "-$OHMYBUG_ATTEMPT_TTL_MIN" 2>/dev/null)" ]
+}
+
+# Is a hunt for this id still in flight? A submit that WAS allowed leaves a
+# pending record naming every id it could be known by; until it is promoted the
+# review is running, and "running" must not read as "refused" — merging then is
+# merging before the findings arrive.
+#
+# Pending records expire too, and for a blunter reason than attempts: a review
+# that ends `failed`, or a session that walks away mid-review, leaves one behind
+# forever, and "a hunt is RUNNING" is then a permanent block on those bytes with
+# an instruction — poll until done — that can never be satisfied.
+OHMYBUG_PENDING_TTL_MIN=${OHMYBUG_PENDING_TTL_MIN:-180}
+ohmybug_pending_has() {
+  local dir f
+  [ -n "${1:-}" ] || return 1
+  dir=$(ohmybug_hunt_dir) || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qxF "$1" "$f" 2>/dev/null && return 0
+  done <<EOF
+$(find "$dir.pending" -maxdepth 1 -type f -mmin "-$OHMYBUG_PENDING_TTL_MIN" 2>/dev/null)
+EOF
+  return 1
+}
+
+# Is there an ALLOW rule for the hunt tools? This is the one input in the warn
+# decision that the model does not write — the user's own settings files.
+#
+# Only `permissions.allow` counts. A deny rule, or an ask rule, or no rule at
+# all, all mean the same thing here: the hunt cannot run unattended, so a gate
+# that blocks on the missing hunt is blocking on something nobody in the session
+# can produce.
+ohmybug_tools_allowed() {
+  python3 - "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" \
+    "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.json" \
+    "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.local.json" <<'PY' 2>/dev/null
+import json, sys
+for path in sys.argv[1:]:
+    try:
+        data = json.load(open(path))
+    except Exception:
+        continue
+    rules = (data.get("permissions") or {}).get("allow") or []
+    if any("bughunter_ohmybug" in str(r) for r in rules):
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
 # sha256 of stdin. The identity of a hunt is the BYTES WE SENT, which is the one
 # description of "which diff" that does not depend on which directory a hook
 # happened to be standing in.
