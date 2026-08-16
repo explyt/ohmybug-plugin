@@ -64,10 +64,13 @@ EOF
 # branch, whatever its length. It is also monotonic, which is the property the
 # marketplace actually needs.
 #
-# ponytail: two branches in flight stamp the same number; the second must
-# re-run --write after rebasing. Nothing catches that today — both numbers are
-# above what is published, so both are legal — and the cost is one release
-# identified by its sha rather than its number.
+# ponytail: two branches in flight compute the same number, and the cost is not
+# a naming inconvenience. The first merges and publishes N; the second's check
+# went green before that and GitHub does not re-run it, so its squash lands
+# plugin changes under N again — and everyone already on N is never offered
+# them. `--check` does catch it on any re-run, and main goes red afterwards, so
+# the exposure is a stale green check. Fetch before computing if branches start
+# overlapping often enough for that to be a real risk.
 main_ref() {
   local b
   for b in origin/main origin/master main master; do
@@ -96,12 +99,20 @@ published() {
 }
 
 compute() {
-  local n p want=0
+  local n p cur want=0
   if p=$(published) && [ "$p" -ge 0 ] 2>/dev/null; then want=$((p + 1)); fi
   if n=$(main_count) && [ "$((n + 1))" -gt "$want" ]; then want=$((n + 1)); fi
-  # Neither a main to predict nor a published number (a bare `git init`, a
-  # detached CI checkout with no branches): fall back to counting HEAD, which
-  # is what this did before any of it existed.
+  # Never below what this checkout already carries. Both readings above can
+  # fail — no main ref to resolve, or a version outside `0.*.0` that someone
+  # wrote by hand — and the fallback below counts HEAD, which on this repo is
+  # 48 against a published 56. That is a silent DOWNGRADE produced by the very
+  # function whose header promises the number only goes up, so the local
+  # manifest is a floor under every path, not just the happy one.
+  cur=$(current_n) || cur=""
+  if [ -n "$cur" ] && [ "$cur" -gt "$want" ] 2>/dev/null; then want=$cur; fi
+  # Nothing to go on at all (a bare `git init` with a manifest that carries no
+  # usable version): fall back to counting HEAD, which is what this did before
+  # any of it existed.
   if [ "$want" -eq 0 ]; then
     n=$(git rev-list --count HEAD) || { echo "not a git repository" >&2; exit 1; }
     want=$n
@@ -113,6 +124,17 @@ MANIFESTS=(
   "plugins/bughunter/.claude-plugin/plugin.json"
   ".claude-plugin/marketplace.json"
 )
+
+# The N in the working tree's own manifest, or nothing if it does not carry one
+# in our shape.
+current_n() {
+  local v
+  v=$(read_version "${MANIFESTS[0]}" 2>/dev/null) || return 1
+  case "$v" in
+    0.*.0) v=${v#0.}; printf '%s' "${v%.0}" ;;
+    *) return 1 ;;
+  esac
+}
 
 # In-place rewrite of a "version": "..." field, done with python rather than sed
 # so a malformed manifest fails loudly instead of being half-edited.
@@ -156,54 +178,47 @@ case "${1:-}" in
     # number — an equality check could never pass on any commit, and a check
     # nobody can satisfy gets deleted, and then nothing checks.
     #
-    # Two defects are worth catching, and neither is "the number disagrees with
-    # the history". Being ahead of the count is now legal by design: it is what
-    # a mistake looks like after the number has been published, and the fix for
-    # that is to keep going up, not to come back down.
-    #
-    #   1. going BACKWARDS. Below what main already published, the marketplace
-    #      simply stops offering updates — no error anywhere.
-    #   2. the plugin changing without the version changing: same silence, same
-    #      cause. Nothing under plugins/ may have changed since the manifest did.
+    # The defect worth catching is never "the number disagrees with the
+    # history": being ahead of the count is legal by design, it is what a
+    # mistake looks like once it has been published, and the way out is forward.
+    # What must not happen is the plugin going out under a number the
+    # marketplace already has — no error anywhere, the update simply never
+    # appears.
     bad=0
+    ref=$(main_ref) || ref=""
     pub=$(published) || pub=""
-    for m in "${MANIFESTS[@]}"; do
-      [ -f "$m" ] || continue
-      cur=$(read_version "$m")
-      # An empty version field means the manifest does not carry one (the
-      # marketplace file may not), which is not a disagreement.
-      [ -n "$cur" ] || continue
-      n=${cur#0.}; n=${n%.0}
-      if [ -n "$pub" ] && ! [ "$n" -ge "$pub" ] 2>/dev/null; then
-        echo "$m says $cur, which is BELOW the 0.$pub.0 already published on main — everyone holding the published version stops being offered updates" >&2
+    if [ -z "$ref" ] || [ -z "$pub" ]; then
+      # Not a pass. Every rule below compares against main's number, so without
+      # it this command proves nothing — and staying quiet is how a release
+      # goes out unchecked while CI shows green.
+      echo "cannot read the published version from main (ref='${ref:-none}'): with nothing to compare against, --check proves nothing" >&2
+      exit 1
+    fi
+    # Judge what THIS branch introduces, against the merge base rather than
+    # main's tip. A branch opened before the last release carries neither that
+    # release's number nor its plugin files, and neither absence is its doing:
+    # its squash lands no manifest hunk, so nothing regresses. Measured from the
+    # tip, every such branch failed with a claim that was false for it, and was
+    # told to stamp a release it does not contain.
+    base=$(git merge-base "$ref" HEAD) || base=$ref
+    if ! git diff --quiet "$base" -- plugins/; then
+      n=$(current_n) || n=""
+      if ! [ "${n:-0}" -gt "$pub" ] 2>/dev/null; then
+        echo "this branch changes plugins/, so it is a release, but 0.${n:-?}.0 is not newer than the 0.$pub.0 already published — run scripts/version.sh --write" >&2
         bad=1
       fi
-    done
-    # Rule 2, by commit ORDER: nothing under plugins/ after the commit that last
-    # wrote the version. This is the only one that works on main itself, where
-    # there is no other history to compare against.
-    since=$(git log -1 --format=%H -- "${MANIFESTS[0]}")
-    if [ -n "$since" ] && [ -n "$(git log --format=%H "$since..HEAD" -- plugins/)" ]; then
-      echo "plugins/ changed since the version was last written — run scripts/version.sh --write" >&2
-      git log --oneline "$since..HEAD" -- plugins/ >&2
-      bad=1
     fi
-    # Rule 3, by DIFF against what main published — because rule 2 has one blind
-    # spot and it is the common case. `plugin.json` lives under plugins/ too, so
-    # a commit that touches the manifest and another plugin file TOGETHER is
-    # itself the manifest's last commit: the range is empty, rule 2 says
-    # nothing, and rule 1 accepts the equal number. The plugin then ships
-    # changed under a version the marketplace already has, so no one is ever
-    # offered it — the same silence, reached by the other door.
-    #
-    # Rules 2 and 3 cover for each other exactly: rule 3 cannot see a change on
-    # main (nothing to diff against), rule 2 cannot see a change that shares its
-    # commit with the manifest.
-    if [ -n "$pub" ] && ref=$(main_ref) && ! git diff --quiet "$ref" -- plugins/; then
-      cur=$(read_version "${MANIFESTS[0]}")
-      n=${cur#0.}; n=${n%.0}
-      if ! [ "$n" -gt "$pub" ] 2>/dev/null; then
-        echo "plugins/ differs from $ref, so this is a release, but 0.$n.0 is not newer than the published 0.$pub.0 — run scripts/version.sh --write" >&2
+    # On the main ref itself there is no merge base to measure against, so the
+    # only question left is one of ORDER: has anything under plugins/ moved
+    # since the commit that last wrote the version? This is off on branches by
+    # design — there the number is constant for the branch's whole life, so a
+    # second `--write` produces the same number, changes no file, records no
+    # commit, and the complaint could never be cleared by the remedy it prints.
+    if [ "$(git rev-parse HEAD)" = "$(git rev-parse "$ref")" ]; then
+      since=$(git log -1 --format=%H -- "${MANIFESTS[0]}")
+      if [ -n "$since" ] && [ -n "$(git log --format=%H "$since..HEAD" -- plugins/)" ]; then
+        echo "plugins/ changed since the version was last written — run scripts/version.sh --write" >&2
+        git log --oneline "$since..HEAD" -- plugins/ >&2
         bad=1
       fi
     fi
@@ -357,6 +372,69 @@ case "${1:-}" in
     gitc add -A; gitc commit -qm "backwards"
     rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
     [ "$rc" = 1 ] || { echo "self-test: --check accepted 0.98.0 under a published 0.99.0 (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # A review round on a branch. The number is constant for a branch's whole
+    # life now, so a second plugin commit must NOT demand a new one: re-running
+    # --write would produce the same number, change no file, record no commit,
+    # and leave a complaint nothing can clear.
+    gitc reset -q --hard origin/main
+    gitc checkout -q -b review-round
+    echo one >> "$repo/plugins/bughunter/hooks.sh"
+    gitc add -A; gitc commit -qm "plugin change"
+    (cd "$repo" && bash "$SELF" --write) >/dev/null
+    gitc add -A; gitc commit -qm "version"
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check red on a freshly stamped branch (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+    echo two >> "$repo/plugins/bughunter/hooks.sh"
+    gitc add -A; gitc commit -qm "review round"
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check red after a second plugin commit on a branch, where --write cannot clear it (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # A branch that predates the last release and touches no plugin file. It
+    # lacks main's newer number and main's newer plugin files, and neither is
+    # its doing — its squash lands no manifest hunk, so nothing regresses.
+    # Measured against main's TIP instead of the merge base, this went red and
+    # told a docs branch to stamp a release.
+    gitc checkout -q main
+    gitc reset -q --hard origin/main
+    gitc checkout -q -b stale
+    echo note >> "$repo/notes.txt"
+    gitc add -A; gitc commit -qm "docs only"
+    gitc checkout -q main
+    echo newer >> "$repo/plugins/bughunter/hooks.sh"
+    (cd "$repo" && bash "$SELF" --write) >/dev/null
+    gitc add -A; gitc commit -qm "a release lands while that branch is open"
+    gitc push -q origin main
+    gitc fetch -q origin main
+    gitc checkout -q stale
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check failed a branch that predates the release and changes no plugin file (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # And the paths where main's number cannot be read at all. The fallback used
+    # to count HEAD, which on a repo whose published number ran ahead is a
+    # silent DOWNGRADE — the one thing this file exists to prevent, produced by
+    # the file itself. The manifest in hand is the floor, and --check says so
+    # out loud rather than passing with no rule left to apply.
+    gitc checkout -q main
+    write_version "$repo/${MANIFESTS[0]}" "9.9.9" >/dev/null
+    gitc add -A; gitc commit -qm "a version written by hand"
+    gitc push -q origin main
+    gitc fetch -q origin main
+    write_version "$repo/${MANIFESTS[0]}" "0.100.0" >/dev/null
+    got=$(cd "$repo" && bash "$SELF")
+    [ "$got" = "0.100.0" ] || {
+      echo "self-test: with main's number unreadable, the next version came out $got instead of holding at the local 0.100.0" >&2
+      rm -rf "$tmp"; exit 1
+    }
+    # On the MESSAGE, not just the exit code: with nothing readable to compare
+    # against, the rules below fall over each other and happen to exit 1 anyway,
+    # so a check on the number alone passes whether the refusal is deliberate or
+    # accidental — and the accidental one says nothing a reader could act on.
+    rc=0; out=$( (cd "$repo" && bash "$SELF" --check) 2>&1 >/dev/null ) || rc=$?
+    if [ "$rc" != 1 ] || ! printf '%s' "$out" | grep -q "cannot read the published version"; then
+      echo "self-test: --check must refuse loudly when main's number is unreadable (rc=$rc): $out" >&2
+      rm -rf "$tmp"; exit 1
+    fi
 
     rm -rf "$tmp"
     echo "version self-test: ok ($V)"
