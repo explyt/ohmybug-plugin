@@ -723,7 +723,7 @@ printf 'dirty\n' >> "$PREPO/b.ts"
 printf 'dirty\n' >> "$PREPO/c.ts"
 PART_DIFF=$(git -C "$PREPO" diff "$(cd "$PREPO" && ohmybug_base)" -- a.ts)
 [ -n "$PART_DIFF" ] || { printf 'FAIL partial-payload fixture: no diff for a.ts\n'; fails=$((fails + 1)); }
-ppost submit_review running "$PREPO" "$PART_DIFF" rev_part 2>/dev/null
+ppost submit_review running "$PREPO" "$PART_DIFF" rev_part >/dev/null 2>&1
 ppost get_findings done "$PREPO" "$PART_DIFF" rev_part
 rc=$(mk "$V" "$PREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL a one-file payload blessed the whole dirty tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
@@ -777,7 +777,7 @@ case "$out" in
   *) printf 'FAIL a foreign-ref submit did not say it recorded nothing: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
 ppost get_findings done "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)"
-ppost submit_review running "$AREPO" "" rev_anc "$ANC" 2>/dev/null
+ppost submit_review running "$AREPO" "" rev_anc "$ANC" >/dev/null 2>&1
 ppost get_findings done "$AREPO" "" rev_anc "$ANC"
 AID=$(cd "$AREPO" && ohmybug_diff_id)
 [ -n "$AID" ] || { printf 'FAIL cross-repo fixture: repo A produced no working diff\n'; fails=$((fails + 1)); }
@@ -797,11 +797,11 @@ rm -rf "$(dirname "$AREPO")" "$(dirname "$BREPO")"
 RREPO=$(mktemp -d)/repo
 mkrepo "$RREPO"
 RHEAD=$(git -C "$RREPO" rev-parse HEAD)
-ppost submit_review running "$RREPO" "" rev_branch main 2>/dev/null
+ppost submit_review running "$RREPO" "" rev_branch main >/dev/null 2>&1
 ppost get_findings done "$RREPO" "" rev_branch main
 (cd "$RREPO" && ohmybug_hunted "ref:$RHEAD") && {
   printf 'FAIL a branch-name ref was locally resolved into an authorising record\n'; fails=$((fails + 1)); }
-ppost submit_review running "$RREPO" "" rev_head HEAD 2>/dev/null
+ppost submit_review running "$RREPO" "" rev_head HEAD >/dev/null 2>&1
 ppost get_findings done "$RREPO" "" rev_head HEAD
 (cd "$RREPO" && ohmybug_hunted "ref:$RHEAD") && {
   printf 'FAIL a HEAD-spelled ref was locally resolved into an authorising record\n'; fails=$((fails + 1)); }
@@ -834,10 +834,10 @@ mkrepo "$QREPO"
   git add a.ts && git commit -qm work
 )
 QHEAD=$(git -C "$QREPO" rev-parse HEAD)
-out=$(ppost submit_review running "$QREPO" "junk bytes, not this tree" rev_pref "$QHEAD" 2>&1 >/dev/null)
+out=$(ppost submit_review running "$QREPO" "junk bytes, not this tree" rev_pref "$QHEAD" 2>/dev/null)
 case "$out" in
   *"will not recognise this tree as hunted"*) ;;
-  *) printf 'FAIL a payload that matches nothing was filed silently: %s\n' "$out"; fails=$((fails + 1)) ;;
+  *) printf 'FAIL a payload that matches nothing was filed silently on stdout: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
 ppost get_findings done "$QREPO" "" rev_pref
 rc=$(mk "$V" "$QREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
@@ -901,6 +901,80 @@ case "$out" in
   *) printf 'FAIL the ref-keyed warn-through said nothing on stdout: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
 rm -rf "$(dirname "$VREPO")"
+
+# A rung-1 hunt (no payload, no upload, meta.ref = the head sha) is the
+# skill's normal path, and prose edited after it is still just prose: the
+# recording cwd standing clean AT the reviewed commit proves the working diff
+# IS the diff the server fetched, so the sig: allowance survives the
+# ref-keyed flow instead of demanding a paid re-hunt of a README.
+SREPO=$(mktemp -d)/repo
+mkrepo "$SREPO"
+(
+  cd "$SREPO" || exit 1
+  printf 'committed work\n' >> a.ts
+  git add a.ts && git commit -qm work
+)
+SHEAD=$(git -C "$SREPO" rev-parse HEAD)
+ppost submit_review running "$SREPO" "" rev_rung1 "$SHEAD"
+ppost get_findings done "$SREPO" "" rev_rung1 "$SHEAD"
+rc=$(mk "$V" "$SREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL the rung-1 record did not allow at the reviewed commit (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+printf 'a README edit after the hunt\n' > "$SREPO/README.md"
+git -C "$SREPO" add -N README.md 2>/dev/null
+rc=$(mk "$V" "$SREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL prose after a ref-keyed hunt demanded a re-hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+git -C "$SREPO" add README.md 2>/dev/null
+git -C "$SREPO" -c user.email=t@t -c user.name=t commit -qm docs 2>/dev/null
+rc=$(mk "$V" "$SREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL committed prose after a ref-keyed hunt demanded a re-hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+printf 'export const two = 2\n' >> "$SREPO/a.ts"
+rc=$(mk "$V" "$SREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL code after a ref-keyed hunt did not re-arm the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$SREPO")"
+
+# An out-of-band upload (upload:true, empty diff) never passes through this
+# hook, so it can prove nothing about the tree: no tree ids, and with
+# uncommitted work the ref: line is never honoured either. The gate blocking
+# is the documented boundary; the defect was crossing it SILENTLY, at merge
+# time, after the review had been paid for — the submit must say so.
+UREPO=$(mktemp -d)/repo
+mkrepo "$UREPO"
+printf 'big unpushed work\n' >> "$UREPO/a.ts"
+out=$(python3 -c "import json,sys;print(json.dumps({
+  'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+  'tool_input':{'review_id':'rev_up','diff':'','upload':True,
+    'meta':{'repo':'x/y','ref':sys.argv[1]}},
+  'tool_response':{'content':[{'type':'text','text':json.dumps(
+     {'review_id':'rev_up','status':'running'})}]},
+  'cwd':sys.argv[2]}))" "$(git -C "$UREPO" rev-parse HEAD)" "$UREPO" | bash "$G/stamp-hunt.sh" 2>/dev/null)
+case "$out" in
+  *"cannot verify them against this tree"*) ;;
+  *) printf 'FAIL an out-of-band upload from a dirty tree was filed silently: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+ppost get_findings done "$UREPO" "" rev_up
+rc=$(mk "$V" "$UREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL out-of-band bytes credited the dirty tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+# ...and a CLEAN checkout does not launder the upload into tree ids either:
+# the sig: allowance belongs only to hunts whose bytes the server provably
+# saw (its own fetch of repo@ref), so prose after an uploaded hunt re-arms
+# the gate where the rung-1 row above stays allowed.
+git -C "$UREPO" add a.ts 2>/dev/null
+git -C "$UREPO" -c user.email=t@t -c user.name=t commit -qm work 2>/dev/null
+python3 -c "import json,sys;print(json.dumps({
+  'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+  'tool_input':{'review_id':'rev_up2','diff':'','upload':True,
+    'meta':{'repo':'x/y','ref':sys.argv[1]}},
+  'tool_response':{'content':[{'type':'text','text':json.dumps(
+     {'review_id':'rev_up2','status':'running'})}]},
+  'cwd':sys.argv[2]}))" "$(git -C "$UREPO" rev-parse HEAD)" "$UREPO" | bash "$G/stamp-hunt.sh" >/dev/null 2>&1
+ppost get_findings done "$UREPO" "" rev_up2
+rc=$(mk "$V" "$UREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a clean-tree uploaded hunt was not honoured through its ref (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+printf 'a README edit after the uploaded hunt\n' > "$UREPO/README.md"
+git -C "$UREPO" add -N README.md 2>/dev/null
+rc=$(mk "$V" "$UREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL an upload laundered tree ids through a clean checkout (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$UREPO")"
 
 # The honest full payload, in the OTHER spelling: a client that pipes
 # `git diff` verbatim sends the trailing newline that command substitution
@@ -984,7 +1058,7 @@ if git worktree add -q --detach "$WT" HEAD 2>/dev/null; then
          {'review_id':'rev_wt','status':'done' if sys.argv[2]=='1' else 'running'})}]},
       'cwd':sys.argv[3]}))" "$1" "$2" "$3" "$4" | bash "$G/stamp-hunt.sh"
   }
-  wpost submit_review 0 "$PWD" "$WT_DIFF"
+  wpost submit_review 0 "$PWD" "$WT_DIFF" >/dev/null 2>&1
   wpost get_findings 1 "$PWD" "$WT_DIFF"
 
   # ...and the merge happens in the worktree. Before the fix: 2.

@@ -68,6 +68,9 @@ status = status_of(resp)
 done = "1" if status == "done" else "0"
 failed = "1" if status == "failed" else "0"
 review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
+# upload:true means the payload bytes leave the machine OUT OF BAND — this hook
+# never sees them, so they can prove nothing about any tree.
+upload = "1" if (isinstance(inp, dict) and inp.get("upload") is True) else "0"
 if not isinstance(review, str) or not review:
     # Same escaping rules as the `done` match above: \s, not \\s — the latter
     # is a literal backslash in a raw string and never matches, which recorded
@@ -102,7 +105,7 @@ def one_line(v):
     return (v if isinstance(v, str) else "").replace("\n", " ").replace("\r", " ")
 
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
-      pre, failed, sep="\n")
+      pre, failed, upload, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -113,6 +116,7 @@ REF=$(printf '%s' "$FIELDS" | sed -n 5p)
 REVIEW=$(printf '%s' "$FIELDS" | sed -n 6p)
 PRE=$(printf '%s' "$FIELDS" | sed -n 7p)
 FAILED=$(printf '%s' "$FIELDS" | sed -n 8p)
+UPLOAD=$(printf '%s' "$FIELDS" | sed -n 9p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -182,7 +186,7 @@ case "$TOOL" in
     # last, for the no-payload path where there are no bytes to hash.
     [ -n "$REVIEW" ] || exit 0
     mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
-    LOCAL=0 REFOK=0
+    TREEOK=0 REFOK=0
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
       # The working-tree ids describe THIS checkout, not the call — so they may
@@ -194,7 +198,7 @@ case "$TOOL" in
       # The emptiness test is kept beside the helper's own: this is the line that
       # authorises a merge, and one guard is one deletion away from none.
       if [ -n "$SENT" ] && ID=$(ohmybug_sent_is_local "$SENT") && [ -n "$ID" ]; then
-        LOCAL=1
+        TREEOK=1
         printf '%s\n' "$ID"
         # ...and the same diff with docs, tests and skills taken out, so that
         # editing prose after the hunt does not read as unhunted code.
@@ -207,25 +211,54 @@ case "$TOOL" in
       # checkout the reviewers never saw. Which spellings may key the record
       # is ohmybug_ref_here's rule, shared with the PreToolUse branch above.
       if [ -z "$SENT" ] && [ -n "$REF" ]; then
-        R=$(ohmybug_ref_here "$REF") && [ -n "$R" ] && { printf 'ref:%s\n' "$R"; REFOK=1; }
+        if R=$(ohmybug_ref_here "$REF") && [ -n "$R" ]; then
+          printf 'ref:%s\n' "$R"
+          REFOK=1
+          # A PURE no-payload submit (no out-of-band upload either) leaves the
+          # server exactly one source of bytes: repo@ref, fetched by the server
+          # itself. When this cwd stands at that commit with nothing
+          # uncommitted, the working diff IS the reviewed diff — so the tree
+          # ids are as trustworthy as the ref line, and prose edited after the
+          # hunt stays just prose (sig:) instead of demanding a paid re-hunt
+          # of a README. An upload breaks that equality (the server reviews
+          # the uploaded bytes, which this hook never sees): no tree ids then.
+          if [ "${UPLOAD:-0}" != 1 ] && [ "$R" = "$(git rev-parse HEAD 2>/dev/null)" ] &&
+             [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+            ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
+            SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
+            TREEOK=1
+          fi
+        fi
       fi
       true
     } > "$PENDING.tmp" 2>/dev/null || exit 0
     if [ -s "$PENDING.tmp" ]; then
       mv "$PENDING.tmp" "$PENDING"
-      # A record that holds ONLY the sent bytes' hash satisfies no gate lookup
-      # (the gate computes the working-diff id, sig: and ref: keys). Say so
-      # now, or the dead weight surfaces at merge time as "never hunted" with
-      # nothing pointing at the cause.
-      if [ "$LOCAL" = 0 ] && [ "$REFOK" = 0 ] && [ -n "$SENT" ]; then
-        echo "ohmybug: the payload does not match this working tree, so the merge gate will not recognise this tree as hunted — send the full working diff verbatim, or submit with no payload and meta.ref set to the pushed head commit sha" >&2
+      # The dead ends are announced at SUBMIT time, on BOTH streams (an exit-0
+      # hook's stdout is the copy the transcript surfaces) — otherwise they
+      # surface at merge time as "never hunted" with nothing naming the cause.
+      # A record holding only the sent bytes' hash satisfies no gate lookup:
+      if [ "$TREEOK" = 0 ] && [ "$REFOK" = 0 ] && [ -n "$SENT" ]; then
+        MSG="ohmybug: the payload does not match this working tree, so the merge gate will not recognise this tree as hunted — send the full working diff verbatim, or submit with no payload and meta.ref set to the pushed head commit sha"
+        echo "$MSG" >&2
+        echo "$MSG"
+      fi
+      # ...and out-of-band bytes prove nothing about this tree, while with
+      # uncommitted work the ref: line is never honoured either:
+      if [ -z "$SENT" ] && [ "${UPLOAD:-0}" = 1 ] && [ "$TREEOK" = 0 ] &&
+         { [ "$REFOK" = 0 ] || [ -n "$(git status --porcelain 2>/dev/null)" ]; }; then
+        MSG="ohmybug: the uploaded bytes go out of band, so the merge gate cannot verify them against this tree and will still block — to record the hunt, send the full working diff inline, or commit, push, and submit with meta.ref = the pushed head sha"
+        echo "$MSG" >&2
+        echo "$MSG"
       fi
     else
       rm -f "$PENDING.tmp"
       # Nothing identifiable was sent. Say so: this used to exit silently, and a
       # silent non-recording is indistinguishable from a hunt that never ran —
       # which is how the gate came to accuse work that had been reviewed.
-      echo "ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on, so this hunt cannot be recorded; the merge gate will not see it" >&2
+      MSG="ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on, so this hunt cannot be recorded; the merge gate will not see it"
+      echo "$MSG" >&2
+      echo "$MSG"
     fi
     ;;
   get_findings|confirm_findings)
