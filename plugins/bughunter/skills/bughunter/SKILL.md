@@ -84,9 +84,12 @@ Work down this list and stop at the first rung that applies:
 3. **Only then a payload** — and only for what rung 1 genuinely cannot serve:
    a repo that is not on GitHub, changes that are **not pushed** (the usual case
    is re-hunting your own fixes), or an org that will not install the App. Send
-   the smallest thing that carries the unseen work, not the whole PR: if the only
-   difference from a pushed commit is a two-file fix, the diff of that fix is the
-   payload.
+   the **whole working diff against the merge base** (`git diff <base>`,
+   verbatim): the merge gate credits this tree as hunted only when the payload
+   IS the tree. A smaller payload — just the fix — still buys a review of those
+   bytes, but the gate cannot credit the tree with it, and the merge stays
+   blocked until a full-diff hunt. Already pushed? Then rung 1 with `ref` = the
+   head commit sha records the hunt without sending anything.
 4. **`upload: true` only when that payload is genuinely large.** It is not a
    preference for shipping bytes, and the server ignores it whenever rung 1
    applies.
@@ -184,6 +187,13 @@ curl -sf -X POST -H 'content-type: application/json' --data-binary @/tmp/omb-pay
    as usual. When the server can read the repo, context files are mostly
    redundant (reviewers fetch what they need themselves) — diff + meta is
    enough.
+
+An uploaded payload never passes through the local recorder, so the merge
+gate cannot credit this working tree with the hunt: the record is `meta.ref`
+only, honoured only on a clean checkout standing at that commit. When the
+work is unpushed AND the diff is too big to send inline, commit and push it
+first and use rung 1 (`ref` = the pushed head sha) — otherwise the merge gate
+will still block after the review, and the submit says so at submit time.
 
 Call `submit_review` with the diff, the context files, and `meta`. The
 `meta` object is REQUIRED plumbing, not garnish — fill it every time:
