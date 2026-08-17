@@ -233,18 +233,28 @@ rm -rf "$NOPY"
 # gate blocked work that HAD been hunted (owner report, 2026-08-11) — which is
 # how a control teaches people to disarm it. These rows pin the stamp to the
 # tool calls themselves.
-post() { # tool, done?, -> runs stamp-hunt.sh
+post() { # tool, done?, review id, envelope -> runs stamp-hunt.sh
   # The payload is the WORKING DIFF's bytes, exactly what a client sends: the
   # whole point of payload-based stamping is that sha256(sent bytes) equals the
   # diff-id a gate computes locally. A file's raw content hashes to something
   # no gate ever computes and turns every marker row into noise.
+  #
+  # The ENVELOPE is a parameter because it is not ours to choose: the client
+  # decides how a tool response reaches a hook, and reading only one spelling of
+  # it is what let a clean hunt go unrecorded.
   OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
-  python3 -c "import json,os,sys;print(json.dumps({
+  python3 -c "import json,os,sys;
+body={'review_id':sys.argv[4],'status':'done' if sys.argv[2]=='1' else 'running'}
+parts=[{'type':'text','text':json.dumps(body)}]
+resp={'content':parts} if sys.argv[5]=='content' else (
+      parts if sys.argv[5]=='list' else (
+      body if sys.argv[5]=='raw' else json.dumps(body)))
+print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
     'tool_input':{'review_id':sys.argv[4],'diff':os.environ.get('OMB_DIFF','')},
-    'tool_response':{'content':[{'type':'text','text':json.dumps(
-       {'review_id':sys.argv[4],'status':'done' if sys.argv[2]=='1' else 'running'})}]},
-    'cwd':sys.argv[3]}))" "$1" "$2" "$PWD" "${3:-rev_x}" | bash "$G/stamp-hunt.sh"
+    'tool_response':resp,
+    'cwd':sys.argv[3]}))" "$1" "$2" "$PWD" "${3:-rev_x}" "${4:-content}" \
+  | bash "$G/stamp-hunt.sh"
 }
 . "$G/diff-id.sh"
 M=$(ohmybug_marker_path)
@@ -271,6 +281,15 @@ else
   post submit_review 0; s "submit alone does not authorise" ""
   post get_findings 1; s "done promotes the submitted diff" "$ID"
   t "$V" 0                                    # ...and the gate now lets it through
+  # ...in EVERY envelope a client may hand the hook, because `done` is the only
+  # thing that promotes a hunt which found nothing: with no findings there is no
+  # confirm_findings call, the server refuses a verdict-less one, and the merge
+  # then blocks on a review that came back clean (owner report, 2026-08-17).
+  for shape in list raw string; do
+    reset_state
+    post submit_review 0 rev_x "$shape"
+    post get_findings 1 rev_x "$shape"; s "done promotes it in the $shape envelope" "$ID"
+  done
   # Fixes written WHILE the review runs were never hunted. The marker must
   # name the diff that was sent, not whatever the tree looks like when the
   # answer arrives — otherwise the gate blesses code the hunt never saw.
