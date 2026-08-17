@@ -248,7 +248,8 @@ body={'review_id':sys.argv[4],'status':'done' if sys.argv[2]=='1' else 'running'
 parts=[{'type':'text','text':json.dumps(body)}]
 resp={'content':parts} if sys.argv[5]=='content' else (
       parts if sys.argv[5]=='list' else (
-      body if sys.argv[5]=='raw' else json.dumps(body)))
+      body if sys.argv[5]=='raw' else (
+      'ohmybug: upstream said no' if sys.argv[5]=='garbage' else json.dumps(body))))
 print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
     'tool_input':{'review_id':sys.argv[4],'diff':os.environ.get('OMB_DIFF','')},
@@ -290,6 +291,17 @@ else
     post submit_review 0 rev_x "$shape"
     post get_findings 1 rev_x "$shape"; s "done promotes it in the $shape envelope" "$ID"
   done
+  # A response handed over as PLAIN PROSE — an error sentence, a proxy's text.
+  # Reading a status out of a string means PARSING it, and that parse is the one
+  # place in this hook that can raise. A raise here is not "no status": the whole
+  # python block runs under `|| exit 0`, so it aborts the hook before the tool
+  # name is read. On confirm_findings that is unrecoverable — the call is
+  # one-shot, it promotes without asking for a status, and there is no later poll
+  # to retry it, so the hunt the user paid for AND confirmed is lost and the gate
+  # blocks it as never hunted.
+  reset_state
+  post submit_review 0 rev_x content
+  post confirm_findings 0 rev_x garbage; s "prose in place of JSON does not lose a confirmed hunt" "$ID"
   # Fixes written WHILE the review runs were never hunted. The marker must
   # name the diff that was sent, not whatever the tree looks like when the
   # answer arrives — otherwise the gate blesses code the hunt never saw.
