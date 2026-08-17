@@ -697,10 +697,15 @@ mkrepo() { # dir -> one commit on main, origin/main at HEAD, clean tree
     git update-ref refs/remotes/origin/main HEAD
   )
 }
-ppost() { # tool, status, cwd, diff-text, review-id, [meta-ref]
-  python3 -c "import json,sys;print(json.dumps({
+ppost() { # tool, status, cwd, diff-text (or @path: file read verbatim), review-id, [meta-ref]
+  # The @path spelling exists because $( ) eats a trailing newline, and one row
+  # must send the verbatim bytes of `git diff` — newline included.
+  python3 -c "import json,sys
+d = sys.argv[4]
+d = open(d[1:]).read() if d.startswith('@') else d
+print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
-    'tool_input':{'review_id':sys.argv[5],'diff':sys.argv[4],
+    'tool_input':{'review_id':sys.argv[5],'diff':d,
       'meta':({'repo':'x/y','ref':sys.argv[6]} if len(sys.argv)>6 else {})},
     'tool_response':{'content':[{'type':'text','text':json.dumps(
        {'review_id':sys.argv[5],'status':sys.argv[2]})}]},
@@ -717,10 +722,20 @@ printf 'dirty\n' >> "$PREPO/a.ts"
 printf 'dirty\n' >> "$PREPO/b.ts"
 printf 'dirty\n' >> "$PREPO/c.ts"
 PART_DIFF=$(git -C "$PREPO" diff "$(cd "$PREPO" && ohmybug_base)" -- a.ts)
-ppost submit_review running "$PREPO" "$PART_DIFF" rev_part
+[ -n "$PART_DIFF" ] || { printf 'FAIL partial-payload fixture: no diff for a.ts\n'; fails=$((fails + 1)); }
+ppost submit_review running "$PREPO" "$PART_DIFF" rev_part 2>/dev/null
 ppost get_findings done "$PREPO" "$PART_DIFF" rev_part
 rc=$(mk "$V" "$PREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL a one-file payload blessed the whole dirty tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+# ...and the way OUT of that block is a hunt of the FULL diff. The subset
+# hunt's record stays dead weight by design — the reviewers never saw the
+# sibling files — so the incremental flow ends in one more full-diff review,
+# never in a merge. A decision, not an accident: this row is the contract.
+FULL_DIFF=$(git -C "$PREPO" diff "$(cd "$PREPO" && ohmybug_base)")
+ppost submit_review running "$PREPO" "$FULL_DIFF" rev_part2
+ppost get_findings done "$PREPO" "$FULL_DIFF" rev_part2
+rc=$(mk "$V" "$PREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a full-diff re-hunt did not lift the partial-payload block (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$PREPO")"
 
 # A submit that carried NO bytes says nothing about this tree: the no-payload
@@ -754,7 +769,13 @@ ANC=$(git -C "$AREPO" rev-parse HEAD)
   git update-ref refs/remotes/origin/main HEAD
 )
 printf 'never reviewed\n' >> "$AREPO/a.ts"
-ppost submit_review running "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)" 2>/dev/null
+# The one diagnostic that explains an unrecordable hunt must actually fire:
+# a silent non-recording is indistinguishable from a hunt that never ran.
+out=$(ppost submit_review running "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)" 2>&1 >/dev/null)
+case "$out" in
+  *"cannot be recorded"*) ;;
+  *) printf 'FAIL a foreign-ref submit did not say it recorded nothing: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
 ppost get_findings done "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)"
 ppost submit_review running "$AREPO" "" rev_anc "$ANC" 2>/dev/null
 ppost get_findings done "$AREPO" "" rev_anc "$ANC"
@@ -766,36 +787,108 @@ rc=$(mk "$V" "$AREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL cross-repo: the gate allowed the unreviewed tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$AREPO")" "$(dirname "$BREPO")"
 
-# meta.ref arrives in whatever spelling the model typed. The gate looks up
-# ref:<full sha> and nothing else, so a branch name filed raw was a record
-# nothing ever read; it must be resolved, as the attempt path already does.
+# meta.ref arrives in whatever spelling the model typed — and a SYMBOLIC
+# spelling must never become an authorising record. The server resolves the
+# NAME against the remote while this hook would resolve it against this
+# clone: one unpushed commit apart, and the record authorises bytes no
+# reviewer ever saw. Only a sha spelling — the one that pins the same commit
+# everywhere — records; `HEAD` is the sharpest wrong spelling, since it
+# always equals this checkout's tip while telling the server nothing.
 RREPO=$(mktemp -d)/repo
 mkrepo "$RREPO"
-ppost submit_review running "$RREPO" "" rev_branch main
+RHEAD=$(git -C "$RREPO" rev-parse HEAD)
+ppost submit_review running "$RREPO" "" rev_branch main 2>/dev/null
 ppost get_findings done "$RREPO" "" rev_branch main
-(cd "$RREPO" && ohmybug_hunted "ref:$(git rev-parse HEAD)") || {
-  printf 'FAIL a branch-name ref was not resolved to the sha the gate reads\n'; fails=$((fails + 1)); }
+(cd "$RREPO" && ohmybug_hunted "ref:$RHEAD") && {
+  printf 'FAIL a branch-name ref was locally resolved into an authorising record\n'; fails=$((fails + 1)); }
+ppost submit_review running "$RREPO" "" rev_head HEAD 2>/dev/null
+ppost get_findings done "$RREPO" "" rev_head HEAD
+(cd "$RREPO" && ohmybug_hunted "ref:$RHEAD") && {
+  printf 'FAIL a HEAD-spelled ref was locally resolved into an authorising record\n'; fails=$((fails + 1)); }
+# The offer record (PreToolUse) obeys the same spelling rule — the two
+# branches share one helper, and this is the row that pins the Pre twin.
+python3 -c "import json,sys;print(json.dumps({
+  'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+  'tool_input':{'diff':'','meta':{'repo':'x/y','ref':'main'}},
+  'cwd':sys.argv[1]}))" "$RREPO" | bash "$G/stamp-hunt.sh"
+(cd "$RREPO" && ohmybug_attempted "ref:$RHEAD") && {
+  printf 'FAIL a branch-name ref recorded an offer under the resolved sha\n'; fails=$((fails + 1)); }
+# ...while the sha spelling of the very same commit records fine.
+ppost submit_review running "$RREPO" "" rev_sha "$RHEAD"
+ppost get_findings done "$RREPO" "" rev_sha "$RHEAD"
+(cd "$RREPO" && ohmybug_hunted "ref:$RHEAD") || {
+  printf 'FAIL a full-sha ref did not record\n'; fails=$((fails + 1)); }
 rm -rf "$(dirname "$RREPO")"
+
+# A payload plus a HEAD sha in meta.ref must not bless the commit: with bytes
+# in the call the server reviewed THOSE bytes, whatever meta.ref claims. On a
+# committed, clean tree the ref record is exactly what the gate would honour —
+# one junk diff away from a free pass. The ref is the call's identity only
+# when the call carried no bytes; and a payload that matched nothing must say
+# so at submit time, not surface at merge time as "never hunted".
+QREPO=$(mktemp -d)/repo
+mkrepo "$QREPO"
+(
+  cd "$QREPO" || exit 1
+  printf 'committed work\n' >> a.ts
+  git add a.ts && git commit -qm work
+)
+QHEAD=$(git -C "$QREPO" rev-parse HEAD)
+out=$(ppost submit_review running "$QREPO" "junk bytes, not this tree" rev_pref "$QHEAD" 2>&1 >/dev/null)
+case "$out" in
+  *"will not recognise this tree as hunted"*) ;;
+  *) printf 'FAIL a payload that matches nothing was filed silently: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+ppost get_findings done "$QREPO" "" rev_pref
+rc=$(mk "$V" "$QREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL a junk payload plus a HEAD sha blessed the commit (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$QREPO")"
+
+# The no-payload hunt is often driven from a session standing in the MAIN
+# checkout while the reviewed commit and the merge live in a worktree — the
+# ref-identity twin of the payload worktree rows below. A sha-spelled ref
+# naming a sibling worktree's HEAD is a commit this repository IS standing
+# on; requiring the recording cwd's OWN head re-broke this flow (a paid,
+# finished hunt recorded nowhere, then a hard block on reviewed work). This
+# row also walks the gate's ref-honouring ALLOW path end to end — it goes red
+# if that allow block is ever deleted.
+WREPO=$(mktemp -d)/repo
+mkrepo "$WREPO"
+if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
+  printf 'committed work\n' >> "$WREPO.wt/a.ts"
+  git -C "$WREPO.wt" add a.ts 2>/dev/null
+  git -C "$WREPO.wt" -c user.email=t@t -c user.name=t commit -qm work 2>/dev/null
+  WTSHA=$(git -C "$WREPO.wt" rev-parse HEAD)
+  # The offer first: the PreToolUse twin obeys the same worktree rule, and a
+  # refused submit in this flow must leave the warn-through a key to find.
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+    'tool_input':{'diff':'','meta':{'repo':'x/y','ref':sys.argv[1]}},
+    'cwd':sys.argv[2]}))" "$WTSHA" "$WREPO" | bash "$G/stamp-hunt.sh"
+  (cd "$WREPO" && ohmybug_attempted "ref:$WTSHA") || {
+    printf 'FAIL an offer of a sibling worktree HEAD recorded nothing\n'; fails=$((fails + 1)); }
+  ppost submit_review running "$WREPO" "" rev_wtref "$WTSHA"
+  ppost get_findings done "$WREPO" "" rev_wtref "$WTSHA"
+  rc=$(mk "$V" "$WREPO.wt" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL a no-payload hunt recorded from the main checkout is invisible to the worktree merge (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git -C "$WREPO" worktree remove --force "$WREPO.wt" 2>/dev/null
+else
+  printf 'FAIL could not create a worktree for the cross-checkout ref row\n'; fails=$((fails + 1))
+fi
+rm -rf "$(dirname "$WREPO")"
 
 # The honest full payload, in the OTHER spelling: a client that pipes
 # `git diff` verbatim sends the trailing newline that command substitution
 # strips. Same diff, second hash — a one-spelling equality test false-blocks
-# exactly the flow this stamp exists to serve. The payload goes through a
-# file, because $( ) would eat the newline and pass for the wrong reason.
+# exactly the flow this stamp exists to serve. The payload goes through
+# ppost's @file spelling, because $( ) would eat the newline and the row
+# would pass for the wrong reason.
 EREPO=$(mktemp -d)/repo
 mkrepo "$EREPO"
 printf 'honest change\n' >> "$EREPO/a.ts"
 git -C "$EREPO" diff "$(cd "$EREPO" && ohmybug_base)" > "$EREPO.rawdiff"
-rawpost() { # tool, status
-  python3 -c "import json,sys;print(json.dumps({
-    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
-    'tool_input':{'review_id':'rev_raw','diff':open(sys.argv[4]).read()},
-    'tool_response':{'content':[{'type':'text','text':json.dumps(
-       {'review_id':'rev_raw','status':sys.argv[2]})}]},
-    'cwd':sys.argv[3]}))" "$1" "$2" "$EREPO" "$EREPO.rawdiff" | bash "$G/stamp-hunt.sh"
-}
-rawpost submit_review running
-rawpost get_findings done
+ppost submit_review running "$EREPO" "@$EREPO.rawdiff" rev_raw
+ppost get_findings done "$EREPO" "@$EREPO.rawdiff" rev_raw
 rc=$(mk "$V" "$EREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 0 ] || { printf 'FAIL a verbatim git diff payload read as foreign to its own tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 # ...and prose on top of that hunt is still just prose.

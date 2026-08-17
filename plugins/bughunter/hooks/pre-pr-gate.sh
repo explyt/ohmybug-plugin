@@ -323,8 +323,9 @@ fi
 # No local changes: landing somebody else's PR from a clean `main` is the most
 # natural way to merge, and the code being merged never exists in this tree.
 # Allowing is right; saying nothing is not — silence out of a PreToolUse hook is
-# byte-identical to "hunted, allowed". Both streams, same as every sibling
-# stand-down above: an exit-0 PreToolUse has no guaranteed channel to the model.
+# byte-identical to "hunted, allowed". Both streams, like the python3 and
+# missing-recorder stand-downs above: an exit-0 PreToolUse has no guaranteed
+# channel to the model, and stdout is the copy the transcript surfaces.
 if [ -z "$CURRENT" ]; then
   MSG="OhMyBug: this checkout has no changes against its base, so the gate cannot tell whether the code being merged was hunted — allowing the merge unchecked. To hunt somebody else's PR, check it out (gh pr checkout <N>) and run /bughunter:review there."
   echo "$MSG" >&2

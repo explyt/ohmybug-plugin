@@ -148,17 +148,14 @@ PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 if [ "${PRE:-0}" = "1" ]; then
   [ "$TOOL" = submit_review ] || exit 0
   [ -n "$SENT" ] && ohmybug_record_attempt "$SENT"
-  # Resolve the ref rather than string-comparing it: `meta.ref` is documented as
-  # the head, and a branch name or a short sha that points AT this commit is the
-  # same offer. Matching only the full sha meant the no-payload flow — the one
-  # the skill calls preferred — recorded nothing, so a refused hunt there left
-  # the merge blocked with no way out, which is the trap this whole change
-  # exists to remove.
+  # One rule for which ref may key a record, shared with the promote path
+  # below: ohmybug_ref_here — a sha-spelled ref (the spelling that pins the
+  # same commit everywhere) naming the HEAD of one of this repository's
+  # worktrees. A branch or tag name resolves HERE to whatever this clone
+  # happens to hold while the server fetches the same name from the remote;
+  # and the offer is filed under the RESOLVED sha, the key the gate looks up.
   if [ -n "$REF" ]; then
-    RESOLVED=$(git rev-parse --verify --quiet "$REF^{commit}" 2>/dev/null)
-    # Record under the RESOLVED sha, which is the key the gate looks up. A
-    # branch name filed under its own name is a record nothing ever reads.
-    [ -n "$RESOLVED" ] && [ "$RESOLVED" = "$(git rev-parse HEAD 2>/dev/null)" ] &&
+    RESOLVED=$(ohmybug_ref_here "$REF") && [ -n "$RESOLVED" ] &&
       ohmybug_record_attempt "ref:$RESOLVED"
   fi
   exit 0
@@ -185,38 +182,50 @@ case "$TOOL" in
     # last, for the no-payload path where there are no bytes to hash.
     [ -n "$REVIEW" ] || exit 0
     mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
+    LOCAL=0 REFOK=0
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
       # The working-tree ids describe THIS checkout, not the call — so they may
       # only be filed once the payload is shown to BE this checkout. Unguarded,
       # a submit of one file blessed every other dirty file beside it, and a
       # submit of another repository blessed whatever this cwd happened to hold.
+      # The diff id comes from the helper itself — the very bytes the equality
+      # validated, not a second `git diff` a fast external writer could race.
       # The emptiness test is kept beside the helper's own: this is the line that
       # authorises a merge, and one guard is one deletion away from none.
-      if [ -n "$SENT" ] && ohmybug_sent_is_local "$SENT"; then
-        ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
+      if [ -n "$SENT" ] && ID=$(ohmybug_sent_is_local "$SENT") && [ -n "$ID" ]; then
+        LOCAL=1
+        printf '%s\n' "$ID"
         # ...and the same diff with docs, tests and skills taken out, so that
         # editing prose after the hunt does not read as unhunted code.
         SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
       fi
-      # Resolve, and require HEAD — the same rule the PreToolUse branch above
-      # already applies. A ref this checkout is not on names another repository
-      # or another commit; and the RESOLVED sha is the only spelling the gate
-      # ever looks up, so a raw branch name was a record nothing read.
-      if [ -n "$REF" ]; then
-        R=$(git rev-parse --verify --quiet "$REF^{commit}" 2>/dev/null)
-        [ -n "$R" ] && [ "$R" = "$(git rev-parse HEAD 2>/dev/null)" ] && printf 'ref:%s\n' "$R"
+      # A ref is the CALL's identity only when the call carried no bytes: on
+      # the no-payload path the server's review IS of repo@ref. With a payload
+      # the server reviewed the payload, whatever meta.ref claims — recording
+      # the ref too would let one junk diff plus a HEAD sha bless a clean
+      # checkout the reviewers never saw. Which spellings may key the record
+      # is ohmybug_ref_here's rule, shared with the PreToolUse branch above.
+      if [ -z "$SENT" ] && [ -n "$REF" ]; then
+        R=$(ohmybug_ref_here "$REF") && [ -n "$R" ] && { printf 'ref:%s\n' "$R"; REFOK=1; }
       fi
       true
     } > "$PENDING.tmp" 2>/dev/null || exit 0
     if [ -s "$PENDING.tmp" ]; then
       mv "$PENDING.tmp" "$PENDING"
+      # A record that holds ONLY the sent bytes' hash satisfies no gate lookup
+      # (the gate computes the working-diff id, sig: and ref: keys). Say so
+      # now, or the dead weight surfaces at merge time as "never hunted" with
+      # nothing pointing at the cause.
+      if [ "$LOCAL" = 0 ] && [ "$REFOK" = 0 ] && [ -n "$SENT" ]; then
+        echo "ohmybug: the payload does not match this working tree, so the merge gate will not recognise this tree as hunted — send the full working diff verbatim, or submit with no payload and meta.ref set to the pushed head commit sha" >&2
+      fi
     else
       rm -f "$PENDING.tmp"
       # Nothing identifiable was sent. Say so: this used to exit silently, and a
       # silent non-recording is indistinguishable from a hunt that never ran —
       # which is how the gate came to accuse work that had been reviewed.
-      echo "ohmybug: submit carried no diff, and no meta.ref this checkout is on, so this hunt cannot be recorded; the merge gate will not see it" >&2
+      echo "ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on, so this hunt cannot be recorded; the merge gate will not see it" >&2
     fi
     ;;
   get_findings|confirm_findings)

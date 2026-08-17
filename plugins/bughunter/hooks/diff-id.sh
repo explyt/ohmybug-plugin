@@ -30,10 +30,20 @@ ohmybug_base() {
   return 1
 }
 
-ohmybug_diff_id() {
-  local base diff
+# The raw bytes of "this working tree's diff", shared by every hash below so
+# the spellings can never drift apart — two computations of "which diff is
+# this" diverging is this file's founding incident. Callers capture via $( ),
+# which strips the trailing newline; each consumer reconstructs the spelling
+# it needs explicitly.
+ohmybug_diff_raw() {
+  local base
   base=$(ohmybug_base) || return 1
-  diff=$(git diff "$base" 2>/dev/null) || return 1
+  git diff "$base" 2>/dev/null
+}
+
+ohmybug_diff_id() {
+  local diff
+  diff=$(ohmybug_diff_raw) || return 1
   [ -n "$diff" ] || return 0
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
 }
@@ -98,17 +108,47 @@ ohmybug_sig_id() {
 # spellings a client sends it in? `ohmybug_diff_id` hashes the diff with its
 # trailing newline stripped (command substitution eats it), while a client
 # piping `git diff` verbatim sends it WITH — the same diff, two hashes. Both
-# count; nothing else does. A payload that is a SUBSET of the tree (the skill
-# tells clients to send only the unseen fix), or belongs to another repository
-# entirely, must not authorise this tree.
+# count; nothing else does. A payload that is a SUBSET of the tree (say, only
+# the latest fix), or belongs to another repository entirely, must not
+# authorise this tree.
+# On success prints the canonical (stripped) id, computed from the very bytes
+# the equality just validated — so the recorded id cannot drift from what was
+# compared even if the tree changes under a fast external writer.
 ohmybug_sent_is_local() {
-  local base d
+  local d stripped
   [ -n "${1:-}" ] || return 1
-  base=$(ohmybug_base) || return 1
-  d=$(git diff "$base" 2>/dev/null) || return 1
+  d=$(ohmybug_diff_raw) || return 1
   [ -n "$d" ] || return 1
-  [ "$1" = "$(printf '%s' "$d" | shasum -a 256 | cut -d' ' -f1)" ] && return 0
-  [ "$1" = "$(printf '%s\n' "$d" | shasum -a 256 | cut -d' ' -f1)" ]
+  stripped=$(printf '%s' "$d" | shasum -a 256 | cut -d' ' -f1)
+  if [ "$1" = "$stripped" ] ||
+     [ "$1" = "$(printf '%s\n' "$d" | shasum -a 256 | cut -d' ' -f1)" ]; then
+    printf '%s' "$stripped"
+    return 0
+  fi
+  return 1
+}
+
+# The ref an AUTHORISING record may be filed under — the ONE rule, shared by
+# the offer (PreToolUse) and the promote (PostToolUse) paths. Accepted only
+# when both hold: the spelling itself pins the commit — a hex prefix of the
+# sha it resolves to (full or short sha) — and that commit is the HEAD of one
+# of this repository's worktrees. Prints the resolved sha; rc 1 otherwise.
+#
+# Both halves close a measured hole. A symbolic spelling (branch, tag, HEAD)
+# resolves HERE to whatever this clone happens to hold, while the server
+# fetches the SAME NAME from the remote: one unpushed commit apart, and the
+# record authorises bytes no reviewer ever saw. And a sha no worktree here
+# stands on — an ancestor, another repository's commit — describes a tree
+# nothing here is about to merge, so nothing here may merge on its strength.
+ohmybug_ref_here() {
+  local r
+  [ -n "${1:-}" ] || return 1
+  r=$(git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null) || return 1
+  [ -n "$r" ] || return 1
+  case "$r" in "$1"*) ;; *) return 1 ;; esac
+  { git worktree list --porcelain 2>/dev/null | grep -qxF "HEAD $r" ||
+    [ "$r" = "$(git rev-parse HEAD 2>/dev/null)" ]; } || return 1
+  printf '%s' "$r"
 }
 
 ohmybug_marker_path() {
