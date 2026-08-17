@@ -320,9 +320,18 @@ if ! CURRENT=$(ohmybug_diff_id); then
   echo "OhMyBug: no origin base here, so the gate cannot judge this diff — allowing the merge unchecked." >&2
   exit 0
 fi
-# No local changes: this gate speaks about the working diff, and there isn't
-# one. (Merging an unrelated PR from a clean tree is outside what it can see.)
-[ -n "$CURRENT" ] || exit 0
+# No local changes: landing somebody else's PR from a clean `main` is the most
+# natural way to merge, and the code being merged never exists in this tree.
+# Allowing is right; saying nothing is not — silence out of a PreToolUse hook is
+# byte-identical to "hunted, allowed". Both streams, like the python3 and
+# missing-recorder stand-downs above: an exit-0 PreToolUse has no guaranteed
+# channel to the model, and stdout is the copy the transcript surfaces.
+if [ -z "$CURRENT" ]; then
+  MSG="OhMyBug: this checkout has no changes against its base, so the gate cannot tell whether the code being merged was hunted — allowing the merge unchecked. To hunt somebody else's PR, check it out (gh pr checkout <N>) and run /bughunter:review there."
+  echo "$MSG" >&2
+  echo "$MSG"
+  exit 0
+fi
 
 # The hunt set, keyed on the repository rather than the working tree, so a hunt
 # recorded from the main checkout is visible to a merge run in a worktree and the

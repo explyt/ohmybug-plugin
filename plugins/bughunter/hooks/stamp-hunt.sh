@@ -17,12 +17,6 @@
 #   review is done -> promote it to the marker the gate reads
 # Stamping "the current diff" at done-time would authorise fixes written while
 # the review was still running — code the hunt never saw.
-#
-# ponytail: one pending slot per git-dir, not per review id. Submit A, submit B,
-# then A finishes -> B's (newer, unfinished) diff gets promoted. Rare, and it
-# fails toward blocking rather than allowing, because the gate still compares
-# against the working tree. Key the pending file by review id if fan-out on one
-# worktree ever becomes normal.
 set -u
 
 INPUT=$(cat 2>/dev/null) || exit 0
@@ -74,6 +68,9 @@ status = status_of(resp)
 done = "1" if status == "done" else "0"
 failed = "1" if status == "failed" else "0"
 review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
+# upload:true means the payload bytes leave the machine OUT OF BAND — this hook
+# never sees them, so they can prove nothing about any tree.
+upload = "1" if (isinstance(inp, dict) and inp.get("upload") is True) else "0"
 if not isinstance(review, str) or not review:
     # Same escaping rules as the `done` match above: \s, not \\s — the latter
     # is a literal backslash in a raw string and never matches, which recorded
@@ -108,7 +105,7 @@ def one_line(v):
     return (v if isinstance(v, str) else "").replace("\n", " ").replace("\r", " ")
 
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
-      pre, failed, sep="\n")
+      pre, failed, upload, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -119,6 +116,7 @@ REF=$(printf '%s' "$FIELDS" | sed -n 5p)
 REVIEW=$(printf '%s' "$FIELDS" | sed -n 6p)
 PRE=$(printf '%s' "$FIELDS" | sed -n 7p)
 FAILED=$(printf '%s' "$FIELDS" | sed -n 8p)
+UPLOAD=$(printf '%s' "$FIELDS" | sed -n 9p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -154,17 +152,14 @@ PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 if [ "${PRE:-0}" = "1" ]; then
   [ "$TOOL" = submit_review ] || exit 0
   [ -n "$SENT" ] && ohmybug_record_attempt "$SENT"
-  # Resolve the ref rather than string-comparing it: `meta.ref` is documented as
-  # the head, and a branch name or a short sha that points AT this commit is the
-  # same offer. Matching only the full sha meant the no-payload flow — the one
-  # the skill calls preferred — recorded nothing, so a refused hunt there left
-  # the merge blocked with no way out, which is the trap this whole change
-  # exists to remove.
+  # One rule for which ref may key a record, shared with the promote path
+  # below: ohmybug_ref_here — a sha-spelled ref (the spelling that pins the
+  # same commit everywhere) naming the HEAD of one of this repository's
+  # worktrees. A branch or tag name resolves HERE to whatever this clone
+  # happens to hold while the server fetches the same name from the remote;
+  # and the offer is filed under the RESOLVED sha, the key the gate looks up.
   if [ -n "$REF" ]; then
-    RESOLVED=$(git rev-parse --verify --quiet "$REF^{commit}" 2>/dev/null)
-    # Record under the RESOLVED sha, which is the key the gate looks up. A
-    # branch name filed under its own name is a record nothing ever reads.
-    [ -n "$RESOLVED" ] && [ "$RESOLVED" = "$(git rev-parse HEAD 2>/dev/null)" ] &&
+    RESOLVED=$(ohmybug_ref_here "$REF") && [ -n "$RESOLVED" ] &&
       ohmybug_record_attempt "ref:$RESOLVED"
   fi
   exit 0
@@ -187,27 +182,83 @@ case "$TOOL" in
     fi
     # Every id this submit could legitimately be known by, newline-separated.
     # The sent bytes first, because that one is true from any directory; the
-    # working diff second, for a client that reformatted what it sent; the ref
+    # working-tree ids only when the payload proves to BE this tree; the ref
     # last, for the no-payload path where there are no bytes to hash.
     [ -n "$REVIEW" ] || exit 0
     mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
+    TREEOK=0 REFOK=0
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
-      ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
-      # ...and the same diff with docs, tests and skills taken out, so that
-      # editing prose after the hunt does not read as unhunted code.
-      SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
-      [ -n "$REF" ] && printf 'ref:%s\n' "$REF"
+      # The working-tree ids describe THIS checkout, not the call — so they may
+      # only be filed once the payload is shown to BE this checkout. Unguarded,
+      # a submit of one file blessed every other dirty file beside it, and a
+      # submit of another repository blessed whatever this cwd happened to hold.
+      # The diff id comes from the helper itself — the very bytes the equality
+      # validated, not a second `git diff` a fast external writer could race.
+      # The emptiness test is kept beside the helper's own: this is the line that
+      # authorises a merge, and one guard is one deletion away from none.
+      if [ -n "$SENT" ] && ID=$(ohmybug_sent_is_local "$SENT") && [ -n "$ID" ]; then
+        TREEOK=1
+        printf '%s\n' "$ID"
+        # ...and the same diff with docs, tests and skills taken out, so that
+        # editing prose after the hunt does not read as unhunted code.
+        SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
+      fi
+      # A ref is the CALL's identity only when the call carried no bytes: on
+      # the no-payload path the server's review IS of repo@ref. With a payload
+      # the server reviewed the payload, whatever meta.ref claims — recording
+      # the ref too would let one junk diff plus a HEAD sha bless a clean
+      # checkout the reviewers never saw. Which spellings may key the record
+      # is ohmybug_ref_here's rule, shared with the PreToolUse branch above.
+      if [ -z "$SENT" ] && [ -n "$REF" ]; then
+        if R=$(ohmybug_ref_here "$REF") && [ -n "$R" ]; then
+          printf 'ref:%s\n' "$R"
+          REFOK=1
+          # A PURE no-payload submit (no out-of-band upload either) leaves the
+          # server exactly one source of bytes: repo@ref, fetched by the server
+          # itself. When this cwd stands at that commit with nothing
+          # uncommitted, the working diff IS the reviewed diff — so the tree
+          # ids are as trustworthy as the ref line, and prose edited after the
+          # hunt stays just prose (sig:) instead of demanding a paid re-hunt
+          # of a README. An upload breaks that equality (the server reviews
+          # the uploaded bytes, which this hook never sees): no tree ids then.
+          if [ "${UPLOAD:-0}" != 1 ] && [ "$R" = "$(git rev-parse HEAD 2>/dev/null)" ] &&
+             [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+            ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
+            SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
+            TREEOK=1
+          fi
+        fi
+      fi
       true
     } > "$PENDING.tmp" 2>/dev/null || exit 0
     if [ -s "$PENDING.tmp" ]; then
       mv "$PENDING.tmp" "$PENDING"
+      # The dead ends are announced at SUBMIT time, on BOTH streams (an exit-0
+      # hook's stdout is the copy the transcript surfaces) — otherwise they
+      # surface at merge time as "never hunted" with nothing naming the cause.
+      # A record holding only the sent bytes' hash satisfies no gate lookup:
+      if [ "$TREEOK" = 0 ] && [ "$REFOK" = 0 ] && [ -n "$SENT" ]; then
+        MSG="ohmybug: the payload does not match this working tree, so the merge gate will not recognise this tree as hunted — send the full working diff verbatim, or submit with no payload and meta.ref set to the pushed head commit sha"
+        echo "$MSG" >&2
+        echo "$MSG"
+      fi
+      # ...and out-of-band bytes prove nothing about this tree, while with
+      # uncommitted work the ref: line is never honoured either:
+      if [ -z "$SENT" ] && [ "${UPLOAD:-0}" = 1 ] && [ "$TREEOK" = 0 ] &&
+         { [ "$REFOK" = 0 ] || [ -n "$(git status --porcelain 2>/dev/null)" ]; }; then
+        MSG="ohmybug: the uploaded bytes go out of band, so the merge gate cannot verify them against this tree and will still block — to record the hunt, send the full working diff inline, or commit, push, and submit with meta.ref = the pushed head sha"
+        echo "$MSG" >&2
+        echo "$MSG"
+      fi
     else
       rm -f "$PENDING.tmp"
       # Nothing identifiable was sent. Say so: this used to exit silently, and a
       # silent non-recording is indistinguishable from a hunt that never ran —
       # which is how the gate came to accuse work that had been reviewed.
-      echo "ohmybug: submit carried no diff and no meta.ref, so this hunt cannot be recorded; the merge gate will not see it" >&2
+      MSG="ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on, so this hunt cannot be recorded; the merge gate will not see it"
+      echo "$MSG" >&2
+      echo "$MSG"
     fi
     ;;
   get_findings|confirm_findings)
