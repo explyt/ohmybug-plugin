@@ -669,6 +669,170 @@ rc=$(mk "$V" "$NESTREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 rm -rf "$(dirname "$NESTREPO")"
 reset_state
 
+# --- the pending record names the CALL, not the directory the hook stood in ---
+# submit_review used to file three ids: the bytes actually sent, plus the
+# working diff and its significant sibling hashed from the hook's cwd — a
+# client-supplied field. The promote loop copies every line into the set that
+# authorises a merge, so a submit of ONE dirty file blessed the others beside
+# it, and a submit reported from a session standing in another repository
+# blessed whatever that directory held. Every row builds its own throwaway
+# repository: the main fixture is deliberately dirty, so "three files dirty,
+# one sent" and "clean tree" cannot be shown honestly there. post() is no use
+# either — it hardwires the payload to the WHOLE working diff, which is
+# exactly the equality these rows must be free to break.
+mkrepo() { # dir -> one commit on main, origin/main at HEAD, clean tree
+  mkdir -p "$1" && (
+    cd "$1" || exit 1
+    git init -q .
+    git config user.email t@t; git config user.name t
+    # The path goes into the blob so no two of these repositories ever share
+    # a commit sha: a shared sha would let a ref of one resolve in the other,
+    # and the cross-repo rows would then prove nothing.
+    printf 'base %s\n' "$1" > a.ts
+    printf 'base\n' > b.ts
+    printf 'base\n' > c.ts
+    git add a.ts b.ts c.ts && git commit -qm base
+    git branch -qM main
+    git remote add origin .
+    git update-ref refs/remotes/origin/main HEAD
+  )
+}
+ppost() { # tool, status, cwd, diff-text, review-id, [meta-ref]
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'review_id':sys.argv[5],'diff':sys.argv[4],
+      'meta':({'repo':'x/y','ref':sys.argv[6]} if len(sys.argv)>6 else {})},
+    'tool_response':{'content':[{'type':'text','text':json.dumps(
+       {'review_id':sys.argv[5],'status':sys.argv[2]})}]},
+    'cwd':sys.argv[3]}))" "$@" | bash "$G/stamp-hunt.sh"
+}
+
+# A payload of one named file — the shape the skill itself prescribes for
+# hunting only the unseen fix — must not bless the two dirty files beside it.
+# The oracle is what this fixture chose to SEND, never a re-run of the id
+# helper the hook itself uses.
+PREPO=$(mktemp -d)/repo
+mkrepo "$PREPO"
+printf 'dirty\n' >> "$PREPO/a.ts"
+printf 'dirty\n' >> "$PREPO/b.ts"
+printf 'dirty\n' >> "$PREPO/c.ts"
+PART_DIFF=$(git -C "$PREPO" diff "$(cd "$PREPO" && ohmybug_base)" -- a.ts)
+ppost submit_review running "$PREPO" "$PART_DIFF" rev_part
+ppost get_findings done "$PREPO" "$PART_DIFF" rev_part
+rc=$(mk "$V" "$PREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL a one-file payload blessed the whole dirty tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$PREPO")"
+
+# A submit that carried NO bytes says nothing about this tree: the no-payload
+# flow's identity is its ref, and the dirty file beside it was never offered
+# to anybody.
+ZREPO=$(mktemp -d)/repo
+mkrepo "$ZREPO"
+printf 'dirty\n' >> "$ZREPO/a.ts"
+ppost submit_review running "$ZREPO" "" rev_zero "$(git -C "$ZREPO" rev-parse HEAD)"
+ppost get_findings done "$ZREPO" "" rev_zero "$(git -C "$ZREPO" rev-parse HEAD)"
+rc=$(mk "$V" "$ZREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL a zero-payload submit blessed the dirty tree it stood in (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$ZREPO")"
+
+# A hunt of repository B, reported from a session whose cwd is repository A,
+# must leave no mark on A. Both sides are asserted from INSIDE A — the id
+# helpers key on cwd, so asking from anywhere else answers about the wrong
+# repository and goes green on nothing. And a ref naming a commit A is not AT
+# (an ancestor) must vanish too: the resolved-equals-HEAD rule the PreToolUse
+# branch already applies. That assertion is the one that stays red if the
+# HEAD-equality half of the guard is ever dropped.
+AREPO=$(mktemp -d)/repo
+BREPO=$(mktemp -d)/repo
+mkrepo "$AREPO"
+mkrepo "$BREPO"
+ANC=$(git -C "$AREPO" rev-parse HEAD)
+(
+  cd "$AREPO" || exit 1
+  printf 'second\n' >> b.ts
+  git add b.ts && git commit -qm second
+  git update-ref refs/remotes/origin/main HEAD
+)
+printf 'never reviewed\n' >> "$AREPO/a.ts"
+ppost submit_review running "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)" 2>/dev/null
+ppost get_findings done "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)"
+ppost submit_review running "$AREPO" "" rev_anc "$ANC" 2>/dev/null
+ppost get_findings done "$AREPO" "" rev_anc "$ANC"
+AID=$(cd "$AREPO" && ohmybug_diff_id)
+[ -n "$AID" ] || { printf 'FAIL cross-repo fixture: repo A produced no working diff\n'; fails=$((fails + 1)); }
+(cd "$AREPO" && ohmybug_hunted "$AID") && { printf 'FAIL a hunt of another repository authorised this one\n'; fails=$((fails + 1)); }
+(cd "$AREPO" && ohmybug_hunted "ref:$ANC") && { printf 'FAIL a commit this checkout is not AT was promoted\n'; fails=$((fails + 1)); }
+rc=$(mk "$V" "$AREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL cross-repo: the gate allowed the unreviewed tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$AREPO")" "$(dirname "$BREPO")"
+
+# meta.ref arrives in whatever spelling the model typed. The gate looks up
+# ref:<full sha> and nothing else, so a branch name filed raw was a record
+# nothing ever read; it must be resolved, as the attempt path already does.
+RREPO=$(mktemp -d)/repo
+mkrepo "$RREPO"
+ppost submit_review running "$RREPO" "" rev_branch main
+ppost get_findings done "$RREPO" "" rev_branch main
+(cd "$RREPO" && ohmybug_hunted "ref:$(git rev-parse HEAD)") || {
+  printf 'FAIL a branch-name ref was not resolved to the sha the gate reads\n'; fails=$((fails + 1)); }
+rm -rf "$(dirname "$RREPO")"
+
+# The honest full payload, in the OTHER spelling: a client that pipes
+# `git diff` verbatim sends the trailing newline that command substitution
+# strips. Same diff, second hash — a one-spelling equality test false-blocks
+# exactly the flow this stamp exists to serve. The payload goes through a
+# file, because $( ) would eat the newline and pass for the wrong reason.
+EREPO=$(mktemp -d)/repo
+mkrepo "$EREPO"
+printf 'honest change\n' >> "$EREPO/a.ts"
+git -C "$EREPO" diff "$(cd "$EREPO" && ohmybug_base)" > "$EREPO.rawdiff"
+rawpost() { # tool, status
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'review_id':'rev_raw','diff':open(sys.argv[4]).read()},
+    'tool_response':{'content':[{'type':'text','text':json.dumps(
+       {'review_id':'rev_raw','status':sys.argv[2]})}]},
+    'cwd':sys.argv[3]}))" "$1" "$2" "$EREPO" "$EREPO.rawdiff" | bash "$G/stamp-hunt.sh"
+}
+rawpost submit_review running
+rawpost get_findings done
+rc=$(mk "$V" "$EREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a verbatim git diff payload read as foreign to its own tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+# ...and prose on top of that hunt is still just prose.
+printf 'a README edit after the hunt\n' > "$EREPO/README.md"
+git -C "$EREPO" add -N README.md 2>/dev/null
+rc=$(mk "$V" "$EREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL prose after a raw-payload hunt demanded a re-hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$EREPO")"
+
+# A clean checkout is the most natural place to merge somebody else's PR, and
+# the one place this gate can see nothing. Allowing is right; the defect was
+# allowing SILENTLY — an exit-0 PreToolUse with no output is byte-identical to
+# "hunted, allowed". The loaded half of this row is the two message
+# assertions: the rc alone stays green across the very regression it guards.
+FREPO=$(mktemp -d)/repo
+mkrepo "$FREPO"
+rc=$(mk "$V" "$FREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL clean tree: the stand-down must still allow (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+out=$(mk "$V" "$FREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+case "$out" in
+  *"no changes against its base"*) ;;
+  *) printf 'FAIL the clean-tree stand-down said nothing on stderr: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+out=$(mk "$V" "$FREPO" | bash "$G/pre-pr-gate.sh" 2>/dev/null)
+case "$out" in
+  *"no changes against its base"*) ;;
+  *) printf 'FAIL the clean-tree stand-down said nothing on stdout: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+# ...and it speaks only about merges: other commands on the same clean tree
+# stay silent, or every Bash call in a fresh checkout narrates itself.
+for NM in "gh pr view 5" "npm test" "git log --no-merges"; do
+  got=$(mk "$NM" "$FREPO" | bash "$G/pre-pr-gate.sh" 2>&1; echo "rc=$?")
+  [ "$got" = "rc=0" ] || { printf 'FAIL a non-merge command spoke on a clean tree: %s -> %s\n' "$NM" "$got"; fails=$((fails + 1)); }
+done
+rm -rf "$(dirname "$FREPO")"
+reset_state
+
 # --- the worktree rows -------------------------------------------------------
 # The failure the owner hit on 2026-08-12, third occurrence of this class: the
 # work lives in a git worktree, the hunt is driven from a session whose cwd is

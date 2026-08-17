@@ -17,12 +17,6 @@
 #   review is done -> promote it to the marker the gate reads
 # Stamping "the current diff" at done-time would authorise fixes written while
 # the review was still running — code the hunt never saw.
-#
-# ponytail: one pending slot per git-dir, not per review id. Submit A, submit B,
-# then A finishes -> B's (newer, unfinished) diff gets promoted. Rare, and it
-# fails toward blocking rather than allowing, because the gate still compares
-# against the working tree. Key the pending file by review id if fan-out on one
-# worktree ever becomes normal.
 set -u
 
 INPUT=$(cat 2>/dev/null) || exit 0
@@ -187,17 +181,32 @@ case "$TOOL" in
     fi
     # Every id this submit could legitimately be known by, newline-separated.
     # The sent bytes first, because that one is true from any directory; the
-    # working diff second, for a client that reformatted what it sent; the ref
+    # working-tree ids only when the payload proves to BE this tree; the ref
     # last, for the no-payload path where there are no bytes to hash.
     [ -n "$REVIEW" ] || exit 0
     mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
-      ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
-      # ...and the same diff with docs, tests and skills taken out, so that
-      # editing prose after the hunt does not read as unhunted code.
-      SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
-      [ -n "$REF" ] && printf 'ref:%s\n' "$REF"
+      # The working-tree ids describe THIS checkout, not the call — so they may
+      # only be filed once the payload is shown to BE this checkout. Unguarded,
+      # a submit of one file blessed every other dirty file beside it, and a
+      # submit of another repository blessed whatever this cwd happened to hold.
+      # The emptiness test is kept beside the helper's own: this is the line that
+      # authorises a merge, and one guard is one deletion away from none.
+      if [ -n "$SENT" ] && ohmybug_sent_is_local "$SENT"; then
+        ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
+        # ...and the same diff with docs, tests and skills taken out, so that
+        # editing prose after the hunt does not read as unhunted code.
+        SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
+      fi
+      # Resolve, and require HEAD — the same rule the PreToolUse branch above
+      # already applies. A ref this checkout is not on names another repository
+      # or another commit; and the RESOLVED sha is the only spelling the gate
+      # ever looks up, so a raw branch name was a record nothing read.
+      if [ -n "$REF" ]; then
+        R=$(git rev-parse --verify --quiet "$REF^{commit}" 2>/dev/null)
+        [ -n "$R" ] && [ "$R" = "$(git rev-parse HEAD 2>/dev/null)" ] && printf 'ref:%s\n' "$R"
+      fi
       true
     } > "$PENDING.tmp" 2>/dev/null || exit 0
     if [ -s "$PENDING.tmp" ]; then
@@ -207,7 +216,7 @@ case "$TOOL" in
       # Nothing identifiable was sent. Say so: this used to exit silently, and a
       # silent non-recording is indistinguishable from a hunt that never ran —
       # which is how the gate came to accuse work that had been reviewed.
-      echo "ohmybug: submit carried no diff and no meta.ref, so this hunt cannot be recorded; the merge gate will not see it" >&2
+      echo "ohmybug: submit carried no diff, and no meta.ref this checkout is on, so this hunt cannot be recorded; the merge gate will not see it" >&2
     fi
     ;;
   get_findings|confirm_findings)

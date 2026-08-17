@@ -94,6 +94,23 @@ ohmybug_sig_id() {
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
 }
 
+# Is `$1` the id of a payload that IS this working tree, in either of the two
+# spellings a client sends it in? `ohmybug_diff_id` hashes the diff with its
+# trailing newline stripped (command substitution eats it), while a client
+# piping `git diff` verbatim sends it WITH — the same diff, two hashes. Both
+# count; nothing else does. A payload that is a SUBSET of the tree (the skill
+# tells clients to send only the unseen fix), or belongs to another repository
+# entirely, must not authorise this tree.
+ohmybug_sent_is_local() {
+  local base d
+  [ -n "${1:-}" ] || return 1
+  base=$(ohmybug_base) || return 1
+  d=$(git diff "$base" 2>/dev/null) || return 1
+  [ -n "$d" ] || return 1
+  [ "$1" = "$(printf '%s' "$d" | shasum -a 256 | cut -d' ' -f1)" ] && return 0
+  [ "$1" = "$(printf '%s\n' "$d" | shasum -a 256 | cut -d' ' -f1)" ]
+}
+
 ohmybug_marker_path() {
   local gitdir
   gitdir=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
