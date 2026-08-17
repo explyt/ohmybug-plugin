@@ -877,6 +877,31 @@ else
 fi
 rm -rf "$(dirname "$WREPO")"
 
+# The warn-through must also be reachable through the ref identity: an offer
+# of this commit that the environment refused, on a clean tree at that commit,
+# downgrades the block to a loud allow — the gate's other ref-keyed branch,
+# which no row above walks end to end. This is the row that goes red if that
+# attempt branch is ever deleted.
+VREPO=$(mktemp -d)/repo
+mkrepo "$VREPO"
+(
+  cd "$VREPO" || exit 1
+  printf 'committed work\n' >> a.ts
+  git add a.ts && git commit -qm work
+)
+python3 -c "import json,sys;print(json.dumps({
+  'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+  'tool_input':{'diff':'','meta':{'repo':'x/y','ref':sys.argv[1]}},
+  'cwd':sys.argv[2]}))" "$(git -C "$VREPO" rev-parse HEAD)" "$VREPO" | bash "$G/stamp-hunt.sh"
+rc=$(mk "$V" "$VREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL a refused ref-keyed offer did not warn the merge through (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+out=$(mk "$V" "$VREPO" | bash "$G/pre-pr-gate.sh" 2>/dev/null)
+case "$out" in
+  *"no findings came back"*) ;;
+  *) printf 'FAIL the ref-keyed warn-through said nothing on stdout: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+rm -rf "$(dirname "$VREPO")"
+
 # The honest full payload, in the OTHER spelling: a client that pipes
 # `git diff` verbatim sends the trailing newline that command substitution
 # strips. Same diff, second hash — a one-spelling equality test false-blocks
