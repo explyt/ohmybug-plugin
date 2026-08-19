@@ -48,14 +48,9 @@ blob = json.dumps(resp)
 # pending record and lose a hunt the user had paid for, and hunting this very
 # repository produces exactly that prose.
 def status_of(r):
-    # Three envelopes for one response, and the client picks: the object itself,
-    # a {content:[…]} wrapper, or the bare content list. Only the first two were
-    # read, so on a client that sends the third every poll looked like a review
-    # still running — and a hunt that finds NOTHING has no confirm_findings call
-    # to fall back on (the server refuses a verdict-less one), so a CLEAN hunt
-    # could never be promoted: the merge gate blocked the diff forever, and the
-    # documented escape is an env prefix the permission classifier also refuses.
-    # A dead end, and a dead end is what teaches people to disarm the gate.
+    # Four envelopes for one response, and the client picks: the object itself,
+    # a {content:[…]} wrapper, the bare content list, or one text part. Clean
+    # hunts may have no later confirm call, so `done` must be readable in all.
     if isinstance(r, str):
         try:
             r = json.loads(r)
@@ -67,7 +62,7 @@ def status_of(r):
         s = r.get("status")
         if isinstance(s, str):
             return s
-        parts = r.get("content")
+        parts = [r] if isinstance(r.get("text"), str) else r.get("content")
         if isinstance(parts, list):
             for part in parts:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
