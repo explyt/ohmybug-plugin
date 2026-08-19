@@ -28,7 +28,8 @@ fails=0
 # was skipped and counted as a single failure. This file only ever worked because
 # someone happened to have edits lying around — that is, it was off precisely
 # when the tree is in the state you release from.
-SCRATCH=".ohmybug-gate-test-scratch"
+# ponytail: the git index is still shared; serialize per checkout if parallel runs become real.
+SCRATCH=".ohmybug-gate-test-scratch.$$"
 # `git add -N` is what makes the file visible to `git diff`, and it leaves an
 # index entry behind — so the cleanup has to undo both, or this test dirties the
 # repository it just finished testing.
@@ -249,7 +250,8 @@ parts=[{'type':'text','text':json.dumps(body)}]
 resp={'content':parts} if sys.argv[5]=='content' else (
       parts if sys.argv[5]=='list' else (
       body if sys.argv[5]=='raw' else (
-      'ohmybug: upstream said no' if sys.argv[5]=='garbage' else json.dumps(body))))
+      parts[0] if sys.argv[5]=='part' else (
+      'ohmybug: upstream said no' if sys.argv[5]=='garbage' else json.dumps(body)))))
 print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
     'tool_input':{'review_id':sys.argv[4],'diff':os.environ.get('OMB_DIFF','')},
@@ -282,11 +284,9 @@ else
   post submit_review 0; s "submit alone does not authorise" ""
   post get_findings 1; s "done promotes the submitted diff" "$ID"
   t "$V" 0                                    # ...and the gate now lets it through
-  # ...in EVERY envelope a client may hand the hook, because `done` is the only
-  # thing that promotes a hunt which found nothing: with no findings there is no
-  # confirm_findings call, the server refuses a verdict-less one, and the merge
-  # then blocks on a review that came back clean (owner report, 2026-08-17).
-  for shape in list raw string; do
+  # ...in EVERY envelope a client may hand the hook. A clean hunt may have no
+  # later confirm call, so this `done` response is what promotes it.
+  for shape in list raw string part; do
     reset_state
     post submit_review 0 rev_x "$shape"
     post get_findings 1 rev_x "$shape"; s "done promotes it in the $shape envelope" "$ID"
@@ -1046,6 +1046,12 @@ out=$(mk "$V" "$FREPO" | bash "$G/pre-pr-gate.sh" 2>/dev/null)
 case "$out" in
   *"no changes against its base"*) ;;
   *) printf 'FAIL the clean-tree stand-down said nothing on stdout: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+STAMP_BASE=$(git -C "$FREPO" rev-parse HEAD)
+stamp_out=$(cd "$FREPO" && bash "$G/diff-id.sh" stamp 2>&1 || true)
+case "$stamp_out" in
+  *"$FREPO"*"$STAMP_BASE"*) ;;
+  *) printf 'FAIL clean stamp omitted its checkout/base: %s\n' "$stamp_out"; fails=$((fails + 1)) ;;
 esac
 # ...and it speaks only about merges: other commands on the same clean tree
 # stay silent, or every Bash call in a fresh checkout narrates itself.

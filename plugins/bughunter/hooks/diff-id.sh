@@ -294,7 +294,8 @@ if [ "${1:-}" = "stamp" ]; then
     exit 1
   fi
   if [ -z "$id" ]; then
-    echo "ohmybug: no local changes against the base — nothing to stamp" >&2
+    base=$(ohmybug_base) || exit 1
+    echo "ohmybug: no local changes in $(pwd -P) against $base — nothing to stamp" >&2
     exit 1
   fi
   m=$(ohmybug_marker_path) || exit 1
