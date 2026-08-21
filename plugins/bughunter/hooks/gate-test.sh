@@ -1237,6 +1237,21 @@ n 'and never twice in a row'                   1 0
 post get_findings 1 rev_nudge content
 n 'a read hunt is silent'                      0 0
 
+# Six unread hunts, five named: the cap is fine, hiding the remainder is not.
+# The next Stop is suppressed by the anti-loop guard, so this message is the only
+# one that will ever mention the sixth (found in review of this hook).
+reset_state
+for i in 1 2 3 4 5 6; do post submit_review 0 "rev_many$i" content; done
+n 'six unread hunts still hold the turn'        0 2
+said=$(python3 -c "import json;print(json.dumps({'hook_event_name':'Stop',
+  'stop_hook_active':False,'cwd':'$PWD'}))" | bash "$G/pending-nudge.sh" 2>&1 >/dev/null)
+case $said in
+  *'and 1 more'*) ;;
+  *) printf 'FAIL nudge the truncated remainder is not named: %s\n' "$said"
+     fails=$((fails + 1)) ;;
+esac
+
+reset_state
 # A record left by a review that died, or by a session that walked away, is not
 # a live hunt — and a nag nobody can satisfy is how a control gets disarmed.
 post submit_review 0 rev_stale content

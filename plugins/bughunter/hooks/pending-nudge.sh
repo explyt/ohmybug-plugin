@@ -47,12 +47,19 @@ DIR=$(ohmybug_hunt_dir) || exit 0
 # The same TTL the gate reads pending records with, for the same reason: a
 # review that ended `failed`, or a session that walked away, leaves a record
 # behind, and a permanent record would nag forever with no way to satisfy it.
-# Five ids is a reminder; a hundred would be a wall of text nobody reads.
-IDS=$(cd "$DIR.pending" 2>/dev/null &&
+# Five ids is a reminder; a hundred would be a wall of text nobody reads. What
+# is NOT optional is the count: truncating in silence, with the anti-loop guard
+# then skipping the next scan, hid the sixth paid hunt in the only message that
+# would have named it — and a session that ends on that turn never reads it
+# (found in review of this hook).
+PEND=$(cd "$DIR.pending" 2>/dev/null &&
   find . -maxdepth 1 -type f -mmin "-${OHMYBUG_PENDING_TTL_MIN:-180}" 2>/dev/null |
-  sed 's|^\./||' | sort | head -n 5 | tr '\n' ' ')
+  sed 's|^\./||' | sort)
+[ -n "$PEND" ] || exit 0
+TOTAL=$(printf '%s\n' "$PEND" | grep -c .)
+IDS=$(printf '%s\n' "$PEND" | head -n 5 | tr '\n' ' ')
 IDS=${IDS% }
-[ -n "$IDS" ] || exit 0
+[ "$TOTAL" -gt 5 ] && IDS="$IDS (and $((TOTAL - 5)) more in $DIR.pending)"
 
 echo "ohmybug: submitted hunt(s) nobody has read: $IDS — do not end the turn waiting" \
      "to be prodded. Call get_findings on each now. If one is still running, arm a" \
