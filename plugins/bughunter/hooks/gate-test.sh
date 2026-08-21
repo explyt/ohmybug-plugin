@@ -1207,6 +1207,43 @@ post submit_review 0 '../escaped'
   fails=$((fails + 1)); }
 reset_state
 
+# --- the unread hunt ----------------------------------------------------------
+# A hunt was submitted, the agent polled once, saw `running`, ended its turn and
+# waited to be prodded; both reviews had been done for forty minutes when the
+# user finally asked (owner report, 2026-08-21). These rows pin the end of a
+# turn to the same pending record the gate reads.
+nudge() { # stop_hook_active -> rc
+  python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop',
+    'stop_hook_active':sys.argv[1]=='1','cwd':sys.argv[2]}))" "$1" "$PWD" \
+    | perl -e 'alarm 10; exec @ARGV' bash "$G/pending-nudge.sh" >/dev/null 2>&1
+  echo $?
+}
+n() { # label, stop_hook_active, expected rc
+  rc=$(nudge "$2")
+  [ "$rc" = 142 ] && rc=HUNG
+  if [ "$rc" != "$3" ]; then
+    printf 'FAIL nudge %s: want=%s got=%s\n' "$1" "$3" "$rc"
+    fails=$((fails + 1))
+  fi
+}
+
+reset_state
+n 'nothing pending, nothing to say'            0 0
+post submit_review 0 rev_nudge content
+n 'an unread hunt blocks the end of the turn'  0 2
+# Without this the reminder becomes a session that cannot end: remove the
+# stop_hook_active guard and this row is the one that reddens.
+n 'and never twice in a row'                   1 0
+post get_findings 1 rev_nudge content
+n 'a read hunt is silent'                      0 0
+
+# A record left by a review that died, or by a session that walked away, is not
+# a live hunt — and a nag nobody can satisfy is how a control gets disarmed.
+post submit_review 0 rev_stale content
+touch -t 200001010000 "$(ohmybug_hunt_dir).pending/rev_stale" 2>/dev/null
+n 'a stale pending record does not nag forever' 0 0
+reset_state
+
 # --- the wiring ---------------------------------------------------------------
 # Everything above pipes payloads into the scripts by hand, so the file that
 # decides WHICH events reach them was free to be wrong, half-written or absent —
@@ -1227,6 +1264,12 @@ want = {("PreToolUse", "submit_review"): True,
         ("PostToolUse", "get_findings"): True,
         ("PostToolUse", "confirm_findings"): True}
 bad = [f"{e}/{t}: want {w}, got {fires(e, t)}" for (e, t), w in want.items() if fires(e, t) != w]
+# Stop carries no matcher, so the only thing to assert is that it is wired at
+# all and to the right script: reverting that one line would otherwise leave
+# every row above green while no turn is ever held again.
+if not any("pending-nudge.sh" in k.get("command", "")
+           for e in h.get("Stop", []) for k in e.get("hooks", [])):
+    bad.append("Stop: pending-nudge.sh not wired")
 if bad:
     print("FAIL hooks.json wiring: " + "; ".join(bad))
     sys.exit(1)
