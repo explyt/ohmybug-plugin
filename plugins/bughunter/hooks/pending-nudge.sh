@@ -51,15 +51,24 @@ DIR=$(ohmybug_hunt_dir) || exit 0
 # is NOT optional is the count: truncating in silence, with the anti-loop guard
 # then skipping the next scan, hid the sixth paid hunt in the only message that
 # would have named it — and a session that ends on that turn never reads it
-# (found in review of this hook).
+# (found in review of this hook). ONE constant for both halves: written twice,
+# the cap and the threshold drift, and a message naming one id while claiming
+# one more is hidden is worse than the truncation it replaced.
+CAP=5
+# `.tmp` is stamp-hunt.sh's write-ahead file, and its redirect stays open across
+# several git subprocesses — a hook killed in there leaves the scratch name
+# behind. Echoing it would name a review id no `get_findings` can resolve, so
+# the record could never be cleared and the nag would repeat every turn until
+# the TTL expired: a nag nobody can satisfy is how a control gets disarmed.
 PEND=$(cd "$DIR.pending" 2>/dev/null &&
-  find . -maxdepth 1 -type f -mmin "-${OHMYBUG_PENDING_TTL_MIN:-180}" 2>/dev/null |
+  find . -maxdepth 1 -type f ! -name '*.tmp' \
+    -mmin "-${OHMYBUG_PENDING_TTL_MIN:-180}" 2>/dev/null |
   sed 's|^\./||' | sort)
 [ -n "$PEND" ] || exit 0
 TOTAL=$(printf '%s\n' "$PEND" | grep -c .)
-IDS=$(printf '%s\n' "$PEND" | head -n 5 | tr '\n' ' ')
+IDS=$(printf '%s\n' "$PEND" | head -n "$CAP" | tr '\n' ' ')
 IDS=${IDS% }
-[ "$TOTAL" -gt 5 ] && IDS="$IDS (and $((TOTAL - 5)) more in $DIR.pending)"
+[ "$TOTAL" -gt "$CAP" ] && IDS="$IDS (and $((TOTAL - CAP)) more in $DIR.pending)"
 
 echo "ohmybug: submitted hunt(s) nobody has read: $IDS — do not end the turn waiting" \
      "to be prodded. Call get_findings on each now. If one is still running, arm a" \

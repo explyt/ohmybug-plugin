@@ -1245,11 +1245,27 @@ for i in 1 2 3 4 5 6; do post submit_review 0 "rev_many$i" content; done
 n 'six unread hunts still hold the turn'        0 2
 said=$(python3 -c "import json;print(json.dumps({'hook_event_name':'Stop',
   'stop_hook_active':False,'cwd':'$PWD'}))" | bash "$G/pending-nudge.sh" 2>&1 >/dev/null)
+# The whole rendered list, verbatim, and not a substring per id. The count comes
+# from TOTAL rather than from what `head` kept, so asserting only "and 1 more"
+# left `head -n 5` free to become `head -n 1` — one hunt of six named while the
+# message claims one is hidden, a worse lie than the truncation it replaced, and
+# the suite stayed green on it. Matching each id loosely was no better: it also
+# passes on `./rev_many1`, which is not the string get_findings takes. Both
+# mutations were live at once (found in review of this hook).
 case $said in
-  *'and 1 more'*) ;;
-  *) printf 'FAIL nudge the truncated remainder is not named: %s\n' "$said"
+  *'read: rev_many1 rev_many2 rev_many3 rev_many4 rev_many5 (and 1 more'*) ;;
+  *) printf 'FAIL nudge names the wrong hunts: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
+
+# stamp-hunt.sh writes its pending record through `$PENDING.tmp`, and a hook
+# killed inside that block leaves the scratch name behind. Named at the agent it
+# is a review id get_findings can never resolve, so nothing can clear the record
+# and the turn is held again every turn until the TTL runs out.
+reset_state
+mkdir -p "$(ohmybug_hunt_dir).pending"
+: > "$(ohmybug_hunt_dir).pending/rev_ghost.tmp"
+n 'a write-ahead scratch file is not a pending hunt' 0 0
 
 reset_state
 # A record left by a review that died, or by a session that walked away, is not
