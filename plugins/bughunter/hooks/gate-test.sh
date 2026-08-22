@@ -1207,6 +1207,123 @@ post submit_review 0 '../escaped'
   fails=$((fails + 1)); }
 reset_state
 
+# --- the unread hunt ----------------------------------------------------------
+# A hunt was submitted, the agent polled once, saw `running`, ended its turn and
+# waited to be prodded; both reviews had been done for forty minutes when the
+# user finally asked (owner report, 2026-08-21). These rows pin the end of a
+# turn to the same pending record the gate reads.
+nudge() { # stop_hook_active -> rc
+  python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop',
+    'stop_hook_active':sys.argv[1]=='1','cwd':sys.argv[2]}))" "$1" "$PWD" \
+    | perl -e 'alarm 10; exec @ARGV' bash "$G/pending-nudge.sh" >/dev/null 2>&1
+  echo $?
+}
+n() { # label, stop_hook_active, expected rc
+  rc=$(nudge "$2")
+  [ "$rc" = 142 ] && rc=HUNG
+  if [ "$rc" != "$3" ]; then
+    printf 'FAIL nudge %s: want=%s got=%s\n' "$1" "$3" "$rc"
+    fails=$((fails + 1))
+  fi
+}
+
+reset_state
+n 'nothing pending, nothing to say'            0 0
+post submit_review 0 rev_nudge content
+n 'an unread hunt blocks the end of the turn'  0 2
+# Without this the reminder becomes a session that cannot end: remove the
+# stop_hook_active guard and this row is the one that reddens.
+n 'and never twice in a row'                   1 0
+post get_findings 1 rev_nudge content
+n 'a read hunt is silent'                      0 0
+
+# Six unread hunts, five named: the cap is fine, hiding the remainder is not.
+# The next Stop is suppressed by the anti-loop guard, so this message is the only
+# one that will ever mention the sixth (found in review of this hook).
+reset_state
+for i in 1 2 3 4 5 6; do post submit_review 0 "rev_many$i" content; done
+n 'six unread hunts still hold the turn'        0 2
+said=$(python3 -c "import json;print(json.dumps({'hook_event_name':'Stop',
+  'stop_hook_active':False,'cwd':'$PWD'}))" | bash "$G/pending-nudge.sh" 2>&1 >/dev/null)
+# The whole rendered list, verbatim, and not a substring per id. The count comes
+# from TOTAL rather than from what `head` kept, so asserting only "and 1 more"
+# left `head -n 5` free to become `head -n 1` — one hunt of six named while the
+# message claims one is hidden, a worse lie than the truncation it replaced, and
+# the suite stayed green on it. Matching each id loosely was no better: it also
+# passes on `./rev_many1`, which is not the string get_findings takes. Both
+# mutations were live at once (found in review of this hook).
+case $said in
+  *'read: rev_many1 rev_many2 rev_many3 rev_many4 rev_many5 (and 1 more'*) ;;
+  *) printf 'FAIL nudge names the wrong hunts: %s\n' "$said"
+     fails=$((fails + 1)) ;;
+esac
+
+# Fail-open is the load-bearing property of a hook that runs at the end of every
+# turn: fail closed and no turn can end at all, and nothing the agent does can
+# lift it. Every row above hands it valid JSON, from a real repository, with
+# python3 on PATH — so a fail-closed mutation in any of these three branches
+# shipped green (found in review of this hook). Each row keeps a LIVE pending
+# record, so only the branch under test can be what stands the hook down.
+reset_state
+post submit_review 0 rev_open content
+nrc() { # stdin -> rc, with an optional PATH prefix in $1. cwd travels in the
+        # PAYLOAD (see sj), not here: a comment promising a parameter the body
+        # never reads is how the next row silently runs against the wrong tree.
+  rc=$(PATH="${1:-}$PATH" perl -e 'alarm 10; exec @ARGV' \
+       bash "$G/pending-nudge.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 142 ] && rc=HUNG
+  printf '%s' "$rc"
+}
+no() { # label, expected rc, actual rc
+  [ "$3" = "$2" ] || { printf 'FAIL nudge %s: want=%s got=%s\n' "$1" "$2" "$3"
+                       fails=$((fails + 1)); }
+}
+sj() { # cwd -> one Stop payload, on one line: a payload split over two lines
+       # inside a nested command substitution reached python3 mangled.
+  python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop',
+'stop_hook_active':False,'cwd':sys.argv[1]}))" "$1"
+}
+no 'unreadable input stands down' 0 "$(printf 'not json at all' | nrc)"
+
+NOPY2=$(mktemp -d)
+printf '#!/bin/sh\nexit 1\n' > "$NOPY2/python3"; chmod +x "$NOPY2/python3"
+no 'no python3 stands down' 0 "$(sj "$PWD" | nrc "$NOPY2:")"
+rm -rf "$NOPY2"
+
+OUTSIDE=$(mktemp -d)
+no 'no repository stands down' 0 "$(sj "$OUTSIDE" | nrc)"
+rmdir "$OUTSIDE"
+reset_state
+
+# The TTL's own default, at an age no other row occupies. Every record above is
+# either seconds old or stamped in the year 2000, so `-mmin -180` could shrink to
+# `-mmin -1` and ship green — landing exactly on the incident in this hook's
+# header, where the hunts had been sitting for forty minutes (found in review of
+# this hook).
+reset_state
+post submit_review 0 rev_aged content
+touch -t "$(python3 -c 'import time;print(time.strftime("%Y%m%d%H%M",
+  time.localtime(time.time() - 90 * 60)))')" \
+  "$(ohmybug_hunt_dir).pending/rev_aged" 2>/dev/null
+n 'a 90-minute-old hunt is still unread'         0 2
+
+# stamp-hunt.sh writes its pending record through `$PENDING.tmp`, and a hook
+# killed inside that block leaves the scratch name behind. Named at the agent it
+# is a review id get_findings can never resolve, so nothing can clear the record
+# and the turn is held again every turn until the TTL runs out.
+reset_state
+mkdir -p "$(ohmybug_hunt_dir).pending"
+: > "$(ohmybug_hunt_dir).pending/rev_ghost.tmp"
+n 'a write-ahead scratch file is not a pending hunt' 0 0
+
+reset_state
+# A record left by a review that died, or by a session that walked away, is not
+# a live hunt — and a nag nobody can satisfy is how a control gets disarmed.
+post submit_review 0 rev_stale content
+touch -t 200001010000 "$(ohmybug_hunt_dir).pending/rev_stale" 2>/dev/null
+n 'a stale pending record does not nag forever' 0 0
+reset_state
+
 # --- the wiring ---------------------------------------------------------------
 # Everything above pipes payloads into the scripts by hand, so the file that
 # decides WHICH events reach them was free to be wrong, half-written or absent —
@@ -1227,6 +1344,12 @@ want = {("PreToolUse", "submit_review"): True,
         ("PostToolUse", "get_findings"): True,
         ("PostToolUse", "confirm_findings"): True}
 bad = [f"{e}/{t}: want {w}, got {fires(e, t)}" for (e, t), w in want.items() if fires(e, t) != w]
+# Stop carries no matcher, so the only thing to assert is that it is wired at
+# all and to the right script: reverting that one line would otherwise leave
+# every row above green while no turn is ever held again.
+if not any("pending-nudge.sh" in k.get("command", "")
+           for e in h.get("Stop", []) for k in e.get("hooks", [])):
+    bad.append("Stop: pending-nudge.sh not wired")
 if bad:
     print("FAIL hooks.json wiring: " + "; ".join(bad))
     sys.exit(1)
