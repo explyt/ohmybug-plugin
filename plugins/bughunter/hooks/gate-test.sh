@@ -1258,6 +1258,41 @@ case $said in
      fails=$((fails + 1)) ;;
 esac
 
+# Fail-open is the load-bearing property of a hook that runs at the end of every
+# turn: fail closed and no turn can end at all, and nothing the agent does can
+# lift it. Every row above hands it valid JSON, from a real repository, with
+# python3 on PATH — so a fail-closed mutation in any of these three branches
+# shipped green (found in review of this hook). Each row keeps a LIVE pending
+# record, so only the branch under test can be what stands the hook down.
+reset_state
+post submit_review 0 rev_open content
+nrc() { # stdin -> rc, with an optional PATH prefix in $1 and cwd in $2
+  rc=$(PATH="${1:-}$PATH" perl -e 'alarm 10; exec @ARGV' \
+       bash "$G/pending-nudge.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 142 ] && rc=HUNG
+  printf '%s' "$rc"
+}
+no() { # label, expected rc, actual rc
+  [ "$3" = "$2" ] || { printf 'FAIL nudge %s: want=%s got=%s\n' "$1" "$2" "$3"
+                       fails=$((fails + 1)); }
+}
+sj() { # cwd -> one Stop payload, on one line: a payload split over two lines
+       # inside a nested command substitution reached python3 mangled.
+  python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop',
+'stop_hook_active':False,'cwd':sys.argv[1]}))" "$1"
+}
+no 'unreadable input stands down' 0 "$(printf 'not json at all' | nrc)"
+
+NOPY2=$(mktemp -d)
+printf '#!/bin/sh\nexit 1\n' > "$NOPY2/python3"; chmod +x "$NOPY2/python3"
+no 'no python3 stands down' 0 "$(sj "$PWD" | nrc "$NOPY2:")"
+rm -rf "$NOPY2"
+
+OUTSIDE=$(mktemp -d)
+no 'no repository stands down' 0 "$(sj "$OUTSIDE" | nrc)"
+rmdir "$OUTSIDE"
+reset_state
+
 # stamp-hunt.sh writes its pending record through `$PENDING.tmp`, and a hook
 # killed inside that block leaves the scratch name behind. Named at the agent it
 # is a review id get_findings can never resolve, so nothing can clear the record
