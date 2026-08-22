@@ -802,11 +802,16 @@ ANC=$(git -C "$AREPO" rev-parse HEAD)
 printf 'never reviewed\n' >> "$AREPO/a.ts"
 # The one diagnostic that explains an unrecordable hunt must actually fire:
 # a silent non-recording is indistinguishable from a hunt that never ran.
-out=$(ppost submit_review running "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)" 2>&1 >/dev/null)
+out=$(ppost submit_review running "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)" 2>&1 >/dev/null); rc=$?
 case "$out" in
   *"cannot be recorded"*) ;;
   *) printf 'FAIL a foreign-ref submit did not say it recorded nothing: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
+# ...and says it where the AGENT reads it. At exit 0 a PostToolUse hook's output
+# reaches the transcript and not the model, so this diagnostic existed for a
+# year and was never once seen by the party that could act on it.
+[ "$rc" = 2 ] || { printf 'FAIL the unrecordable submit told only the transcript (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
 ppost get_findings done "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)"
 ppost submit_review running "$AREPO" "" rev_anc "$ANC" >/dev/null 2>&1
 ppost get_findings done "$AREPO" "" rev_anc "$ANC"
@@ -977,11 +982,13 @@ out=$(python3 -c "import json,sys;print(json.dumps({
     'meta':{'repo':'x/y','ref':sys.argv[1]}},
   'tool_response':{'content':[{'type':'text','text':json.dumps(
      {'review_id':'rev_up','status':'running'})}]},
-  'cwd':sys.argv[2]}))" "$(git -C "$UREPO" rev-parse HEAD)" "$UREPO" | bash "$G/stamp-hunt.sh" 2>/dev/null)
+  'cwd':sys.argv[2]}))" "$(git -C "$UREPO" rev-parse HEAD)" "$UREPO" | bash "$G/stamp-hunt.sh" 2>/dev/null); rc=$?
 case "$out" in
   *"cannot verify them against this tree"*) ;;
   *) printf 'FAIL an out-of-band upload from a dirty tree was filed silently: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
+[ "$rc" = 2 ] || { printf 'FAIL the out-of-band warning told only the transcript (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
 ppost get_findings done "$UREPO" "" rev_up
 rc=$(mk "$V" "$UREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL out-of-band bytes credited the dirty tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
@@ -1006,6 +1013,23 @@ git -C "$UREPO" add -N README.md 2>/dev/null
 rc=$(mk "$V" "$UREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL an upload laundered tree ids through a clean checkout (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$UREPO")"
+
+# A promotion that finds no pending record is TWO different facts, and the hook
+# cannot tell them apart: another session owns the submit (fine, it will record
+# it), or the submitting session is standing in a different checkout, in which
+# case the hunt is paid for, the promotion no-ops, and the gate blocks a diff
+# that was reviewed. That happened, and it was caught by hand at merge time
+# (owner report, 2026-08-22). The agent can tell them apart — if it is told.
+reset_state
+out=$(ppost get_findings done "$PWD" "" rev_ghostpromote 2>&1 >/dev/null); rc=$?
+[ "$rc" = 2 ] || { printf 'FAIL a promotion that found no record was silent (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+case "$out" in
+  *"no local record of rev_ghostpromote"*"$PWD"*) ;;
+  *) printf 'FAIL the promote miss named neither the review nor the directory: %s\n' "$out"
+     fails=$((fails + 1)) ;;
+esac
+reset_state
 
 # The honest full payload, in the OTHER spelling: a client that pipes
 # `git diff` verbatim sends the trailing newline that command substitution
