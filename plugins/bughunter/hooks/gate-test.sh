@@ -1266,7 +1266,9 @@ esac
 # record, so only the branch under test can be what stands the hook down.
 reset_state
 post submit_review 0 rev_open content
-nrc() { # stdin -> rc, with an optional PATH prefix in $1 and cwd in $2
+nrc() { # stdin -> rc, with an optional PATH prefix in $1. cwd travels in the
+        # PAYLOAD (see sj), not here: a comment promising a parameter the body
+        # never reads is how the next row silently runs against the wrong tree.
   rc=$(PATH="${1:-}$PATH" perl -e 'alarm 10; exec @ARGV' \
        bash "$G/pending-nudge.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 142 ] && rc=HUNG
@@ -1292,6 +1294,18 @@ OUTSIDE=$(mktemp -d)
 no 'no repository stands down' 0 "$(sj "$OUTSIDE" | nrc)"
 rmdir "$OUTSIDE"
 reset_state
+
+# The TTL's own default, at an age no other row occupies. Every record above is
+# either seconds old or stamped in the year 2000, so `-mmin -180` could shrink to
+# `-mmin -1` and ship green — landing exactly on the incident in this hook's
+# header, where the hunts had been sitting for forty minutes (found in review of
+# this hook).
+reset_state
+post submit_review 0 rev_aged content
+touch -t "$(python3 -c 'import time;print(time.strftime("%Y%m%d%H%M",
+  time.localtime(time.time() - 90 * 60)))')" \
+  "$(ohmybug_hunt_dir).pending/rev_aged" 2>/dev/null
+n 'a 90-minute-old hunt is still unread'         0 2
 
 # stamp-hunt.sh writes its pending record through `$PENDING.tmp`, and a hook
 # killed inside that block leaves the scratch name behind. Named at the agent it

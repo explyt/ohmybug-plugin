@@ -39,12 +39,18 @@ ACTIVE=$(printf '%s' "$FIELDS" | sed -n 1p)
 CWD=$(printf '%s' "$FIELDS" | sed -n 2p)
 
 [ "${ACTIVE:-1}" = '0' ] || exit 0
-[ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
-
+# Source BEFORE the cd, because `$0` is only absolute by convention (hooks.json
+# passes ${CLAUDE_PLUGIN_ROOT}): invoked by a relative path, the sourcing would
+# fail after the cd and the hook would stand down silently on every turn.
 . "$(dirname "$0")/diff-id.sh" 2>/dev/null || exit 0
+
+[ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
 DIR=$(ohmybug_hunt_dir) || exit 0
 
-# The same TTL the gate reads pending records with, for the same reason: a
+# The same TTL the gate reads pending records with — the variable diff-id.sh set
+# when it was sourced, not a second default here. A fallback that can never fire
+# reads as the live number and two reviewers in a row aimed a mutation at it. And
+# the reason is the gate's: a
 # review that ended `failed`, or a session that walked away, leaves a record
 # behind, and a permanent record would nag forever with no way to satisfy it.
 # Five ids is a reminder; a hundred would be a wall of text nobody reads. What
@@ -67,7 +73,7 @@ CAP=5
 # if ids ever gain a dot, this line is the one to revisit.
 PEND=$(cd "$DIR.pending" 2>/dev/null &&
   find . -maxdepth 1 -type f ! -name '*.tmp' \
-    -mmin "-${OHMYBUG_PENDING_TTL_MIN:-180}" 2>/dev/null |
+    -mmin "-$OHMYBUG_PENDING_TTL_MIN" 2>/dev/null |
   sed 's|^\./||' | sort)
 [ -n "$PEND" ] || exit 0
 TOTAL=$(printf '%s\n' "$PEND" | grep -c .)
