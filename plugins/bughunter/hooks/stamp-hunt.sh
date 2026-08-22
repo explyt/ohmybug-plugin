@@ -260,15 +260,17 @@ case "$TOOL" in
         MSG="ohmybug: the uploaded bytes go out of band, so the merge gate cannot verify them against this tree and will still block — to record the hunt, send the full working diff inline, or commit, push, and submit with meta.ref = the pushed head sha"
         echo "$MSG" >&2
         echo "$MSG"
+        exit 2
       fi
     else
       rm -f "$PENDING.tmp"
       # Nothing identifiable was sent. Say so: this used to exit silently, and a
       # silent non-recording is indistinguishable from a hunt that never ran —
       # which is how the gate came to accuse work that had been reviewed.
-      MSG="ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on, so this hunt cannot be recorded; the merge gate will not see it"
+      MSG="ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on (cwd $PWD), so this hunt cannot be recorded; the merge gate will not see it"
       echo "$MSG" >&2
       echo "$MSG"
+      exit 2
     fi
     ;;
   get_findings|confirm_findings)
@@ -296,7 +298,20 @@ case "$TOOL" in
       # No pending: another session owns the submit. Never hash this cwd: in a
       # worktree flow it may be a different checkout and would bless the wrong
       # diff. The owning session will promote the recorded payload.
-      exit 0
+      #
+      # But SAY it, and name the directory, because the other reading of this
+      # branch is the expensive one: the session that did submit is standing in
+      # a different checkout, so the promotion silently no-ops and the gate then
+      # blocks a diff that was hunted and paid for (owner report, 2026-08-22).
+      # The hook cannot tell the two apart — the agent can, and only if it is
+      # told. exit 2 is what puts stderr in front of it; the call has already
+      # run, so nothing is blocked.
+      # stderr only, unlike the submit-path diagnostics: this branch fires
+      # legitimately whenever another worktree owns the review, and exit 2
+      # already puts stderr in front of the agent. A second copy on stdout would
+      # buy nothing and print twice in every multi-worktree flow.
+      echo "ohmybug: no local record of $REVIEW in $PWD, so nothing was promoted and the merge gate will not see this hunt. If THIS session submitted it, the submit ran from another checkout: re-run get_findings from the worktree the diff lives in. If another session owns it, that one will record it — ignore this." >&2
+      exit 2
     fi
     ;;
 esac
