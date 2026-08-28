@@ -278,7 +278,27 @@ state; it reaches you only for paths the server could not fetch — a private
 repo without the App, a generated file, or a path that does not exist at
 that ref. Never read source into your own context just to echo it back when
 the server already has access; check the `requested_files` list against what
-is actually unavailable to it. Within ~10 minutes:
+is actually unavailable to it.
+
+**Answer it as the FIRST action of the turn.** The request is held open for a
+few minutes only, and the hold is not our time: while the reviewers wait for a
+file they are not hunting, and the customer paid for the hunting. So
+`provide_files` comes before anything else — before investigating what the
+request implies, before fixing what it made you notice, before tidying the file
+they asked about. Measured, on this project's own review: the monitor woke on
+`needs_files` on time, the agent spent the window gathering and improving
+instead of sending, and `provide_files` came back `no_pending_request` — the
+review finished without the files, on a diff nobody could fully read. Send
+first; a partial or empty answer beats a late one, and whatever you noticed
+while looking is still there afterwards.
+
+A path the request names may not exist at all — the reviewers see only the diff
+in the light hunt, so some names are guesses. Do not go looking for a plausible
+substitute and do not rename anything: send what exists, leave out what does
+not, and let the reason text tell you which files actually matter (it often
+names more than the machine-readable list).
+
+Within that window:
 
 1. Read the requested paths that exist locally. Apply the SAME exclusion
    rules as step 2 (no `.env*`, secrets, credentials, gitignored files).
