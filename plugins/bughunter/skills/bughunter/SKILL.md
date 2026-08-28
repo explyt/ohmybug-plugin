@@ -321,6 +321,13 @@ back empty.
   its `how`: call `submit_review` again with `deep: "<review_id>"` and the
   same `meta` — the server re-fetches the diff, so you send no payload. If
   it carries `install_url`, the App install is the missing step first.
+- **Arm the monitor for the deep hunt too, and give the user the
+  `review_id`.** The hour is exactly how long it takes to forget: the deep run
+  needs no files from you, so nothing prods you mid-run, and an agent that
+  armed a monitor for every 15-minute light pass will skip it on the one run
+  that waits four times as long. Then the user paid an hour of attention for a
+  result nobody read. Tell them in chat that it is running and name the
+  `review_id`, so they can ask for it later even if you lost the thread.
 - Escalation errors are final answers, not retry conditions:
   `deep_at_capacity` (tell the user the light result stands, deep can be
   tried later), `repo_too_big` (send context files instead),
@@ -403,15 +410,23 @@ their behalf: the post is public and carries their GitHub handle.
   the post; the lesson is why they keep it. Write both ONCE, to these budgets —
   "at most 3 lines" is not a length, and drafts written to it had to be
   shortened twice by hand (owner, 2026-08-11):
-  - `text` — exactly **2 sentences, ≤320 characters**. First: the trap,
+  - **English only**, always — the feed is one public wall, and a post in the
+    chat's language is unreadable to most of it. Translate, never
+    transliterate: the server refuses any letter outside the Latin script
+    (accents are fine: naïve, façade).
+  - `text` — exactly **2 sentences, ≤220 characters**. First: the trap,
     concretely. Second: what happens when it fires.
-  - `lesson` — up to **3 rules, one line each, ≤340 characters total**:
+  - `lesson` — up to **2 rules, one line each, ≤200 characters total**:
     **bold imperative rule** then half a sentence of why. Each line must be
     pasteable into someone else's guidelines unchanged.
-  - Voice: plain short words, active, present tense. No hedging, no filler, no
-    adverbs holding up a weak verb. Name the failure so the reader sees it
-    happen. `share.format` carries a worked example at exactly this length —
-    match its register, don't invent your own.
+  - Voice: the 1000 most common English words, short sentences, active,
+    present tense — a non-native reader gets it in one pass with no
+    dictionary. No hedging, no filler, no adverbs holding up a weak verb, no
+    long Latin noun where a plain verb fits ("check", not "verification").
+    Name the failure so the reader sees it happen. `share.format` carries a
+    worked example at exactly this length — match its register, don't invent
+    your own. These budgets are what the server ENFORCES, not what it prefers:
+    a longer draft is refused and the user has to approve a second one.
 - **Anonymise it, unasked.** The reader has no context on this project and
   must learn nothing private from it: no repo or company name, no file paths,
   no route or endpoint names, no vendor names, no URLs, no PR/ticket numbers,
@@ -498,8 +513,33 @@ line and stop; the person reading has the hatch, and it is theirs to use.
      their place in the queue (accounts open in waves), that codes ride the
      links handed out at x.com/ohmybug, and that hi@ohmybug.ai asks for one
      directly. Then stop gracefully.
-- `payment_required` from any tool: credits are exhausted. Tell the user to
-  top up at https://app.ohmybug.ai/billing and stop the flow gracefully.
+- `payment_required` from `submit_review`: credit is exhausted, and the
+  refusal message already carries the payment links for THIS account. **Show
+  the user those URLs verbatim** — they are per-account (the account id is
+  baked in so the payment lands on the right balance), so never retype one,
+  never strip its query string, and never send the user to a page you
+  remember instead. Show the credit terms that come with them, then stop the
+  flow gracefully; nothing was charged. When the user says they have paid,
+  retry `submit_review` — the payment webhook credits the balance in seconds.
+- The same links reach you two other ways, with the same rule: `buy` +
+  `buy_terms` on `get_balance` (present only when the balance cannot pay for
+  the next catch), and `buy` + `buy_terms` + `out_of_credit` on
+  `confirm_findings` — that one is the useful one, because it warns at the end
+  of the hunt that the NEXT one will be refused. Pass `out_of_credit` on to
+  the user with the links; do not wait for the refusal to arrive.
+- `buy` rows are `{what, usd, url}`. Show them all and let the user choose;
+  the subscription row's `what` says to append `&threads=N` — quote it, do not
+  build the URL yourself.
+- A refusal for `budget_exhausted` is NOT a money problem: it is a daily spend
+  ceiling. Never offer payment links for it — topping up does not lift it.
+- `get_balance` also answers "what do you charge" without anyone running out:
+  `prices` is what is on sale and what it costs, `recent_movements` is the
+  last few charges and top-ups, and `manage_billing` is a short-lived link to
+  the payment provider's own page (invoices, receipts, card, and for a
+  subscriber the thread count and cancellation). Read prices from there rather
+  than from memory, and give the user every `manage_billing` link there is:
+  more than one means more than one subscription is being billed, and each
+  page manages only its own.
 - First 3 bug-finding reviews are free; no card is required until they are
   used. `/bughunter:stats` (or `get_balance`) shows the full hunting record.
 
