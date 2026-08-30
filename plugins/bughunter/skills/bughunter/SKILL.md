@@ -455,7 +455,10 @@ their behalf: the post is public and carries their GitHub handle.
   refuses posts containing paths, URLs, repo slugs or ticket numbers — but
   the vendor and the domain it cannot detect, so that part is on you.
 - Show the user `share.show_progress` as-is — the star row (`★★★☆☆ 3/5`) says
-  how close they are to a free review without making them do arithmetic.
+  how close they are to a free review without making them do arithmetic. The
+  stars count published stories, not bugs. When `share.earned_unclaimed` is
+  above 1 the row stops moving (it is full, and "to go" is zero); the count is
+  then the only thing that has changed, and each post claims exactly one.
 - Show the exact text and wait for a yes. Then publish with **`share.how`**,
   which carries a one-time URL:
 
@@ -484,8 +487,11 @@ their behalf: the post is public and carries their GitHub handle.
   the public leaderboard ranks by, and an inflated number is the one thing
   that would make the whole board worthless.
 - `share.earns_free_review: true` means this post makes their next
-  bug-finding review free — say so plainly, it is true. When it is false,
-  `next_free_at_bug` says how many bugs away it is; mention it once, do not
+  bug-finding review free — say so plainly, it is true. A free hunt is earned
+  by five PUBLISHED stories about hunts that found something, not by the bugs
+  themselves, so the field is about the story they are being offered: publish
+  it and the next hunt is free. When it is false, `next_free_at_bug` says how
+  many more stories away it is; mention it once, do not
   push.
 - A "no" is final. Never post without approval, never re-ask in the same
   session.
