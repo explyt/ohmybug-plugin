@@ -61,8 +61,9 @@ Codex uses the same GitHub OAuth flow as Claude Code:
 ```bash
 npx skills add explyt/ohmybug-plugin --skill bughunter
 codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp
-codex mcp login ohmybug
 ```
+
+`codex mcp add` detects OAuth and opens the GitHub sign-in flow automatically.
 
 For headless CI, use an operator-issued raw `omb_` key — write to
 [hi@ohmybug.ai](mailto:hi@ohmybug.ai) or DM [@ohmybug](https://x.com/ohmybug)
