@@ -83,6 +83,28 @@ OHMYBUG_SKIP_GLOBS="
 :(top,exclude,glob)**/skills/**
 "
 
+# ...except the tests that ARE the control.
+#
+# A test is skipped above because a test cannot change what the software does.
+# That is true of a test OF behaviour and false of a test that IS a gate: the
+# verdict enumeration, the gate's own self-test, the money guards. Measured on a
+# live case: a hunt found that `verdict.test.ts` promised to enumerate every
+# retraction branch and counted its own array instead; the fix lives in that
+# file, `sig:` skipped it, and the gate answered `hunt: current` for bytes no
+# hunt had seen (exply-dev/OhMyBug#451). So the cheap path was blind to exactly
+# the class of fix reviewers ask for when they find a hollow control.
+#
+# Names, not a pattern, and deliberately: a pattern over "looks like a control"
+# is the same guessing this list exists to avoid, and a wrong guess here makes
+# the gate demand money for a typo. The list is small because control oracles
+# are few; when one is added, this line is the one to revisit.
+OHMYBUG_CONTROL_GLOBS="
+:(top,glob)**/verdict.test.*
+:(top,glob)**/gate-test.sh
+:(top,glob)**/platform-money.test.*
+:(top,glob)**/money*.test.*
+"
+
 # exit 0 + a hash -> this is the part of the diff a hunt would speak about
 # exit 0 + nothing -> nothing here can change behaviour; there is nothing to hunt
 # exit 1          -> cannot tell (same as ohmybug_diff_id)
@@ -99,7 +121,14 @@ ohmybug_sig_id() {
   # record what cwd-dependent identity costs.
   #
   # Unquoted on purpose: each line of the list is one pathspec argument.
+  # TWO diffs, concatenated, because git pathspec cannot re-include what an
+  # exclude removed: the first is everything that can change behaviour, the
+  # second is the controls the first list threw away with the tests. Order is
+  # fixed (skip-list first) so the same tree always hashes the same way.
+  local controls
   diff=$(git diff "$base" -- $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
+  controls=$(git diff "$base" -- $OHMYBUG_CONTROL_GLOBS 2>/dev/null) || return 1
+  diff="$diff$controls"
   [ -n "$diff" ] || return 0
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
 }
