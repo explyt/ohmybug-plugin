@@ -129,8 +129,12 @@ MANIFESTS=(
 # The N in the working tree's own manifest, or nothing if it does not carry one
 # in our shape.
 current_n() {
+  manifest_n "${MANIFESTS[0]}"
+}
+
+manifest_n() { # file
   local v
-  v=$(read_version "${MANIFESTS[0]}" 2>/dev/null) || return 1
+  v=$(read_version "$1" 2>/dev/null) || return 1
   case "$v" in
     0.*.0) v=${v#0.}; printf '%s' "${v%.0}" ;;
     *) return 1 ;;
@@ -203,11 +207,29 @@ case "${1:-}" in
     # told to stamp a release it does not contain.
     base=$(git merge-base "$ref" HEAD) || base=$ref
     if ! git diff --quiet "$base" -- plugins/; then
-      n=$(current_n) || n=""
-      if ! [ "${n:-0}" -gt "$pub" ] 2>/dev/null; then
-        echo "this branch changes plugins/, so it is a release, but 0.${n:-?}.0 is not newer than the 0.$pub.0 already published — run scripts/version.sh --write" >&2
-        bad=1
-      fi
+      # Every plugin manifest is independently consumed by a marketplace. A
+      # stale secondary manifest is a silent no-update for that client even
+      # when the primary manifest is newer.
+      for m in "${MANIFESTS[@]}"; do
+        [ -f "$m" ] || continue
+        if ! raw=$(read_version "$m" 2>/dev/null); then
+          echo "this branch changes plugins/, but $m has no readable release version — run scripts/version.sh --write" >&2
+          bad=1
+          continue
+        fi
+        # The marketplace manifest is also rewritten by --write but has no
+        # version of its own; only manifests that actually carry one are gates.
+        [ -n "$raw" ] || continue
+        n=$(manifest_n "$m") || {
+          echo "this branch changes plugins/, but $m has an invalid release version — run scripts/version.sh --write" >&2
+          bad=1
+          continue
+        }
+        if ! [ "$n" -gt "$pub" ] 2>/dev/null; then
+          echo "this branch changes plugins/, so $m carries 0.$n.0, not newer than the 0.$pub.0 already published — run scripts/version.sh --write" >&2
+          bad=1
+        fi
+      done
     fi
     # On the main ref itself there is no merge base to measure against, so the
     # only question left is one of ORDER: has anything under plugins/ moved
@@ -251,10 +273,11 @@ case "${1:-}" in
     # a commit under plugins/ that leaves the manifest alone must be caught,
     # and writing the version must clear it.
     repo=$tmp/repo
-    mkdir -p "$repo/plugins/bughunter/.claude-plugin"
+    mkdir -p "$repo/plugins/bughunter/.claude-plugin" "$repo/plugins/bughunter/.codex-plugin"
     git -C "$repo" init -q -b main
     gitc() { git -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
     printf '{"version":"0.1.0"}\n' > "$repo/plugins/bughunter/.claude-plugin/plugin.json"
+    printf '{"version":"0.1.0"}\n' > "$repo/plugins/bughunter/.codex-plugin/plugin.json"
     gitc add -A; gitc commit -qm one
     echo hook > "$repo/plugins/bughunter/hooks.sh"
     gitc add -A; gitc commit -qm two
@@ -264,6 +287,16 @@ case "${1:-}" in
     gitc add -A; gitc commit -qm three
     rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
     [ "$rc" = 0 ] || { echo "self-test: --check still failing after a version write (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
+
+    # Every client manifest must advance with the release. A stale Codex
+    # manifest used to pass because current_n only read the Claude one.
+    write_version "$repo/${MANIFESTS[1]}" "0.1.0" >/dev/null
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || { echo "self-test: --check passed a stale Codex manifest" >&2; rm -rf "$tmp"; exit 1; }
+    claude_manifest_version=$(read_version "$repo/${MANIFESTS[0]}")
+    write_version "$repo/${MANIFESTS[1]}" "$claude_manifest_version" >/dev/null
+    rc=0; (cd "$repo" && bash "$SELF" --check) >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "self-test: --check still failing after refreshing every manifest (rc=$rc)" >&2; rm -rf "$tmp"; exit 1; }
 
     # The squash case, driven end to end, because it is the one that shipped a
     # red main: a branch LONGER than the squash it becomes must still stamp the
