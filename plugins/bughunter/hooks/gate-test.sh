@@ -1316,6 +1316,85 @@ case $said in
      fails=$((fails + 1)) ;;
 esac
 
+# --- whose hunt is it -------------------------------------------------------
+# Ten foreign runs woke non-owners in one shift, one of them seven times, and a
+# session in the middle of that was preparing to merge on "I am waiting for a
+# clean hunt" that was never its hunt (#444). The record now carries who wrote
+# it, so these rows pin the three states apart: mine, nobody's, somebody else's.
+sess() { # tool, done?, review id, session id -> runs stamp-hunt.sh with a session
+  OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
+  python3 -c "import json,os,sys;
+body={'review_id':sys.argv[3],'status':'done' if sys.argv[2]=='1' else 'running'}
+print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'review_id':sys.argv[3],'diff':os.environ.get('OMB_DIFF','')},
+    'tool_response':{'content':[{'type':'text','text':json.dumps(body)}]},
+    'session_id':sys.argv[4],
+    'cwd':sys.argv[5]}))" "$1" "$2" "$3" "$4" "$PWD" \
+  | bash "$G/stamp-hunt.sh"
+}
+nsess() { # stop_hook_active, session id -> rc, and the message on stdout
+  python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop',
+    'stop_hook_active':sys.argv[1]=='1','session_id':sys.argv[2],'cwd':sys.argv[3]}))" \
+    "$1" "$2" "$PWD" \
+    | perl -e 'alarm 10; exec @ARGV' bash "$G/pending-nudge.sh" 2>&1 >/dev/null
+}
+nsrc() { # stop_hook_active, session id -> rc only
+  python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop',
+    'stop_hook_active':sys.argv[1]=='1','session_id':sys.argv[2],'cwd':sys.argv[3]}))" \
+    "$1" "$2" "$PWD" \
+    | perl -e 'alarm 10; exec @ARGV' bash "$G/pending-nudge.sh" >/dev/null 2>&1
+  echo $?
+}
+
+reset_state
+sess submit_review 0 rev_mine A1
+sess submit_review 0 rev_theirs B2
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: my own unread hunt did not hold the turn (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+mysaid=$(nsess 0 A1)
+case $mysaid in
+  *rev_mine*) ;;
+  *) printf 'FAIL nudge: my own hunt was not named: %s\n' "$mysaid"; fails=$((fails + 1)) ;;
+esac
+# The whole point: the id belonging to another session is NOT named, and there is
+# no instruction attached to it. Naming ids a session cannot promote is what
+# taught agents to skip this line.
+case $mysaid in
+  *rev_theirs*) printf 'FAIL nudge: another session hunt was named to me: %s\n' "$mysaid"
+                fails=$((fails + 1)) ;;
+esac
+case $mysaid in
+  *'1 unread hunt(s) here belong to other sessions'*) ;;
+  *) printf 'FAIL nudge: the foreign count went missing: %s\n' "$mysaid"; fails=$((fails + 1)) ;;
+esac
+# Nothing of C3's own is pending, so the turn is NOT held — but it is told, once,
+# without ids and without a call to make.
+rc=$(nsrc 0 C3)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a session with nothing of its own was blocked (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+csaid=$(nsess 0 C3)
+case $csaid in
+  *'belong to other sessions on this machine'*) ;;
+  *) printf 'FAIL nudge: a foreign-only pending set said nothing: %s\n' "$csaid"
+     fails=$((fails + 1)) ;;
+esac
+case $csaid in
+  *rev_mine*|*rev_theirs*) printf 'FAIL nudge: foreign ids were named anyway: %s\n' "$csaid"
+                           fails=$((fails + 1)) ;;
+esac
+# A record with NO session line is UNKNOWN, never foreign: the client may not
+# send the field, and the id's stability across compaction and --resume is not
+# documented anywhere. Dropping it would trade a nudge that woke the wrong
+# session for a nudge that never comes — silence about a hunt somebody paid for,
+# which is the worse of the two failures.
+reset_state
+post submit_review 0 rev_nosession content
+rc=$(nsrc 0 D4)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: a record with no owner was dropped instead of shown (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+
 # Fail-open is the load-bearing property of a hook that runs at the end of every
 # turn: fail closed and no turn can end at all, and nothing the agent does can
 # lift it. Every row above hands it valid JSON, from a real repository, with
