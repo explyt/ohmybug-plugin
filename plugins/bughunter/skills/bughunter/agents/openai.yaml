@@ -1,0 +1,4 @@
+interface:
+  display_name: "OhMyBug Bughunter"
+  short_description: "Cloud bug hunt before merge"
+  default_prompt: "Run the OhMyBug cloud hunt on this diff and return server-backed merge evidence."

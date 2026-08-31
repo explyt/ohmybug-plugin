@@ -122,6 +122,7 @@ compute() {
 
 MANIFESTS=(
   "plugins/bughunter/.claude-plugin/plugin.json"
+  "plugins/bughunter/.codex-plugin/plugin.json"
   ".claude-plugin/marketplace.json"
 )
 
