@@ -5,14 +5,15 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ROUTER="$ROOT/hooks/codex-router.js"
 CONFIG="$ROOT/hooks/claude-codex-hooks.json"
 MANIFEST="$ROOT/.codex-plugin/plugin.json"
+MCP="$ROOT/.codex-mcp.json"
 MARKETPLACE="$ROOT/../../.agents/plugins/marketplace.json"
 
-python3 - "$ROUTER" "$CONFIG" "$MANIFEST" "$MARKETPLACE" <<'PY'
+python3 - "$ROUTER" "$CONFIG" "$MANIFEST" "$MCP" "$MARKETPLACE" <<'PY'
 import json
 import subprocess
 import sys
 
-router, config, manifest, marketplace = sys.argv[1:]
+router, config, manifest, mcp, marketplace = sys.argv[1:]
 
 def run(event, payload=None):
     proc = subprocess.run(
@@ -43,8 +44,10 @@ hooks = json.load(open(config, encoding="utf-8"))["hooks"]
 assert all(event in hooks for event in ("SessionStart", "UserPromptSubmit", "SubagentStart"))
 plugin = json.load(open(manifest, encoding="utf-8"))
 assert plugin["skills"] == "./skills/"
-assert plugin["mcpServers"] == "./.mcp.json"
+assert plugin["mcpServers"] == "./.codex-mcp.json"
 assert plugin["hooks"] == "./hooks/claude-codex-hooks.json"
+codex_mcp = json.load(open(mcp, encoding="utf-8"))
+assert codex_mcp == {"ohmybug": {"type": "http", "url": "https://mcp.ohmybug.ai/mcp"}}
 market = json.load(open(marketplace, encoding="utf-8"))
 entry = market["plugins"][0]
 assert entry["source"]["path"] == "./plugins/bughunter"
