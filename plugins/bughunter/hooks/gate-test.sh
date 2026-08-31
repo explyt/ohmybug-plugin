@@ -659,6 +659,40 @@ rc=$(mk "$V" "$SUBREPO/api" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL merging from a subdirectory hid unhunted code (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$SUBREPO")"
 
+# A test that IS a control is not skippable, though a test OF behaviour is.
+#
+# Measured case (exply-dev/OhMyBug#451): a hunt found that the verdict
+# enumeration test promised to cover every branch and counted its own array
+# instead. The fix for that finding lives in that test file — and `sig:` skipped
+# it, so the gate answered "hunt: current" for bytes no hunt had seen. The cheap
+# path was blind to exactly the class of fix a reviewer asks for after finding a
+# hollow control.
+CTLREPO=$(mktemp -d)/repo
+mkdir -p "$CTLREPO" && (
+  cd "$CTLREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  mkdir -p api/test
+  printf 'base\n' > api/code.js
+  printf 'ordinary\n' > api/test/behaviour.test.ts
+  printf 'control\n' > api/test/verdict.test.ts
+  git add api && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  # The control itself, edited.
+  printf 'control changed\n' > api/test/verdict.test.ts
+)
+rc=$(mk "$V" "$CTLREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL a change to a control test skipped review (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+# ...and the other direction, which is the expensive one to get wrong: an
+# ordinary test must still cost nothing. A gate that demands a paid hunt for
+# every test edit is a gate people learn to walk around.
+(cd "$CTLREPO" && git checkout -q -- api/test/verdict.test.ts && printf 'ordinary changed\n' > api/test/behaviour.test.ts)
+rc=$(mk "$V" "$CTLREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL an ordinary test edit demanded a paid hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$CTLREPO")"
+
 # `.claude/` is prose-shaped and deliberately in scope: its settings decide
 # whether this gate stands down at all, and its hooks are commands that run.
 CLREPO=$(mktemp -d)/repo
