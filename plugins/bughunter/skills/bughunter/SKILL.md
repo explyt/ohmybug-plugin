@@ -33,6 +33,12 @@ equivalent). Do not delegate that request to a local code-review skill or
 collaboration agent: a local `APPROVE`, static pass, or zero findings is an
 advisory result and is never a hunt.
 
+Codex plugin hooks are non-managed and do not run until the user reviews and
+trusts the current definition in `/hooks`. Tell the user to do that after
+installing and before relying on automatic routing. The skill and MCP server
+remain usable without the hook, but a local advisory review is never a
+substitute for the cloud hunt.
+
 The first cloud call is always light `submit_review`; wait for its terminal
 `get_findings`/`wait_review` result before doing anything else. Deep is strictly
 sequential: call it only when the server returned `deep_offer` and the user
