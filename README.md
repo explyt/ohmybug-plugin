@@ -54,16 +54,25 @@ pi.on("tool_call", async (event) => {
 });
 ```
 
-## Install (Codex CLI / CI — raw key)
+## Install (Codex CLI)
 
-OAuth needs a browser, so headless environments use a raw `omb_` key —
-write to [hi@ohmybug.ai](mailto:hi@ohmybug.ai) or DM
-[@ohmybug](https://x.com/ohmybug) to get one:
+Codex uses the same GitHub OAuth flow as Claude Code:
 
 ```bash
 npx skills add explyt/ohmybug-plugin --skill bughunter
+codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp
+```
+
+`codex mcp add` detects OAuth and opens the GitHub sign-in flow automatically.
+
+For headless CI, use an operator-issued raw `omb_` key — write to
+[hi@ohmybug.ai](mailto:hi@ohmybug.ai) or DM [@ohmybug](https://x.com/ohmybug)
+to get one:
+
+```bash
+export OHMYBUG_API_KEY=omb_...
 codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp \
-  --header "Authorization: Bearer $OHMYBUG_API_KEY"
+  --bearer-token-env-var OHMYBUG_API_KEY
 ```
 
 (Claude Code users who prefer a key over OAuth can do the same with
