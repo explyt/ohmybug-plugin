@@ -1,1 +1,5 @@
 .DS_Store
+
+# Local scratch: per-branch worktrees and a session guide that is not the plugin's.
+.worktrees/
+CLAUDE.md
