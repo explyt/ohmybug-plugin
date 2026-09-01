@@ -1059,8 +1059,24 @@ out=$(ppost get_findings done "$PWD" "" rev_ghostpromote 2>&1 >/dev/null); rc=$?
 [ "$rc" = 2 ] || { printf 'FAIL a promotion that found no record was silent (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
 case "$out" in
-  *"no local record of rev_ghostpromote"*"$PWD"*) ;;
+  *"no rev-id record for rev_ghostpromote"*"$PWD"*) ;;
   *) printf 'FAIL the promote miss named neither the review nor the directory: %s\n' "$out"
+     fails=$((fails + 1)) ;;
+esac
+# ...and it must NOT conclude anything about the gate. The gate has four keys and
+# this branch knows about none of them; three client sessions read the old
+# sentence as a verdict on the gate and reported their hunts uncounted while
+# `ref:<sha>` records for those hunts sat on disk, and one was about to ask for
+# SKIP_BUGHUNT (#439). A true fact with a false conclusion attached is what
+# disarms a control.
+case "$out" in
+  *"gate will not see this hunt"*|*"gate will not recognise"*)
+    printf 'FAIL the promote miss still passes a verdict on the merge gate: %s\n' "$out"
+    fails=$((fails + 1)) ;;
+esac
+case "$out" in
+  *"four keys"*) ;;
+  *) printf 'FAIL the promote miss does not say what the gate actually reads: %s\n' "$out"
      fails=$((fails + 1)) ;;
 esac
 reset_state

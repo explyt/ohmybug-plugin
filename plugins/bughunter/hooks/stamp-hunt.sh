@@ -333,7 +333,20 @@ case "$TOOL" in
       # legitimately whenever another worktree owns the review, and exit 2
       # already puts stderr in front of the agent. A second copy on stdout would
       # buy nothing and print twice in every multi-worktree flow.
-      echo "ohmybug: no local record of $REVIEW in $PWD, so nothing was promoted and the merge gate will not see this hunt. If THIS session submitted it, the submit ran from another checkout: re-run get_findings from the worktree the diff lives in. If another session owns it, that one will record it — ignore this." >&2
+      # WHAT WAS NOT FOUND, and no conclusion about the gate. The old sentence
+      # ended "the merge gate will not see this hunt", which does not follow from
+      # its own premise: the gate has four ways to recognise a hunted diff — the
+      # diff id, `sig:<id>` (prose-only changes since the hunt), `ref:<sha>` on a
+      # clean tree, and a live pending record — and the absence of a rev-id record
+      # in THIS cwd rules out none of them.
+      #
+      # The cost of that inference was measured on a client wave: three sessions
+      # read it as a statement about the gate and reported their hunts uncounted
+      # while `ref:<sha>` records for those very hunts sat on disk; one was about
+      # to ask the owner for SKIP_BUGHUNT. A true fact with a false conclusion
+      # attached pushes an operator to disarm the control, and it is worse than a
+      # plain error because there is nothing in the message to disprove (#439).
+      echo "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of four keys — the diff id, sig:<id> (when everything changed since the hunt is docs/tests/skills), ref:<sha> on a clean tree, or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this." >&2
       exit 2
     fi
     ;;
