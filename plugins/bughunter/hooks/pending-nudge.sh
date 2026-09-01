@@ -33,10 +33,17 @@ except Exception:
 # that cannot end.
 print("1" if d.get("stop_hook_active") else "0")
 print((d.get("cwd") or "").replace("\n", " ").replace("\r", " "))
+# WHO is being nudged. Measured cost of not knowing (owner report, one shift):
+# ten foreign runs woke non-owners, one of them seven times, and a session in
+# the middle of that was preparing to merge on "I am waiting for a clean hunt"
+# that was never its hunt. Four nudges out of five about somebody else is how a
+# session learns to skip the fifth (#444).
+print((d.get("session_id") or "").replace("\n", " ").replace("\r", " "))
 ' 2>/dev/null) || exit 0
 
 ACTIVE=$(printf '%s' "$FIELDS" | sed -n 1p)
 CWD=$(printf '%s' "$FIELDS" | sed -n 2p)
+SESSION=$(printf '%s' "$FIELDS" | sed -n 3p | tr -c 'A-Za-z0-9_.-' '_')
 
 [ "${ACTIVE:-1}" = '0' ] || exit 0
 # Source BEFORE the cd, because `$0` is only absolute by convention (hooks.json
@@ -76,14 +83,67 @@ PEND=$(cd "$DIR.pending" 2>/dev/null &&
     -mmin "-$OHMYBUG_PENDING_TTL_MIN" 2>/dev/null |
   sed 's|^\./||' | sort)
 [ -n "$PEND" ] || exit 0
-TOTAL=$(printf '%s\n' "$PEND" | grep -c .)
-IDS=$(printf '%s\n' "$PEND" | head -n "$CAP" | tr '\n' ' ')
+
+# MINE, or nobody's. stamp-hunt.sh writes a `session:<id>` line into the record
+# it creates, so the record knows who made it — and that is the only place in
+# the system that can know: the API key authenticates a machine, and /mcp on the
+# server is stateless, so no column there could answer it (#444).
+#
+# THREE states, not two, and the third is why this is not a filter on equality.
+# A record with NO session line is a record from a client that did not send one,
+# or from before this field existed — unknown, not foreign — and dropping it
+# would trade a nudge that woke the wrong session for a nudge that never comes,
+# which is the worse of the two: the failure we measured was noise, and the
+# failure we would build is silence about a hunt somebody paid for. The
+# stability of the session id across compaction and `--resume` is not documented
+# anywhere we could find, so a record whose session merely DIFFERS is treated as
+# somebody else's only for the purpose of what to say about it — never as
+# grounds to say nothing at all.
+MINE='' FOREIGN=0
+while IFS= read -r rec; do
+  [ -n "$rec" ] || continue
+  OWNER=$(sed -n 's/^session://p' "$DIR.pending/$rec" 2>/dev/null | head -n 1)
+  if [ -z "$OWNER" ] || [ -z "$SESSION" ] || [ "$OWNER" = "$SESSION" ]; then
+    MINE="$MINE$rec
+"
+  else
+    FOREIGN=$((FOREIGN + 1))
+  fi
+done <<EOF
+$PEND
+EOF
+# Somebody else's runs get a COUNT and no instruction: naming ids the session
+# cannot promote is what taught agents to ignore this line, and there is nothing
+# for it to do about them — the owning session's own get_findings promotes them.
+if [ -z "$(printf '%s' "$MINE" | tr -d '[:space:]')" ]; then
+  [ "$FOREIGN" -gt 0 ] &&
+    echo "ohmybug: $FOREIGN unread hunt(s) in $DIR.pending belong to other sessions on this machine, not to you — nothing for you to do, and do not report them as yours." >&2
+  exit 0
+fi
+
+MINE=$(printf '%s' "$MINE" | grep -v '^$')
+TOTAL=$(printf '%s\n' "$MINE" | grep -c .)
+IDS=$(printf '%s\n' "$MINE" | head -n "$CAP" | tr '\n' ' ')
 IDS=${IDS% }
 [ "$TOTAL" -gt "$CAP" ] && IDS="$IDS (and $((TOTAL - CAP)) more in $DIR.pending)"
 
-echo "ohmybug: submitted hunt(s) nobody has read: $IDS — do not end the turn waiting" \
-     "to be prodded. Call get_findings on each now. If one is still running, arm a" \
-     "background poll on its status_url (Bash run_in_background, per the bughunter" \
-     "skill) so its completion wakes you. If another session owns a review, say which" \
-     "and stop again — this fires once." >&2
+# Say only what the payload lets us say. With a session id these ARE this
+# session's submits; without one, ownership is unknown and claiming it would be
+# the same fabricated-observation defect we keep finding in our own fields.
+WHOSE="hunt(s) YOU submitted that nobody has read"
+# Both spellings end in "read:", because the id list is what the suite asserts on
+# verbatim and a headline change must not silently move that anchor.
+[ -n "$SESSION" ] || WHOSE="unread hunt(s) here — this client sends no session id, so which of these are yours is unknown; nobody has read"
+# Zero is not "no number": `${FOREIGN:+…}` fires on the STRING "0", so the count
+# has to be tested as a number or the nudge announces "Also 0 unread hunt(s)".
+ALSO=''
+[ "$FOREIGN" -gt 0 ] && ALSO="Also $FOREIGN unread hunt(s) here belong to other sessions — not yours, nothing to do."
+
+echo "ohmybug: $WHOSE: $IDS — do not end the turn waiting" \
+     "to be prodded. Call get_findings on each now, unless you already know one is still" \
+     "running: for those, arm a background poll on the status_url (Bash run_in_background," \
+     "per the bughunter skill) so completion wakes you, rather than polling in a loop." \
+     "$ALSO" \
+     "This fires once per stop, and again after you do work — the counter is honest, the" \
+     "old wording ('this fires once') was not." >&2
 exit 2

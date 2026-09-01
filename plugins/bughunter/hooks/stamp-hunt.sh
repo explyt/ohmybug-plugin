@@ -114,8 +114,14 @@ ref = ref if isinstance(ref, str) and ref else ""
 def one_line(v):
     return (v if isinstance(v, str) else "").replace("\n", " ").replace("\r", " ")
 
+# WHO is recording this. The hook is handed the session id on stdin, so the
+# party that writes the pending record knows, at the time of writing, who it is
+# — and nothing else in the system does: the API key authenticates a machine, not
+# a session, and /mcp on the server is stateless, so "whose run is this" is not
+# answerable there at any price (#444). Last field, so a reader that splits by
+# position keeps reading the same nine lines it always did.
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
-      pre, failed, upload, sep="\n")
+      pre, failed, upload, one_line(d.get("session_id")), sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -127,6 +133,10 @@ REVIEW=$(printf '%s' "$FIELDS" | sed -n 6p)
 PRE=$(printf '%s' "$FIELDS" | sed -n 7p)
 FAILED=$(printf '%s' "$FIELDS" | sed -n 8p)
 UPLOAD=$(printf '%s' "$FIELDS" | sed -n 9p)
+# Sanitised the same way the review id is, and for the same reason: it becomes a
+# line in a file other hooks match with `grep -x`, so anything but the shape of
+# an id is not an id we need to keep.
+SESSION=$(printf '%s' "$FIELDS" | sed -n 10p | tr -c 'A-Za-z0-9_.-' '_')
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -240,9 +250,22 @@ case "$TOOL" in
           fi
         fi
       fi
+      # Who submitted, when the client told us. NOT an id this record can be
+      # looked up by — `ohmybug_pending_has` matches whole lines against ids it
+      # is asked about, and nobody asks about this one — so it changes no
+      # authorisation and cannot bless a merge. It exists so the Stop nudge can
+      # tell its own submits from the ones another session on this machine made:
+      # four nudges out of five about somebody else's run is how a session learns
+      # to skip the fifth (#444).
+      #
+      # LAST, and excluded from the emptiness test below, because that test is
+      # what decides whether a record exists at all: a record carrying only who
+      # wrote it names no diff, satisfies no gate lookup, and would turn every
+      # unrecordable submit into a permanent nag with nothing to satisfy it.
+      [ -n "$SESSION" ] && printf 'session:%s\n' "$SESSION"
       true
     } > "$PENDING.tmp" 2>/dev/null || exit 0
-    if [ -s "$PENDING.tmp" ]; then
+    if [ -s "$PENDING.tmp" ] && grep -qv '^session:' "$PENDING.tmp" 2>/dev/null; then
       mv "$PENDING.tmp" "$PENDING"
       # The dead ends are announced at SUBMIT time, on BOTH streams (an exit-0
       # hook's stdout is the copy the transcript surfaces) — otherwise they
