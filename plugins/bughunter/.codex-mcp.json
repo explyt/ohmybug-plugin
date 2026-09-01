@@ -1,0 +1,6 @@
+{
+  "ohmybug": {
+    "type": "http",
+    "url": "https://mcp.ohmybug.ai/mcp"
+  }
+}

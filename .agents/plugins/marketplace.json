@@ -1,0 +1,20 @@
+{
+  "name": "ohmybug",
+  "interface": {
+    "displayName": "OhMyBug"
+  },
+  "plugins": [
+    {
+      "name": "bughunter",
+      "source": {
+        "source": "local",
+        "path": "./plugins/bughunter"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

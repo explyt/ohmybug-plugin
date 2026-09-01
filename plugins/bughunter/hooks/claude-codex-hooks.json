@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/codex-router.js\" session",
+            "timeout": 5,
+            "statusMessage": "Loading OhMyBug review gate..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/codex-router.js\" prompt",
+            "timeout": 5,
+            "statusMessage": "Routing review through OhMyBug..."
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/codex-router.js\" subagent",
+            "timeout": 5,
+            "statusMessage": "Loading OhMyBug review rules..."
+          }
+        ]
+      }
+    ]
+  }
+}

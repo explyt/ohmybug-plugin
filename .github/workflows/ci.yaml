@@ -25,6 +25,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: bash plugins/bughunter/hooks/gate-test.sh
+      - run: bash plugins/bughunter/hooks/codex-router-test.sh
       - run: bash scripts/version.sh --self-test
       # The manifest carries the version a marketplace reads, so it is the one
       # thing here that is wrong silently: nothing breaks, the plugin just

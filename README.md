@@ -54,9 +54,28 @@ pi.on("tool_call", async (event) => {
 });
 ```
 
-## Install (Codex CLI)
+## Install (Codex app / CLI)
 
-Codex uses the same GitHub OAuth flow as Claude Code:
+The plugin package wires the skill, MCP server, and Codex review routing in one
+install. Codex uses the same GitHub OAuth flow as Claude Code:
+
+```bash
+codex plugin marketplace add explyt/ohmybug-plugin
+codex plugin add bughunter@ohmybug
+codex mcp login ohmybug
+```
+
+Open `/hooks` once after installation, review and trust the OhMyBug hook
+definition, then start a new Codex thread. Codex skips non-managed plugin hooks
+until you trust their current definition; without that step the skill and MCP
+still install, but automatic review routing is not active. Then ask Codex to
+run the OhMyBug cloud hunt (or use the plugin's starter prompt). A local
+`APPROVE` from a code-review agent is not merge evidence.
+
+### Existing skill-only installs
+
+If the plugin was installed with `npx skills add`, keep the skill and add the
+same MCP server explicitly:
 
 ```bash
 npx skills add explyt/ohmybug-plugin --skill bughunter
