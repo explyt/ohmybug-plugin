@@ -28,7 +28,7 @@ def run(event, payload=None):
 session = run("session")
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
-for phrase in ("submit_review", "wait_review", "review_report", "get_attestation", "never run light and deep in parallel"):
+for phrase in ("submit_review", "wait_review", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
 
