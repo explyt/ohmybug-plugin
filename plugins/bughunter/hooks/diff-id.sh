@@ -81,9 +81,11 @@ ohmybug_diff_id() {
 # The cost is real and belongs stated: every test-only edit now asks for a hunt.
 # On a branch that iterates on its tests that is several extra rounds — the first
 # person to meet it will think something broke. It is the right price: a hunt
-# that finds nothing costs $0, and the thing being re-checked is the check
-# itself. `OHMYBUG_HUNT_ALL=1` was already the escape hatch in the other
-# direction; there is deliberately none in this one.
+# that finds nothing is not billed, but it does take a quarter of an hour per
+# round, and the thing being re-checked is the check itself.
+# `OHMYBUG_HUNT_ALL=1` was already the escape hatch in the other direction;
+# there is deliberately none in this one — the only way past a test-edit block
+# is the hunt it asks for.
 #
 # A named list of "tests that ARE controls" (OHMYBUG_CONTROL_GLOBS) briefly
 # covered the measured case instead. It lost to this rule for the reason the
