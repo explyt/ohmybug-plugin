@@ -118,7 +118,7 @@ def one_line(v):
 # party that writes the pending record knows, at the time of writing, who it is
 # — and nothing else in the system does: the API key authenticates a machine, not
 # a session, and /mcp on the server is stateless, so "whose run is this" is not
-# answerable there at any price (#444). Last field, so a reader that splits by
+# answerable there at any price. Last field, so a reader that splits by
 # position keeps reading the same nine lines it always did.
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
       pre, failed, upload, one_line(d.get("session_id")), sep="\n")
@@ -257,7 +257,7 @@ case "$TOOL" in
       # authorisation and cannot bless a merge. It exists so the Stop nudge can
       # tell its own submits from the ones another session on this machine made:
       # four nudges out of five about somebody else's run is how a session learns
-      # to skip the fifth (#444).
+      # to skip the fifth.
       #
       # LAST, and excluded from the emptiness test below, because that test is
       # what decides whether a record exists at all: a record carrying only who
@@ -346,7 +346,7 @@ case "$TOOL" in
       # while `ref:<sha>` records for those very hunts sat on disk; one was about
       # to ask the owner for SKIP_BUGHUNT. A true fact with a false conclusion
       # attached pushes an operator to disarm the control, and it is worse than a
-      # plain error because there is nothing in the message to disprove (#439).
+      # plain error because there is nothing in the message to disprove.
       echo "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of four keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), ref:<sha> on a clean tree, or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this." >&2
       exit 2
     fi

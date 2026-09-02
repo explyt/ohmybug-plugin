@@ -37,7 +37,7 @@ print((d.get("cwd") or "").replace("\n", " ").replace("\r", " "))
 # ten foreign runs woke non-owners, one of them seven times, and a session in
 # the middle of that was preparing to merge on "I am waiting for a clean hunt"
 # that was never its hunt. Four nudges out of five about somebody else is how a
-# session learns to skip the fifth (#444).
+# session learns to skip the fifth.
 print((d.get("session_id") or "").replace("\n", " ").replace("\r", " "))
 ' 2>/dev/null) || exit 0
 
@@ -87,7 +87,7 @@ PEND=$(cd "$DIR.pending" 2>/dev/null &&
 # MINE, or nobody's. stamp-hunt.sh writes a `session:<id>` line into the record
 # it creates, so the record knows who made it — and that is the only place in
 # the system that can know: the API key authenticates a machine, and /mcp on the
-# server is stateless, so no column there could answer it (#444).
+# server is stateless, so no column there could answer it.
 #
 # THREE states, not two, and the third is why this is not a filter on equality.
 # A record with NO session line is a record from a client that did not send one,
