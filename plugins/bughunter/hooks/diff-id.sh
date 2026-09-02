@@ -65,6 +65,30 @@ ohmybug_diff_id() {
 # settings decide whether this gate stands down at all (see
 # ohmybug_tools_allowed below) and its hook definitions are commands that run.
 # A change to the control itself is the last thing that should skip review.
+#
+# TESTS ARE NOT PROSE, and they used to be on this list. Seven globs excluded
+# them, on the same reasoning as the docs: a test does not ship behaviour, so why
+# buy a second hunt for it. The reasoning is wrong in the one direction that
+# matters. A test IS the protection the hunt just checked, and while it sat
+# outside the signature you could weaken an assertion, narrow a matrix or delete
+# the test outright after a clean hunt, and this gate would still say
+# `hunt: current` — about code the hunt had never seen in that state. Nothing
+# else in the loop notices either: a deleted test is not a failing test, and a
+# merge that eats one side of a conflict looks like a successful merge. That is
+# three independent mechanisms, all silent, on the one edit that removes
+# protection.
+#
+# The cost is real and belongs stated: every test-only edit now asks for a hunt.
+# On a branch that iterates on its tests that is several extra rounds — the first
+# person to meet it will think something broke. It is the right price: a hunt
+# that finds nothing costs $0, and the thing being re-checked is the check
+# itself. `OHMYBUG_HUNT_ALL=1` was already the escape hatch in the other
+# direction; there is deliberately none in this one.
+#
+# A named list of "tests that ARE controls" (OHMYBUG_CONTROL_GLOBS) briefly
+# covered the measured case instead. It lost to this rule for the reason the
+# measured case itself taught: a list someone must remember to extend protects only the
+# controls that already burned us — the next one is off the list, silently.
 OHMYBUG_SKIP_GLOBS="
 :(top,exclude,glob)**/*.md
 :(top,exclude,glob)**/*.mdx
@@ -73,36 +97,7 @@ OHMYBUG_SKIP_GLOBS="
 :(top,exclude,glob)**/docs/**
 :(top,exclude,glob)**/LICENSE*
 :(top,exclude,glob)**/CHANGELOG*
-:(top,exclude,glob)**/test/**
-:(top,exclude,glob)**/tests/**
-:(top,exclude,glob)**/spec/**
-:(top,exclude,glob)**/__tests__/**
-:(top,exclude,glob)**/*.test.*
-:(top,exclude,glob)**/*.spec.*
-:(top,exclude,glob)**/*_test.*
 :(top,exclude,glob)**/skills/**
-"
-
-# ...except the tests that ARE the control.
-#
-# A test is skipped above because a test cannot change what the software does.
-# That is true of a test OF behaviour and false of a test that IS a gate: the
-# verdict enumeration, the gate's own self-test, the money guards. Measured on a
-# live case: a hunt found that `verdict.test.ts` promised to enumerate every
-# retraction branch and counted its own array instead; the fix lives in that
-# file, `sig:` skipped it, and the gate answered `hunt: current` for bytes no
-# hunt had seen (exply-dev/OhMyBug#451). So the cheap path was blind to exactly
-# the class of fix reviewers ask for when they find a hollow control.
-#
-# Names, not a pattern, and deliberately: a pattern over "looks like a control"
-# is the same guessing this list exists to avoid, and a wrong guess here makes
-# the gate demand money for a typo. The list is small because control oracles
-# are few; when one is added, this line is the one to revisit.
-OHMYBUG_CONTROL_GLOBS="
-:(top,glob)**/verdict.test.*
-:(top,glob)**/gate-test.sh
-:(top,glob)**/platform-money.test.*
-:(top,glob)**/money*.test.*
 "
 
 # exit 0 + a hash -> this is the part of the diff a hunt would speak about
@@ -121,14 +116,7 @@ ohmybug_sig_id() {
   # record what cwd-dependent identity costs.
   #
   # Unquoted on purpose: each line of the list is one pathspec argument.
-  # TWO diffs, concatenated, because git pathspec cannot re-include what an
-  # exclude removed: the first is everything that can change behaviour, the
-  # second is the controls the first list threw away with the tests. Order is
-  # fixed (skip-list first) so the same tree always hashes the same way.
-  local controls
   diff=$(git diff "$base" -- $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
-  controls=$(git diff "$base" -- $OHMYBUG_CONTROL_GLOBS 2>/dev/null) || return 1
-  diff="$diff$controls"
   [ -n "$diff" ] || return 0
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
 }
