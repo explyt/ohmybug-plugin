@@ -220,8 +220,9 @@ case "$TOOL" in
       if [ -n "$SENT" ] && ID=$(ohmybug_sent_is_local "$SENT") && [ -n "$ID" ]; then
         TREEOK=1
         printf '%s\n' "$ID"
-        # ...and the same diff with docs, tests and skills taken out, so that
-        # editing prose after the hunt does not read as unhunted code.
+        # ...and the same diff with docs and skills taken out, so that editing
+        # prose after the hunt does not read as unhunted code. Tests are NOT
+        # taken out any more: they are the protection the hunt checked.
         SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
       fi
       # A ref is the CALL's identity only when the call carried no bytes: on
@@ -346,7 +347,7 @@ case "$TOOL" in
       # to ask the owner for SKIP_BUGHUNT. A true fact with a false conclusion
       # attached pushes an operator to disarm the control, and it is worse than a
       # plain error because there is nothing in the message to disprove (#439).
-      echo "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of four keys — the diff id, sig:<id> (when everything changed since the hunt is docs/tests/skills), ref:<sha> on a clean tree, or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this." >&2
+      echo "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of four keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), ref:<sha> on a clean tree, or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this." >&2
       exit 2
     fi
     ;;
