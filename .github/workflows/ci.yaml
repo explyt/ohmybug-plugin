@@ -1,7 +1,10 @@
 name: CI
 
 on:
+  # `edited` too: the hygiene job reads the PR title and body, and a body
+  # edited after a green push would otherwise never be checked.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
