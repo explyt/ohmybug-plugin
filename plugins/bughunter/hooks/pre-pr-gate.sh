@@ -340,7 +340,9 @@ if ohmybug_hunted "$CURRENT"; then
   exit 0
 fi
 
-# What a hunt can actually speak about: the diff without docs, tests and skills.
+# What a hunt can actually speak about: the diff without docs and skills.
+# Tests used to be on that list and are not any more — a test IS the protection
+# the hunt checked, so weakening one after a clean hunt must cost a new hunt.
 #
 # Nothing significant at all means there is nothing to hunt — a docs-only branch
 # should land without paying for a review of prose. And a hunted diff whose only
@@ -349,11 +351,11 @@ fi
 # someone fixed a typo in a README.
 SIG=$(ohmybug_sig_id 2>/dev/null)
 if [ -n "$SIG" ] && ohmybug_hunted "sig:$SIG"; then
-  echo "OhMyBug: this diff was hunted; everything changed since then is documentation, tests or skills, which a hunt does not speak about. Allowing the merge." >&2
+  echo "OhMyBug: this diff was hunted; everything changed since then is documentation or skills, which a hunt does not speak about. Allowing the merge." >&2
   exit 0
 fi
 if [ -z "$SIG" ] && [ "${OHMYBUG_HUNT_ALL:-0}" != "1" ]; then
-  echo "OhMyBug: nothing in this diff can change behaviour — documentation, tests and skills only — so there is nothing to hunt. Allowing the merge." >&2
+  echo "OhMyBug: nothing in this diff can change behaviour — documentation and skills only — so there is nothing to hunt. Allowing the merge." >&2
   exit 0
 fi
 

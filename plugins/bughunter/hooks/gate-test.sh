@@ -568,19 +568,35 @@ if [ -n "$ID" ]; then
   post submit_review 0
   post get_findings 1
   t "$V" 0                                   # hunted, as before
-  # Prose, tests and skills after the hunt: still hunted.
+  # Prose and skills after the hunt: still hunted.
   DOCFILE=".ohmybug-gate-test-scratch.md"
-  TESTFILE="test/.ohmybug-gate-test-scratch.js"
-  mkdir -p test
   printf 'a README edit after the hunt\n' > "$DOCFILE"
-  printf 'it("still counts as a test", () => {})\n' > "$TESTFILE"
-  git add -N "$DOCFILE" "$TESTFILE" 2>/dev/null
+  git add -N "$DOCFILE" 2>/dev/null
   t "$V" 0
   out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
   case "$out" in
-    *"documentation, tests or skills"*) ;;
+    *"documentation or skills"*) ;;
     *) printf 'FAIL the docs-only pass did not say why: %s\n' "$out"; fails=$((fails + 1)) ;;
   esac
+  # ...but a TEST is not prose, and this is the row that used to say it was.
+  # A test is the protection the hunt just checked; while it sat outside the
+  # signature you could weaken or delete it after a clean hunt and this gate
+  # still said `hunt: current`. Nothing else in the loop notices — a deleted test
+  # does not fail, and a merge that eats one side of a conflict looks successful.
+  # So: one test file, and the gate must ask for a hunt.
+  TESTFILE="test/.ohmybug-gate-test-scratch.js"
+  mkdir -p test
+  printf 'it("still counts as a test", () => {})\n' > "$TESTFILE"
+  git add -N "$TESTFILE" 2>/dev/null
+  t "$V" 2
+  # And the message must name the reason, or the operator reaches for
+  # SKIP_BUGHUNT to get past a gate that looks stuck on nothing.
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"has CHANGED since the hunt"*) ;;
+    *) printf 'FAIL a test edit after the hunt did not say the hunt is stale: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  git reset -q -- "$TESTFILE" 2>/dev/null; rm -f "$TESTFILE"; rmdir test 2>/dev/null
   # ...but one line of real code is a different diff again.
   printf 'code written after the hunt\n' >> "$SCRATCH"
   t "$V" 2
@@ -598,8 +614,8 @@ if [ -n "$ID" ]; then
   # The strict mode is still there for a repo whose prose IS behaviour.
   rc=$(mk "$V" "$PWD" | OHMYBUG_HUNT_ALL=1 bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 2 ] || { printf 'FAIL OHMYBUG_HUNT_ALL did not restore the strict gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
-  git reset -q -- "$DOCFILE" "$TESTFILE" 2>/dev/null
-  rm -f "$DOCFILE" "$TESTFILE"; rmdir test 2>/dev/null
+  git reset -q -- "$DOCFILE" 2>/dev/null
+  rm -f "$DOCFILE"
   reset_state
 fi
 
@@ -659,10 +675,11 @@ rc=$(mk "$V" "$SUBREPO/api" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL merging from a subdirectory hid unhunted code (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$SUBREPO")"
 
-# A test that IS a control is not skippable, though a test OF behaviour is.
+# Every test edit is hunted, control or not: a test is the protection the
+# hunt checked, and the one edit that removes protection is otherwise silent.
 #
-# Measured case: a hunt found that the verdict
-# enumeration test promised to cover every branch and counted its own array
+# Measured case: a hunt found that a verdict-enumeration test promised to
+# cover every branch and counted its own array
 # instead. The fix for that finding lives in that test file — and `sig:` skipped
 # it, so the gate answered "hunt: current" for bytes no hunt had seen. The cheap
 # path was blind to exactly the class of fix a reviewer asks for after finding a
@@ -685,12 +702,14 @@ mkdir -p "$CTLREPO" && (
 )
 rc=$(mk "$V" "$CTLREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL a change to a control test skipped review (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
-# ...and the other direction, which is the expensive one to get wrong: an
-# ordinary test must still cost nothing. A gate that demands a paid hunt for
-# every test edit is a gate people learn to walk around.
+# ...and an ordinary test now costs a hunt too — deliberately. The named-list
+# stopgap kept behaviour tests free and paid for it with the failure the
+# measured case itself taught: the next control is off the list, silently.
+# Weakening or deleting ANY test after a clean hunt is the one edit that removes
+# protection with nothing else noticing, and a hunt that finds nothing is free.
 (cd "$CTLREPO" && git checkout -q -- api/test/verdict.test.ts && printf 'ordinary changed\n' > api/test/behaviour.test.ts)
 rc=$(mk "$V" "$CTLREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
-[ "$rc" = 0 ] || { printf 'FAIL an ordinary test edit demanded a paid hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+[ "$rc" = 2 ] || { printf 'FAIL an ordinary test edit slipped past the hunt signature (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$CTLREPO")"
 
 # `.claude/` is prose-shaped and deliberately in scope: its settings decide
@@ -714,7 +733,10 @@ rc=$(mk "$V" "$CLREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL a change to the gate own permission input skipped review (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$CLREPO")"
 
-# ...and a test tree that is not at the repository root is still a test tree.
+# ...and a test tree that is not at the repository root is still a test tree —
+# which under this rule means it is HUNTED like any other code, wherever it sits. The
+# row is kept and inverted rather than deleted: the path-depth question it asks
+# is still worth asking, and the answer flipping is exactly what this change is.
 NESTREPO=$(mktemp -d)/repo
 mkdir -p "$NESTREPO" && (
   cd "$NESTREPO" || exit 1
@@ -730,8 +752,39 @@ mkdir -p "$NESTREPO" && (
   git add -N packages/api/tests/test_auth.py
 )
 rc=$(mk "$V" "$NESTREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
-[ "$rc" = 0 ] || { printf 'FAIL a nested tests/ directory demanded a paid hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+[ "$rc" = 2 ] || { printf 'FAIL a nested tests/ directory skipped the hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$NESTREPO")"
+
+# Every naming convention the old skip list knew gets its own row. Seven globs
+# came out of OHMYBUG_SKIP_GLOBS; the rows above pin test/, tests/ and *.test.*
+# — and nothing else, so re-adding just ':(top,exclude,glob)**/*_test.*' (the
+# "compromise" the cost comment invites) kept every check green while
+# reopening the hole for Go, RSpec, Jest and *.spec.* layouts (found in
+# review). One repo, one convention per pass: a single repo with all
+# four files at once would stay rc=2 while three of the four globs are back.
+CONVREPO=$(mktemp -d)/repo
+mkdir -p "$CONVREPO" && (
+  cd "$CONVREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  printf 'base\n' > code.js
+  git add code.js && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+)
+for CONV in api/handler_test.go spec/auth_spec.rb src/__tests__/auth.js src/auth.spec.ts; do
+  (
+    cd "$CONVREPO" || exit 1
+    mkdir -p "$(dirname "$CONV")"
+    printf 'weakened\n' > "$CONV"
+    git add -N "$CONV"
+  )
+  rc=$(mk "$V" "$CONVREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL a %s edit skipped the hunt (rc=%s)\n' "$CONV" "$rc"; fails=$((fails + 1)); }
+  (cd "$CONVREPO" && git rm -q --cached "$CONV" 2>/dev/null; rm -f "$CONV")
+done
+rm -rf "$(dirname "$CONVREPO")"
 reset_state
 
 # --- the pending record names the CALL, not the directory the hook stood in ---
