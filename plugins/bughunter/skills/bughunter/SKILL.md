@@ -298,30 +298,42 @@ If your harness supports background shell tasks (Claude Code: `Bash` with
 `run_in_background`), start:
 
 ```bash
-until curl -sf '<status_url>' | grep -qE '"status":"(done|failed)"|"files_requested":true'; do sleep 45; done
+while :; do
+  s=$(curl -sS --max-time 20 '<status_url>') || { echo "poll failed (exit $?): ${s:-no body}"; sleep 45; continue; }
+  echo "$s"
+  echo "$s" | grep -qE '"status":"(done|failed)"|"files_requested":true' && break
+  sleep 45
+done
 ```
 
 Its completion wakes you: call `get_findings(review_id)` then. If it woke
 on `files_requested`, serve `provide_files` first and re-arm the monitor.
 
-The loop above is sound as written. What has failed in the field is
-REWRITING it — into `for i in $(seq 1 60); …; sleep 45` (45 min), shorter
-than the hunt and shorter than the moment reviewers ask for files (past
-the half-hour mark in one hunt, plus queue time before claim): the
-delivery window closed with none of the requested files served while the
-client record still said `files_requested:false`. Any form you write must
-keep these four properties:
+The loop above keeps the four properties below, and each line of it is
+there for one of them — read it before you shorten it. What has failed in
+the field is REWRITING it: once into `for i in $(seq 1 60); …; sleep 45`
+(45 min), shorter than the hunt and shorter than the moment reviewers ask
+for files (past the half-hour mark in one hunt, plus queue time before
+claim), so the delivery window closed with none of the requested files
+served while the client record still said `files_requested:false`; and once
+into a one-liner, `until curl -sf … | grep -q …; do sleep 45; done`, which
+never prints anything and treats a failed poll exactly like "still running"
+— a dead status URL kept it sleeping forever while the agent believed the
+review was watched. Any form you write must keep:
 
 - **Unbounded.** No iteration cap shorter than the hunt's own budget
   (≥ 150 min). A watcher that dies before the hunt is a watcher that
   missed the event, and silence from it reads exactly like "still
   running".
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
-- **Prints its first valid reading immediately.** A watcher silent for an
-  hour is indistinguishable from a dead one.
-- **A poll failure is printed and does not end the watch.** `curl -sf`
-  returns empty on error; empty must not be read as "still running" and
-  must not exit the loop.
+- **Prints its first valid reading immediately, and every reading after
+  it.** A watcher silent for an hour is indistinguishable from a dead one;
+  this is why the body is echoed and `grep -q` is not the only consumer of
+  it.
+- **A poll failure is printed and does not end the watch.** A pipeline's
+  exit status is its LAST command's, so `curl … | grep` masks curl's
+  failure and grep's "no match" reads as "still running"; capture curl's
+  output and exit code first, print the failure, and keep polling.
 
 No background tasks in your harness? Then poll `get_findings` every 45-60
 seconds IN the current turn while doing other work — never leave a
