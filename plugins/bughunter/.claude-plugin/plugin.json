@@ -1,6 +1,6 @@
 {
   "name": "bughunter",
-  "version": "0.70.0",
+  "version": "0.71.0",
   "description": "OhMyBug: cloud bug-hunt as the last gate before every merge. Your agent verifies each finding; $10 flat per review that finds real bugs, first 3 free.",
   "author": {
     "name": "OhMyBug",
