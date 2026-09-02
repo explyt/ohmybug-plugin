@@ -661,7 +661,7 @@ rm -rf "$(dirname "$SUBREPO")"
 
 # A test that IS a control is not skippable, though a test OF behaviour is.
 #
-# Measured case (exply-dev/OhMyBug#451): a hunt found that the verdict
+# Measured case: a hunt found that the verdict
 # enumeration test promised to cover every branch and counted its own array
 # instead. The fix for that finding lives in that test file — and `sig:` skipped
 # it, so the gate answered "hunt: current" for bytes no hunt had seen. The cheap
@@ -1067,7 +1067,7 @@ esac
 # this branch knows about none of them; three client sessions read the old
 # sentence as a verdict on the gate and reported their hunts uncounted while
 # `ref:<sha>` records for those hunts sat on disk, and one was about to ask for
-# SKIP_BUGHUNT (#439). A true fact with a false conclusion attached is what
+# SKIP_BUGHUNT. A true fact with a false conclusion attached is what
 # disarms a control.
 case "$out" in
   *"gate will not see this hunt"*|*"gate will not recognise"*)
@@ -1335,7 +1335,7 @@ esac
 # --- whose hunt is it -------------------------------------------------------
 # Ten foreign runs woke non-owners in one shift, one of them seven times, and a
 # session in the middle of that was preparing to merge on "I am waiting for a
-# clean hunt" that was never its hunt (#444). The record now carries who wrote
+# clean hunt" that was never its hunt. The record now carries who wrote
 # it, so these rows pin the three states apart: mine, nobody's, somebody else's.
 sess() { # tool, done?, review id, session id -> runs stamp-hunt.sh with a session
   OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
