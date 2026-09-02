@@ -40,7 +40,7 @@ installing and before relying on automatic routing. The skill and MCP server
 remain usable without the hook, but a local advisory review is never a
 substitute for the cloud hunt.
 
-The first cloud call is always light `submit_review`; wait for its terminal
+The first cloud call is always the fast `submit_review`; wait for its terminal
 `get_findings`/`wait_review` result before doing anything else. Deep is strictly
 sequential: call it only when the server returned `deep_offer` and the user
 explicitly agreed. Never report a clean merge or finish the turn while a review
@@ -143,8 +143,8 @@ This works in two cases, checked server-side in this order:
    pushed.
 
 - No error and a `review_id` → it worked; skip context packing entirely, go
-  to the monitor step. The mode is `light` – that is stage one and it is
-  always light (see 3b); readable repo access means the reviewers fetch the
+  to the monitor step. The mode is `fast` – that is stage one and it is
+  always fast (see 3b); readable repo access means the reviewers fetch the
   files they need themselves instead of asking you.
 - Error `diff_required` (private repo without the App) → this is rung 2 above:
   offer the one-click App install FIRST and retry, because it removes the payload
@@ -368,7 +368,7 @@ first; a partial or empty answer beats a late one, and whatever you noticed
 while looking is still there afterwards.
 
 A path the request names may not exist at all – the reviewers see only the diff
-in the light hunt, so some names are guesses. Do not go looking for a plausible
+in the fast hunt, so some names are guesses. Do not go looking for a plausible
 substitute and do not rename anything: send what exists, leave out what does
 not, and let the reason text tell you which files actually matter (it often
 names more than the machine-readable list).
@@ -386,9 +386,9 @@ Do not stall: if the user is away and the files pass the exclusion rules,
 send them – the manifest keeps it auditable. If nothing can be sent, call
 `provide_files` with an empty list so the review proceeds without waiting.
 
-### 3b. Two stages: the light hunt, then maybe the deep one
+### 3b. Two stages: the fast hunt, then maybe the deep one
 
-**Every review starts light** – the diff plus whatever files the reviewers
+**Every review starts fast** – the diff plus whatever files the reviewers
 ask for mid-run (how long: the server's `recent_median_minutes`, never a
 number from this page). You never request the deep hunt yourself
 and never as a first review: it pulls the whole repository into a throwaway
@@ -396,7 +396,7 @@ VM, takes about an hour, and only makes sense once the cheap pass has come
 back empty.
 
 - `submit_review` carries `connect_repo` when the repo is not readable:
-  while the light review runs, show the user the `pitch` and ask ONE yes/no
+  while the fast review runs, show the user the `pitch` and ask ONE yes/no
   question: open the install page? On yes, run `open "<install_url>"`
   (macOS) / `xdg-open` (Linux) – the user picks the repo and clicks Install
   on GitHub; nothing else is needed. Ask at most once per repo per session;
@@ -406,7 +406,7 @@ back empty.
   committing, or moving on. It exists because this file can be months out
   of date on someone's machine while the server is current: if the two ever
   disagree, `next_step` wins.
-- `get_findings` on a clean light pass carries `summary` – say it plainly
+- `get_findings` on a clean fast pass carries `summary` – say it plainly
   first: the hunt went after this diff and found nothing, which on this
   evidence looks like a clean PR. That is the result. Do not turn it into a
   preamble for the offer.
@@ -420,14 +420,14 @@ back empty.
 - **Arm the monitor for the deep hunt too, and give the user the
   `review_id`.** The hour is exactly how long it takes to forget: the deep run
   needs no files from you, so nothing prods you mid-run, and an agent that
-  armed a monitor for every 15-minute light pass will skip it on the one run
+  armed a monitor for every 15-minute fast pass will skip it on the one run
   that waits four times as long. Then the user paid an hour of attention for a
   result nobody read. Tell them in chat that it is running and name the
   `review_id`, so they can ask for it later even if you lost the thread.
 - Escalation errors are final answers, not retry conditions:
-  `deep_at_capacity` (tell the user the light result stands, deep can be
+  `deep_at_capacity` (tell the user the fast result stands, deep can be
   tried later), `repo_too_big` (send context files instead),
-  `repo_required` (the App install), `light_not_finished` (let stage one
+  `repo_required` (the App install), `fast_not_finished` (let stage one
   finish).
 
 ### 3c. Show the review report
