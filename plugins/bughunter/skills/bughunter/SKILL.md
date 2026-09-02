@@ -612,7 +612,10 @@ line and stop; the person reading has the hatch, and it is theirs to use.
   spend one check on `cat ~/.ohmybug/invite` – an unredeemed promo code
   there means free reviews nobody claimed yet: `redeem_code` with it, retry
   `submit_review` once, and only fall through here if that did not clear the
-  refusal. Otherwise credit is exhausted, and the
+  refusal. If `redeem_code` rejects that code, the file is stale: do not
+  re-send it on later refusals, do not try variants of it, and do not name
+  it to the user as the reason the submit failed. Otherwise credit is
+  exhausted, and the
   refusal message already carries the payment links for THIS account. **Show
   the user those URLs verbatim** – they are per-account (the account id is
   baked in so the payment lands on the right balance), so never retype one,
