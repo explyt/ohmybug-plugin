@@ -2,7 +2,7 @@
 
 We find the bugs your Claude Code missed. You pay only when your own Claude
 confirms real bugs: $10 flat per bug-finding review (however many bugs it
-holds), minor findings free, first 3 reviews free.
+holds), minor findings free, first review free.
 
 ## Install (Claude Code)
 
@@ -12,7 +12,7 @@ claude plugin install bughunter@ohmybug
 ```
 
 That's the whole setup. On first use Claude Code opens a GitHub sign-in in
-your browser; your account (with 3 free bug-finding reviews) is created
+your browser; your account (with a free first review) is created
 automatically. No keys to copy, nothing lands in config files.
 
 ## Install (pi)
@@ -35,7 +35,7 @@ Add to `.mcp.json` in your project root (or `~/.config/mcp/mcp.json`):
 ```
 
 Restart pi, run `/mcp-auth ohmybug` once — a GitHub page opens in the
-browser, your account with 3 free bug-finding reviews is created
+browser, your account with a free first review is created
 automatically. Then say "hunt bugs" or `/skill:bughunter`.
 
 Prefer a raw key (CI)? Use `"auth": "bearer", "bearerTokenEnv":
