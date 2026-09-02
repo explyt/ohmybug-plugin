@@ -91,7 +91,7 @@ OHMYBUG_SKIP_GLOBS="
 # live case: a hunt found that `verdict.test.ts` promised to enumerate every
 # retraction branch and counted its own array instead; the fix lives in that
 # file, `sig:` skipped it, and the gate answered `hunt: current` for bytes no
-# hunt had seen (exply-dev/OhMyBug#451). So the cheap path was blind to exactly
+# hunt had seen. So the cheap path was blind to exactly
 # the class of fix reviewers ask for when they find a hollow control.
 #
 # Names, not a pattern, and deliberately: a pattern over "looks like a control"

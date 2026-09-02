@@ -57,13 +57,20 @@ bash plugins/bughunter/hooks/gate-test.sh    # the FULL suite — this is the on
 ## Publicity — hard rules
 
 - **English only** in everything committed or posted here: code, comments,
-  docs, commit messages, issues, PRs, release notes.
-- **No internal details.** No private hostnames or paths, no customer data,
-  no infra numbers, no links or references to private-tracker items in
-  commits, PRs or issues here.
+  docs, commit messages, PR titles and bodies, issues and their comments,
+  release notes. Not one Cyrillic character.
+- **Nothing internal.** Only what a user gets by installing the plugin: no
+  review or receipt ids, no private-tracker references, no session names, no
+  machine or worktree paths, no infrastructure or provider names, no prices or
+  spend figures beyond the public offer, no server source paths. Describe a
+  defect by its mechanics, never by its setting.
+- **CI enforces both** (`scripts/public-hygiene.sh`: tracked files, the PR's
+  commits, its title and body), with a positive control that must fail. If
+  the guard is red, fix the text — do not widen the guard.
 - **Team work items do not live here.** Public issues are for external
-  users. Internal bugs and tasks go to the company tracker:
-  `gh issue create --repo exply-dev/OhMyBug …` — always pass `--repo`
-  explicitly, because `gh` defaults to this clone's public remote.
+  users. Internal bugs and tasks go to the company's private tracker (ask a
+  maintainer for its location): `gh issue create --repo <private-repo> …` —
+  always pass `--repo` explicitly, because `gh` defaults to this clone's
+  public remote.
 - **No AI trailers.** Never `Co-Authored-By` or any AI-vendor identity in
   commits; check `git config --get user.email` before committing.
