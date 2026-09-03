@@ -91,7 +91,15 @@ ohmybug_diff_id() {
 # covered the measured case instead. It lost to this rule for the reason the
 # measured case itself taught: a list someone must remember to extend protects only the
 # controls that already burned us — the next one is off the list, silently.
+# The include-all entry comes FIRST and is not decoration. A pathspec made only
+# of `exclude` entries means "everything minus these" on every git this hook has
+# been run on — but that is a property of git's pathspec code, not of this
+# list, and the list is what a maintainer reads. With the include spelled out,
+# "everything minus these" is what the list SAYS, on any git version. The
+# self-check in ohmybug_sig_id is the other half: it computes the same set the
+# long way round and refuses if the two disagree.
 OHMYBUG_SKIP_GLOBS="
+:(top,glob)**
 :(top,exclude,glob)**/*.md
 :(top,exclude,glob)**/*.mdx
 :(top,exclude,glob)**/*.rst
@@ -104,6 +112,9 @@ OHMYBUG_SKIP_GLOBS="
 
 # exit 0 + a hash -> this is the part of the diff a hunt would speak about
 # exit 0 + nothing -> nothing here can change behaviour; there is nothing to hunt
+# exit 1           -> could not tell (no base, git failed, or the pathspec and
+#                     the file list disagree) — the CALLER must not read this as
+#                     "nothing"; the gate's own fail-open was exactly that read
 # exit 1          -> cannot tell (same as ohmybug_diff_id)
 ohmybug_sig_id() {
   local base diff
@@ -119,8 +130,36 @@ ohmybug_sig_id() {
   #
   # Unquoted on purpose: each line of the list is one pathspec argument.
   diff=$(git diff "$base" -- $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
-  [ -n "$diff" ] || return 0
+  if [ -z "$diff" ]; then
+    # Empty is the answer that ALLOWS a merge, so it has to be earned. Three
+    # states leave this function — "code changed", "only prose changed", "git
+    # could not say" — and an empty string used to carry the last two. The
+    # second look is computed a different way from the first: the file list
+    # with no pathspec at all, minus the files the same globs MATCH when spelled
+    # as includes. If that leaves anything, the diff above should not have been
+    # empty, and the honest answer is "cannot tell", not "nothing to hunt".
+    ohmybug_sig_consistent "$base" || return 1
+    return 0
+  fi
   printf '%s' "$diff" | shasum -a 256 | cut -d' ' -f1
+}
+
+# Every changed file is covered by the skip globs — checked with include
+# pathspecs, which never depended on exclude semantics. Exit 1, with a line on
+# stderr, when some changed file is NOT skipped: then an empty significant diff
+# is a broken computation, not a docs-only branch.
+ohmybug_sig_consistent() {
+  local base=$1 all includes skipped left
+  all=$(git diff --name-only "$base" 2>/dev/null) || return 1
+  [ -n "$all" ] || return 0   # nothing changed at all: empty is the truth
+  # The same globs, spelled as includes: the include-all line drops out, every
+  # exclude flips. Built from the one list, so a glob added there is checked here.
+  includes=$(printf '%s\n' $OHMYBUG_SKIP_GLOBS | sed -n 's/^:(top,exclude,glob)/:(top,glob)/p')
+  skipped=$(git diff --name-only "$base" -- $includes 2>/dev/null) || return 1
+  left=$(comm -23 <(printf '%s\n' "$all" | sort) <(printf '%s\n' "$skipped" | sort))
+  [ -z "$left" ] && return 0
+  printf 'OhMyBug: cannot compute the diff signature — the significant diff came out empty but these changed files are not documentation or skills:\n%s\n' "$left" >&2
+  return 1
 }
 
 # Is `$1` the id of a payload that IS this working tree, in either of the two
