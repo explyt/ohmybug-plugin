@@ -651,6 +651,70 @@ rc=$(mk "$V" "$DOCREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL code alongside the docs did not re-arm the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$DOCREPO")"
 
+# --- the signature answers in three states, and the gate reads all three ------
+# Empty is the answer that allows a merge, so the function has to EARN it: a
+# docs-only branch is empty; a branch with code beside the docs is a hash; and a
+# pathspec that stopped matching (a git whose exclude semantics differ, a glob
+# edited by hand) must come back as "cannot tell" — exit 1 — never as empty.
+# The gate used to drop that exit status and read the empty string as "prose
+# only": a broken ruler opened the gate.
+SIGREPO=$(mktemp -d)/repo
+mkdir -p "$SIGREPO" && (
+  cd "$SIGREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  printf 'base\n' > Money.kt && git add Money.kt && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  printf 'prose\n' > README.md && git add -N README.md
+)
+sig_in() { # dir -> prints "rc:<rc> sig:<hash|empty>" for ohmybug_sig_id there
+  (cd "$1" && bash -c ". '$G/diff-id.sh'; s=\$(ohmybug_sig_id 2>/dev/null); echo \"rc:\$? sig:\$s\"")
+}
+got=$(sig_in "$SIGREPO")
+[ "$got" = "rc:0 sig:" ] || { printf 'FAIL sig: a docs-only branch should be empty with rc 0, got %s\n' "$got"; fails=$((fails + 1)); }
+printf 'fun charge() = 1\n' >> "$SIGREPO/Money.kt"
+got=$(sig_in "$SIGREPO")
+case "$got" in
+  "rc:0 sig:"[0-9a-f]*) ;;
+  *) printf 'FAIL sig: code beside the docs should hash, got %s\n' "$got"; fails=$((fails + 1)) ;;
+esac
+# ...and the same tree read from a subdirectory hashes to the same thing.
+mkdir -p "$SIGREPO/sub"
+[ "$(sig_in "$SIGREPO/sub")" = "$got" ] || { printf 'FAIL sig: the signature depends on the cwd\n'; fails=$((fails + 1)); }
+rmdir "$SIGREPO/sub"
+# The broken ruler: a copy of the hooks whose include entry matches nothing, so
+# the significant diff comes out empty while Money.kt has changed. The function
+# must refuse (exit 1) and the gate must refuse the merge on that — not allow it
+# as "documentation only".
+BROKEN=$(mktemp -d)
+cp "$G"/*.sh "$BROKEN"/
+sed -i.bak 's|^:(top,glob)\*\*$|:(top,glob)no-such-dir/**|' "$BROKEN/diff-id.sh" && rm -f "$BROKEN/diff-id.sh.bak"
+grep -q 'no-such-dir' "$BROKEN/diff-id.sh" || { printf 'FAIL sig: the broken-ruler fixture did not take\n'; fails=$((fails + 1)); }
+got=$(cd "$SIGREPO" && bash -c ". '$BROKEN/diff-id.sh'; s=\$(ohmybug_sig_id 2>/dev/null); echo \"rc:\$? sig:\$s\"")
+[ "$got" = "rc:1 sig:" ] || { printf 'FAIL sig: a pathspec that matches nothing must be exit 1, got %s\n' "$got"; fails=$((fails + 1)); }
+rc=$(mk "$V" "$SIGREPO" | bash "$BROKEN/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL gate: an uncomputable signature opened the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+out=$(mk "$V" "$SIGREPO" | bash "$BROKEN/pre-pr-gate.sh" 2>&1 >/dev/null)
+case "$out" in
+  *"cannot compute the diff signature"*"Money.kt"*) ;;
+  *) printf 'FAIL gate: the refusal did not name the broken signature and the file: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+case "$out" in
+  *"(operator): to merge without a hunt"*) ;;
+  *) printf 'FAIL gate: the signature refusal gives the human no way out: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+# With the good hooks, the same tree is simply an unhunted diff: blocked for the
+# ordinary reason, not for a broken ruler.
+out=$(mk "$V" "$SIGREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+case "$out" in
+  *"cannot compute"*) printf 'FAIL gate: the intact hooks reported a broken signature: %s\n' "$out"; fails=$((fails + 1)) ;;
+  *"rc=2"*) ;;
+  *) printf 'FAIL gate: unhunted code beside docs was not blocked: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+rm -rf "$BROKEN" "$(dirname "$SIGREPO")"
+
 # The same question, asked from a subdirectory. `git diff -- .` resolves against
 # the CURRENT directory, so the significant diff came out empty in any package
 # below the root — and empty is the answer that ALLOWS the merge. The gate cds
