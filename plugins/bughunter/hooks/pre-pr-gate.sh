@@ -200,6 +200,14 @@ except Exception:
     # answer" and treats like a missing python3 — stand down and say so.
     sys.exit(0)
 cmd = (data.get("tool_input") or {}).get("command") or ""
+# A client that hands the command over as argv (a list) instead of one string
+# must not kill the parser: a dead parser is read below as "no verdict", and
+# that branch stands the gate DOWN. Codex documents `command` as a string like
+# Claude Code does; this is the cheap insurance for the day one of them does not.
+if isinstance(cmd, list):
+    cmd = " ".join(str(part) for part in cmd)
+if not isinstance(cmd, str):
+    cmd = ""
 # Two facts about the COMMAND, for the branch where tokenizing failed. Read from
 # the command and nowhere else: the payload also carries `description`, which the
 # model writes itself, and a `cwd` the model chose — an opt-out honoured from

@@ -517,6 +517,12 @@ if [ -n "$ID" ]; then
   # one aborted submit opened the merge for the attempt's whole TTL.
   rc=$(mk "$V" "$PWD" | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 2 ] || { printf 'FAIL under Codex a bare attempt stood the gate down (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and a Codex-shaped payload: tool_name spelled out, hook_event_name set,
+  # and the command handed over as argv. A parser that dies on the list is read
+  # as "no verdict", and that branch OPENS the gate.
+  rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['gh','pr','merge','5','--squash']},'cwd':sys.argv[1]}))" "$PWD" \
+       | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL an argv-shaped merge command slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
   # The warning covers the diff that was attempted, not whatever came after it.
   printf 'written after the attempt\n' >> "$SCRATCH"
   t "$V" 2
