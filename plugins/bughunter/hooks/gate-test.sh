@@ -75,6 +75,10 @@ EOF"                                     0  # heredoc line hung forever before
 t "VERSION=1.2.3; echo \$VERSION"        0
 t "$V; DONE=1"                           2
 t "bash -c '$V'"                         2  # walked through before
+t "bash -lc '$V'"                        2  # the flag bundle agent shells emit
+t "sh -ec '$V'"                          2
+t "bash -cx '$V'"                        2  # c not last in the bundle
+t "sh -ce '$V'"                          2
 t "( $V )"                               2
 t "if true; then $V; fi"                 2
 t "npm run build && (cd api && $V)"      2
@@ -266,6 +270,19 @@ M=$(ohmybug_marker_path)
 # three-path incantation left live pending records between sections — and a
 # stale one makes the next section read as "a hunt is running here".
 reset_state() { rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)" "$(ohmybug_hunt_dir).pending"; }
+# What a PostToolUse hook may say to the agent in BOTH clients: JSON on stdout,
+# exit 0, `hookSpecificOutput.additionalContext`. Exit 2 with stderr is read by
+# Codex as "replace the tool result with this", so a diagnostic there would
+# cost the agent the findings, the receipt or the review id it was about.
+ctx() { # stdin: hook stdout -> the additionalContext text (empty if none)
+  python3 -c 'import json,sys
+for line in sys.stdin:
+    try: d=json.loads(line)
+    except Exception: continue
+    h=d.get("hookSpecificOutput") or {}
+    if h.get("hookEventName")=="PostToolUse" and isinstance(h.get("additionalContext"),str):
+        print(h["additionalContext"]); break' 2>/dev/null
+}
 s() { # label, expected marker content ('' = absent)
   got=$([ -f "$M" ] && cat "$M")
   if [ "$got" != "$2" ]; then
@@ -284,6 +301,16 @@ else
   post submit_review 0; s "submit alone does not authorise" ""
   post get_findings 1; s "done promotes the submitted diff" "$ID"
   t "$V" 0                                    # ...and the gate now lets it through
+  # wait_review is the same poll under another name: a non-terminal answer from
+  # it promotes nothing and keeps the pending record — the guard must read the
+  # status for EVERY status-carrying tool, not for get_findings by name.
+  reset_state
+  post submit_review 0
+  post wait_review 0; s "wait_review still running writes nothing" ""
+  [ -n "$(ls -A "$(ohmybug_hunt_dir).pending" 2>/dev/null)" ] || {
+    printf 'FAIL wait_review still running dropped the pending record\n'
+    fails=$((fails + 1)); }
+  post wait_review 1; s "wait_review done promotes the submitted diff" "$ID"
   # ...in EVERY envelope a client may hand the hook. A clean hunt may have no
   # later confirm call, so this `done` response is what promotes it.
   for shape in list raw string part; do
@@ -295,13 +322,19 @@ else
   # Reading a status out of a string means PARSING it, and that parse is the one
   # place in this hook that can raise. A raise here is not "no status": the whole
   # python block runs under `|| exit 0`, so it aborts the hook before the tool
-  # name is read. On confirm_findings that is unrecoverable — the call is
-  # one-shot, it promotes without asking for a status, and there is no later poll
-  # to retry it, so the hunt the user paid for AND confirmed is lost and the gate
-  # blocks it as never hunted.
+  # name is read — and once it did, the pending record was lost with it. Prose
+  # is not a verdict on the review either way: it promotes nothing (a merge
+  # authorisation cannot rest on text nobody could read) AND it deletes nothing,
+  # so the poll that follows still finds the pending record and promotes it.
   reset_state
   post submit_review 0 rev_x content
-  post confirm_findings 0 rev_x garbage; s "prose in place of JSON does not lose a confirmed hunt" "$ID"
+  post confirm_findings 0 rev_x garbage >"$HOME/hook.out"; s "prose in place of JSON promotes nothing" ""
+  [ -s "$(ohmybug_hunt_dir).pending/rev_x" ] || { echo "FAIL stamp: prose in place of JSON must keep the pending record"; fails=$((fails + 1)); }
+  case "$(ctx <"$HOME/hook.out")" in
+    *"was not readable JSON"*) ;;
+    *) echo "FAIL stamp: an unreadable confirm answer was swallowed without telling the agent"; fails=$((fails + 1)) ;;
+  esac
+  post get_findings 1 rev_x content; s "...and the next poll still promotes the confirmed hunt" "$ID"
   # Fixes written WHILE the review runs were never hunted. The marker must
   # name the diff that was sent, not whatever the tree looks like when the
   # answer arrives — otherwise the gate blesses code the hunt never saw.
@@ -324,6 +357,143 @@ else
   # The owning session promotes the recorded payload; this one records nothing.
   post confirm_findings 0; s "confirm without a pending stamps nothing" ""
   t "$V" 2
+
+  # --- `done` is not the gate decision ----------------------------------------
+  # A hunt stopped before it reviewed anything — cut short, blind, its protocol
+  # holed — ends `done` exactly like a full one, with `review_of_record: false`
+  # beside it. Promoting on `done` alone opened the merge gate for every one of
+  # them. The server's field decides; an older server that lacks it is judged by
+  # the pair it was derived from; an ERROR decides nothing at all.
+  postx() { # tool, review id, extra body fields (JSON object), [envelope] -> rc
+    OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
+    python3 -c "import json,os,sys;
+body={'review_id':sys.argv[2]}; body.update(json.loads(sys.argv[3]))
+parts=[{'type':'text','text':json.dumps(body)}]
+resp={'content':parts,'isError':True} if sys.argv[4]=='error' else (body if sys.argv[4]=='raw' else {'content':parts})
+print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
+    'tool_input':{'review_id':sys.argv[2],'diff':os.environ.get('OMB_DIFF','')},
+    'tool_response':resp,'hook_event_name':'PostToolUse',
+    'cwd':os.getcwd()}))" "$1" "$2" "$3" "${4:-content}" \
+    | bash "$G/stamp-hunt.sh" >/dev/null 2>&1; echo $?
+  }
+  postxo() { # same payload as postx -> the hook's stdout
+    OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
+    python3 -c "import json,os,sys;
+body={'review_id':sys.argv[2]}; body.update(json.loads(sys.argv[3]))
+parts=[{'type':'text','text':json.dumps(body)}]
+resp={'content':parts,'isError':True} if sys.argv[4]=='error' else (body if sys.argv[4]=='raw' else {'content':parts})
+print(json.dumps({
+    'tool_name':sys.argv[5]+sys.argv[1],
+    'tool_input':{'review_id':sys.argv[2],'diff':os.environ.get('OMB_DIFF','')} if sys.argv[1]!='submit_review' else {'diff':os.environ.get('OMB_DIFF',''), **(json.loads(sys.argv[6]) if sys.argv[6] else {})},
+    'tool_response':resp,'hook_event_name':'PostToolUse',
+    'cwd':os.getcwd()}))" "$1" "$2" "$3" "${4:-content}" "${5:-mcp__plugin_bughunter_ohmybug__}" "${6:-}" \
+    | bash "$G/stamp-hunt.sh" 2>/dev/null
+  }
+  pend() { # label, want pending present? (1/0)
+    have=$([ -s "$(ohmybug_hunt_dir).pending/rev_x" ] && echo 1 || echo 0)
+    [ "$have" = "$2" ] || { printf 'FAIL pending %s: want=%s got=%s\n' "$1" "$2" "$have"; fails=$((fails + 1)); }
+  }
+  # The server says no. Nothing promoted, the finished run's pending record gone
+  # (the Stop nudge must not hold a turn for a review that is over), and rc 0
+  # with the sentence as additionalContext — it reaches the agent without
+  # replacing the tool result, which is what exit 2 would do under Codex.
+  reset_state; post submit_review 0
+  rc=$(postx get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}')
+  s "done + review_of_record:false promotes nothing" ""; pend "refused run is over" 0
+  [ "$rc" = 0 ] || { echo "FAIL stamp: a refused run must not block or replace the result (rc 0), got $rc"; fails=$((fails + 1)); }
+  # The tombstone must be EMPTY: the gate's live-pending lookup greps every
+  # file in that directory, and a tombstone carrying the record's lines would
+  # block the merge with "a hunt is RUNNING" for the whole pending TTL — on a
+  # review the server refused, with an instruction nobody can satisfy.
+  [ -e "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] && [ ! -s "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] \
+    || { echo "FAIL stamp: the refusal tombstone is missing or not empty"; fails=$((fails + 1)); }
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"has not been hunted"*) ;;
+    *) echo "FAIL gate: after a refused hunt the block must read 'not been hunted', got: $(printf '%s' "$out" | head -c 160)"; fails=$((fails + 1)) ;;
+  esac
+  reset_state; post submit_review 0
+  said=$(postxo get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}' | ctx)
+  case "$said" in *"NOT a review of record"*"cut short"*) ;; *) echo "FAIL stamp: the refused run was not said to the agent with the server's note: $said"; fails=$((fails + 1));; esac
+  # ...and the confirm that follows a refused hunt is as silent as one after a
+  # promotion: the review is over either way, and the "no rev-id record"
+  # paragraph would send the agent to re-poll a review the server refused.
+  said=$(postxo confirm_findings rev_x '{"confirmed":0,"billed_usd":0}' | ctx)
+  [ -z "$said" ] || { echo "FAIL stamp: confirm after a refused hunt still talks: $said"; fails=$((fails + 1)); }
+  t "$V" 2
+  # The server says yes — in either polling tool.
+  for tool in get_findings wait_review; do
+    reset_state; post submit_review 0
+    postx "$tool" rev_x '{"status":"done","review_of_record":true}' >/dev/null
+    s "done + review_of_record:true promotes via $tool" "$ID"
+  done
+  # An older server: no field. cut_short / protocol / pipeline_completed decide,
+  # and their absence is legacy, not refusal.
+  for legacy in '{"cut_short":"time budget"}' '{"protocol":"incomplete"}' '{"pipeline_completed":false}'; do
+    reset_state; post submit_review 0
+    postx get_findings rev_x "$(printf '%s' "$legacy" | sed 's/^{/{"status":"done",/')" >/dev/null
+    s "done + legacy $legacy promotes nothing" ""
+  done
+  reset_state; post submit_review 0
+  postx get_findings rev_x '{"status":"done","protocol":"complete","pipeline_completed":true}' >/dev/null
+  s "done with a legacy body that says complete promotes" "$ID"
+  # confirm_findings: the answer is read, not assumed. An error ("not done yet")
+  # is not about the review — pending stays. A refusal beside the verdicts
+  # promotes nothing. A clean answer promotes.
+  reset_state; post submit_review 0
+  postx confirm_findings rev_x '{"error":"bad_request","message":"not done"}' error >/dev/null
+  s "confirm error promotes nothing" ""; pend "confirm error keeps the pending record" 1
+  # Each half of the error test on its own: the server's envelope (an `error`
+  # body in a plain content part, no isError) and the client's (isError with
+  # no readable body). Together they always fired together, so deleting either
+  # detector kept the suite green — and the server half is the live one:
+  # payment_required and pending_verdicts arrive exactly like that.
+  postx confirm_findings rev_x '{"error":"pending_verdicts","message":"verdicts first"}' >/dev/null
+  s "a server error body without isError promotes nothing" ""; pend "server error keeps the pending record" 1
+  postx confirm_findings rev_x '{"message":"upstream said no"}' error >/dev/null
+  s "isError without an error key promotes nothing" ""; pend "client error keeps the pending record" 1
+  postx confirm_findings rev_x '{"review_of_record":false,"gate_note":"blind"}' >/dev/null
+  s "confirm + review_of_record:false promotes nothing" ""; pend "refused confirm ends the pending record" 0
+  reset_state; post submit_review 0
+  postx confirm_findings rev_x '{"review_of_record":true,"acknowledged":true}' >/dev/null
+  s "confirm + review_of_record:true promotes" "$ID"
+  # The RAW envelope — the object itself, no content wrapper — carries no
+  # `status` on a confirm answer. Read as "no answer", it kept the pending record
+  # and told the agent the answer was unreadable, about JSON that said
+  # review_of_record: true (round-5 regression of this very change).
+  reset_state; post submit_review 0
+  postx confirm_findings rev_x '{"review_of_record":true,"confirmed":1,"billed_usd":10}' raw >/dev/null
+  s "a raw confirm answer promotes" "$ID"
+  reset_state
+  postxo submit_review rev_x '{"error":"rate_limited","message":"Daily cap"}' raw >/dev/null
+  pend "a raw server error on submit files no pending record" 0
+  # The pending record is filed under the id the SERVER minted, never under one
+  # typed into submit_review's input (the server ignores unknown keys, so the
+  # call succeeds): filed under an older, finished review, the current diff
+  # would be promoted by the next poll of THAT review.
+  reset_state
+  postxo submit_review rev_new '{"status":"running"}' content mcp__plugin_bughunter_ohmybug__ '{"review_id":"rev_old"}' >/dev/null
+  [ -s "$(ohmybug_hunt_dir).pending/rev_old" ] && { echo "FAIL stamp: a typed review_id keyed the pending record"; fails=$((fails + 1)); }
+  [ -s "$(ohmybug_hunt_dir).pending/rev_new" ] || { echo "FAIL stamp: the server-minted id did not key the pending record"; fails=$((fails + 1)); }
+  postx get_findings rev_old '{"status":"done","review_of_record":true}' >/dev/null
+  s "a poll of a review this diff was never filed under promotes nothing" ""
+  # A submit the server refused minted nothing: no pending record, or the Stop
+  # nudge and the gate would wait on a hunt that never started.
+  reset_state
+  postxo submit_review rev_x '{"error":"rate_limited","message":"Daily cap"}' error >/dev/null
+  pend "a refused submit files no pending record" 0
+  # Codex names the tools mcp__ohmybug__*; the recorder reads the same fields.
+  reset_state
+  postxo submit_review rev_x '{"status":"running"}' content mcp__ohmybug__ >/dev/null
+  postxo wait_review rev_x '{"status":"done","review_of_record":true}' content mcp__ohmybug__ >/dev/null
+  s "the Codex tool namespace promotes like the Claude one" "$ID"
+  # Once promoted from this checkout, the confirm that follows every hunt has
+  # nothing to say: without the tombstone it ended in the "no rev-id record"
+  # paragraph on every single hunt.
+  said=$(postxo confirm_findings rev_x '{"review_of_record":true,"billed_usd":10}' content mcp__ohmybug__ | ctx)
+  [ -z "$said" ] || { echo "FAIL stamp: confirm after a promotion from this checkout still talks: $said"; fails=$((fails + 1)); }
+  [ -e "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] || { echo "FAIL stamp: no promotion tombstone"; fails=$((fails + 1)); }
 fi
 
 # --- block -> warn: a refused hunt must not dead-end the merge ---------------
@@ -385,6 +555,28 @@ if [ -n "$ID" ]; then
   t "$V" 0
   rm -f "$HOME/.claude/settings.json"
   t "$V" 0
+  # Under Codex (PLUGIN_DATA set) there are no Claude Code settings to consult,
+  # and MCP approval is the user's answer per call — so a bare attempt is not
+  # "the environment refused" and the gate stays shut. Read as not-permitted,
+  # one aborted submit opened the merge for the attempt's whole TTL.
+  rc=$(mk "$V" "$PWD" | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL under Codex a bare attempt stood the gate down (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and a Codex-shaped payload: tool_name spelled out, hook_event_name set,
+  # and the command handed over as argv. A parser that dies on the list is read
+  # as "no verdict", and that branch OPENS the gate.
+  rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['gh','pr','merge','5','--squash']},'cwd':sys.argv[1]}))" "$PWD" \
+       | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL an argv-shaped merge command slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and the argv shape every shell wrapper produces: the merge is the ONE
+  # argument of `-c`. A space join makes that argument the bare word `gh` and
+  # the merge walks through — the very defect the file header lists for the
+  # string spelling (`bash -c "gh pr merge"`).
+  rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['bash','-c','gh pr merge 5 --squash']},'cwd':sys.argv[1]}))" "$PWD" \
+       | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL a merge wrapped in argv bash -c slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['bash','-lc','gh pr merge 5 --squash']},'cwd':sys.argv[1]}))" "$PWD" \
+       | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL a merge wrapped in argv bash -lc slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
   # The warning covers the diff that was attempted, not whatever came after it.
   printf 'written after the attempt\n' >> "$SCRATCH"
   t "$V" 2
@@ -451,19 +643,21 @@ if [ -n "$ID" ]; then
 
   # A review that ends `failed` is over, and its pending record must not keep
   # saying "a hunt is RUNNING" — that is a permanent block whose instruction
-  # (poll until done) can never come true.
-  post submit_review 0
-  python3 -c "import json,sys;print(json.dumps({
-    'tool_name':'mcp__plugin_bughunter_ohmybug__get_findings',
-    'tool_input':{'review_id':'rev_x'},
-    'tool_response':{'content':[{'type':'text','text':json.dumps(
-       {'review_id':'rev_x','status':'failed'})}]},
-    'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh"
-  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
-  case "$out" in
-    *RUNNING*) printf 'FAIL a failed review still reads as a running hunt\n'; fails=$((fails + 1)) ;;
-  esac
-  reset_state
+  # (poll until done) can never come true. Whichever poll tool brought the news.
+  for tool in get_findings wait_review; do
+    post submit_review 0
+    python3 -c "import json,sys;print(json.dumps({
+      'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[2],
+      'tool_input':{'review_id':'rev_x'},
+      'tool_response':{'content':[{'type':'text','text':json.dumps(
+         {'review_id':'rev_x','status':'failed'})}]},
+      'cwd':sys.argv[1]}))" "$PWD" "$tool" | bash "$G/stamp-hunt.sh"
+    out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+    case "$out" in
+      *RUNNING*) printf 'FAIL a failed review via %s still reads as a running hunt\n' "$tool"; fails=$((fails + 1)) ;;
+    esac
+    reset_state
+  done
 
   # A submit that WAS allowed and is still running is not a refusal. Merging on
   # its attempt record would mean merging ahead of the findings it will return.
@@ -526,19 +720,29 @@ fi
 
 # --- which event fired is key PRESENCE, not truthiness ------------------------
 # An errored or empty response is still a PostToolUse. Reading it as "no
-# response" would file a live submit as a mere attempt: the pending record is
-# never written, so the finished review never promotes, and a hunt the user paid
-# for ends up reported as "requested, never finished".
+# response" would file a live submit as a mere attempt — the attempt record the
+# PreToolUse branch writes would stand after a call the environment allowed,
+# and the next merge would be waved through on "the environment refused it".
+# (The pending record itself needs the id the SERVER minted, and an empty
+# answer carries none: nothing to file, and the hook says so.)
 reset_state
 OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
 python3 -c "import json,os,sys;print(json.dumps({
   'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
-  'tool_input':{'review_id':'rev_empty','diff':os.environ.get('OMB_DIFF','')},
+  'tool_input':{'diff':os.environ.get('OMB_DIFF','')},
+  'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh" >/dev/null 2>&1
+ohmybug_attempted "$ID" || { printf 'FAIL the PreToolUse offer left no attempt record\n'; fails=$((fails + 1)); }
+OMB_DIFF=$(git diff "$(ohmybug_base)" 2>/dev/null) \
+python3 -c "import json,os,sys;print(json.dumps({
+  'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+  'tool_input':{'diff':os.environ.get('OMB_DIFF','')},
   'tool_response':{},
-  'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh"
-[ -s "$(ohmybug_hunt_dir).pending/rev_empty" ] || {
-  printf 'FAIL an empty tool_response was read as PreToolUse: no pending record written\n'
-  fails=$((fails + 1)); }
+  'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh" 2>/dev/null >"$HOME/hook.out"
+ohmybug_attempted "$ID" && { printf 'FAIL an empty tool_response was read as PreToolUse: the attempt record survived the call\n'; fails=$((fails + 1)); }
+case "$(ctx <"$HOME/hook.out")" in
+  *"carried no review_id"*) ;;
+  *) printf 'FAIL a submit with no readable review id was filed silently\n'; fails=$((fails + 1)) ;;
+esac
 reset_state
 
 # --- the block text speaks to one addressee per line --------------------------
@@ -905,7 +1109,14 @@ printf 'dirty\n' >> "$PREPO/b.ts"
 printf 'dirty\n' >> "$PREPO/c.ts"
 PART_DIFF=$(git -C "$PREPO" diff "$(cd "$PREPO" && ohmybug_base)" -- a.ts)
 [ -n "$PART_DIFF" ] || { printf 'FAIL partial-payload fixture: no diff for a.ts\n'; fails=$((fails + 1)); }
-ppost submit_review running "$PREPO" "$PART_DIFF" rev_part >/dev/null 2>&1
+ppost submit_review running "$PREPO" "$PART_DIFF" rev_part >"$HOME/hook.out" 2>/dev/null
+# ...and the submit SAYS so, to the agent: a record holding only the sent
+# bytes' hash satisfies no gate lookup, and silent, that surfaced at merge time
+# as "never hunted" about a hunt that was paid for.
+case "$(ctx <"$HOME/hook.out")" in
+  *"does not match this working tree"*) ;;
+  *) printf 'FAIL a partial payload was filed without telling the agent\n'; fails=$((fails + 1)) ;;
+esac
 ppost get_findings done "$PREPO" "$PART_DIFF" rev_part
 rc=$(mk "$V" "$PREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL a one-file payload blessed the whole dirty tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
@@ -953,15 +1164,16 @@ ANC=$(git -C "$AREPO" rev-parse HEAD)
 printf 'never reviewed\n' >> "$AREPO/a.ts"
 # The one diagnostic that explains an unrecordable hunt must actually fire:
 # a silent non-recording is indistinguishable from a hunt that never ran.
-out=$(ppost submit_review running "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)" 2>&1 >/dev/null); rc=$?
+ppost submit_review running "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)" >"$HOME/hook.out" 2>/dev/null; rc=$?; out=$(ctx <"$HOME/hook.out")
 case "$out" in
   *"cannot be recorded"*) ;;
   *) printf 'FAIL a foreign-ref submit did not say it recorded nothing: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
-# ...and says it where the AGENT reads it. At exit 0 a PostToolUse hook's output
-# reaches the transcript and not the model, so this diagnostic existed for a
-# year and was never once seen by the party that could act on it.
-[ "$rc" = 2 ] || { printf 'FAIL the unrecordable submit told only the transcript (rc=%s)\n' "$rc"
+# ...and says it where the AGENT reads it, in both clients: as additionalContext
+# on exit 0. Plain text at exit 0 reaches only the transcript (this diagnostic
+# existed for a year unseen); exit 2 makes Codex REPLACE the tool result — the
+# review id the agent needs next — with the sentence.
+[ "$rc" = 0 ] || { printf 'FAIL the unrecordable submit did not exit 0 (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
 ppost get_findings done "$AREPO" "" rev_cross "$(git -C "$BREPO" rev-parse HEAD)"
 ppost submit_review running "$AREPO" "" rev_anc "$ANC" >/dev/null 2>&1
@@ -1127,18 +1339,18 @@ rm -rf "$(dirname "$SREPO")"
 UREPO=$(mktemp -d)/repo
 mkrepo "$UREPO"
 printf 'big unpushed work\n' >> "$UREPO/a.ts"
-out=$(python3 -c "import json,sys;print(json.dumps({
+python3 -c "import json,sys;print(json.dumps({
   'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
   'tool_input':{'review_id':'rev_up','diff':'','upload':True,
     'meta':{'repo':'x/y','ref':sys.argv[1]}},
   'tool_response':{'content':[{'type':'text','text':json.dumps(
      {'review_id':'rev_up','status':'running'})}]},
-  'cwd':sys.argv[2]}))" "$(git -C "$UREPO" rev-parse HEAD)" "$UREPO" | bash "$G/stamp-hunt.sh" 2>/dev/null); rc=$?
+  'cwd':sys.argv[2]}))" "$(git -C "$UREPO" rev-parse HEAD)" "$UREPO" | bash "$G/stamp-hunt.sh" 2>/dev/null >"$HOME/hook.out"; rc=$?; out=$(ctx <"$HOME/hook.out")
 case "$out" in
   *"cannot verify them against this tree"*) ;;
   *) printf 'FAIL an out-of-band upload from a dirty tree was filed silently: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
-[ "$rc" = 2 ] || { printf 'FAIL the out-of-band warning told only the transcript (rc=%s)\n' "$rc"
+[ "$rc" = 0 ] || { printf 'FAIL the out-of-band warning blocked or replaced the result (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
 ppost get_findings done "$UREPO" "" rev_up
 rc=$(mk "$V" "$UREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
@@ -1172,8 +1384,8 @@ rm -rf "$(dirname "$UREPO")"
 # that was reviewed. That happened, and it was caught by hand at merge time
 # (owner report, 2026-08-22). The agent can tell them apart — if it is told.
 reset_state
-out=$(ppost get_findings done "$PWD" "" rev_ghostpromote 2>&1 >/dev/null); rc=$?
-[ "$rc" = 2 ] || { printf 'FAIL a promotion that found no record was silent (rc=%s)\n' "$rc"
+ppost get_findings done "$PWD" "" rev_ghostpromote >"$HOME/hook.out" 2>/dev/null; rc=$?; out=$(ctx <"$HOME/hook.out")
+[ "$rc" = 0 ] && [ -n "$out" ] || { printf 'FAIL a promotion that found no record was silent or blocking (rc=%s ctx=%s)\n' "$rc" "$out"
                    fails=$((fails + 1)); }
 case "$out" in
   *"no rev-id record for rev_ghostpromote"*"$PWD"*) ;;
@@ -1369,6 +1581,11 @@ rm -rf "$BK"
 # plugin must never write.
 FR=$(mktemp -d)
 say() { OMB_STATE_DIR="$FR/state" HOME="$FR" bash "$G/first-run.sh"; }
+# Under Codex (PLUGIN_DATA set) the notice is about the wrong client: silent,
+# and the mark is NOT written, so a Claude Code session on the same machine
+# still hears it once.
+[ -z "$(PLUGIN_DATA=/x say)" ] || { printf 'FAIL first-run: gave Codex the Claude Code permission note\n'; fails=$((fails + 1)); }
+[ ! -e "$FR/state/permission-notice-v1" ] || { printf 'FAIL first-run: Codex consumed the once-per-machine mark\n'; fails=$((fails + 1)); }
 [ -n "$(say)" ] || { printf 'FAIL first-run: said nothing on a fresh install\n'; fails=$((fails + 1)); }
 [ -z "$(say)" ] || { printf 'FAIL first-run: said it twice\n'; fails=$((fails + 1)); }
 rm -rf "$FR/state"
@@ -1427,6 +1644,10 @@ n 'an unread hunt blocks the end of the turn'  0 2
 n 'and never twice in a row'                   1 0
 post get_findings 1 rev_nudge content
 n 'a read hunt is silent'                      0 0
+# ...and the tombstone the promotion left behind is not an unread hunt: it is
+# the record of one that was read. Counted, every finished hunt nagged forever.
+[ -e "$(ohmybug_hunt_dir).pending/rev_nudge.promoted" ] || { echo "FAIL nudge: promotion left no tombstone"; fails=$((fails + 1)); }
+n 'a promotion tombstone is silent'            0 0
 
 # Six unread hunts, five named: the cap is fine, hiding the remainder is not.
 # The next Stop is suppressed by the anti-loop guard, so this message is the only
@@ -1609,11 +1830,40 @@ def fires(event, tool):
                for e in h.get(event, []))
 want = {("PreToolUse", "submit_review"): True,
         ("PreToolUse", "get_findings"): False,
+        ("PreToolUse", "wait_review"): False,
         ("PreToolUse", "confirm_findings"): False,
         ("PostToolUse", "submit_review"): True,
         ("PostToolUse", "get_findings"): True,
+        # The documented way to poll a long hunt answers with the same terminal
+        # body as get_findings; a session that polls through it alone never got
+        # its marker.
+        ("PostToolUse", "wait_review"): True,
         ("PostToolUse", "confirm_findings"): True}
 bad = [f"{e}/{t}: want {w}, got {fires(e, t)}" for (e, t), w in want.items() if fires(e, t) != w]
+# Codex reads the manifest's `hooks` INSTEAD of hooks/hooks.json, so a manifest
+# that names only the router file installs no gate, no recorder and no nudge
+# for Codex users. Both files, by name.
+import os
+root = os.path.dirname(os.path.dirname(sys.argv[1]))
+codex = json.load(open(os.path.join(root, ".codex-plugin", "plugin.json"))).get("hooks")
+codex = codex if isinstance(codex, list) else [codex]
+for f in ("./hooks/hooks.json", "./hooks/claude-codex-hooks.json"):
+    if f not in codex:
+        bad.append(f"codex manifest hooks: {f} not listed")
+# One offer, one sentence. The marketplace card once quoted a different number while
+# the server, README and skill said "first review free".
+# The whole tree, not a list of places: the second marketplace card lives
+# under .agents, and a list is exactly how a card gets missed. `:/` is the
+# repository top level whatever directory the suite runs from (root here is
+# plugins/bughunter, and a cwd-relative grep sees only that). git grep exits
+# 1 for "no match"; anything else is git failing, not the copy passing.
+import subprocess
+copy = subprocess.run(["git", "grep", "-n", "-i", "-E", r"first (two|three|[0-9]+) (reviews? )?free", "--", ":/"],
+                      cwd=root, capture_output=True, text=True)
+if copy.returncode not in (0, 1):
+    bad.append("free-allowance copy check: git grep failed rc=%d %s" % (copy.returncode, copy.stderr.strip()))
+elif copy.stdout.strip():
+    bad.append("free-allowance copy diverges from 'first review free': " + copy.stdout.strip().replace("\n", " | "))
 # Stop carries no matcher, so the only thing to assert is that it is wired at
 # all and to the right script: reverting that one line would otherwise leave
 # every row above green while no turn is ever held again.

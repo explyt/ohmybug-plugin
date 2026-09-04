@@ -1,6 +1,6 @@
 {
   "name": "bughunter",
-  "version": "0.73.0",
+  "version": "0.74.0",
   "description": "OhMyBug cloud bug hunt as the last merge gate, with Codex-native MCP routing.",
   "author": {
     "name": "OhMyBug",
@@ -13,7 +13,7 @@
   "keywords": ["code-review", "bugs", "quality", "merge-gate", "mcp"],
   "skills": "./skills/",
   "mcpServers": "./.codex-mcp.json",
-  "hooks": "./hooks/claude-codex-hooks.json",
+  "hooks": ["./hooks/hooks.json", "./hooks/claude-codex-hooks.json"],
   "interface": {
     "displayName": "OhMyBug Bughunter",
     "shortDescription": "Cloud bug hunt before merge",

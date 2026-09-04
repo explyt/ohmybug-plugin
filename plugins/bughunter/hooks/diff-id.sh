@@ -322,6 +322,14 @@ EOF
 # that blocks on the missing hunt is blocking on something nobody in the session
 # can produce.
 ohmybug_tools_allowed() {
+  # Codex (the client that sets PLUGIN_DATA) keeps no such files: its MCP tools
+  # are approved interactively, per call, and a declined approval is the user's
+  # answer, not the environment's default. Read as "not permitted", every
+  # recorded attempt there would stand the gate down — one aborted submit and an
+  # unhunted diff merges for the attempt's whole TTL, with advice naming a
+  # permission surface Codex does not have. So Codex answers "allowed": the
+  # tools work there, and an unfinished hunt is the thing to finish.
+  [ -n "${PLUGIN_DATA:-}" ] && return 0
   python3 - "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" \
     "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.json" \
     "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.local.json" <<'PY' 2>/dev/null

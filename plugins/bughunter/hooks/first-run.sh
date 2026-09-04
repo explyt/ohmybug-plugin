@@ -18,6 +18,16 @@ set -euo pipefail
 STATE=${OMB_STATE_DIR:-$HOME/.ohmybug}
 MARK=$STATE/permission-notice-v1
 
+# Codex loads these hooks too (manifest `hooks` lists hooks.json), and every
+# sentence below is about Claude Code: its auto-mode classifier, its
+# /permissions rule, its settings files, its tool namespace. Codex approves MCP
+# tools in its own config and names them mcp__ohmybug__*, so the note would be
+# wrong there — and, marked once per machine, would also silence the right one
+# for a Claude Code session beside it. Codex is the client that sets PLUGIN_DATA
+# (Claude Code sets only the CLAUDE_-prefixed names); nothing is written, so the
+# other client still gets its turn.
+[ -n "${PLUGIN_DATA:-}" ] && exit 0
+
 [ -f "$MARK" ] && exit 0
 
 # Any mention at all counts as "the user has decided": allow, ask and deny are

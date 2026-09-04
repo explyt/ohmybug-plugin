@@ -77,9 +77,11 @@ CAP=5
 # `rev_` + 12 uuid chars (8 hex, a dash, 3 hex) and the submit path names the
 # record from that response, never from anything the model typed. Two reviewers
 # read the filter as hiding legitimate hunts, so the invariant lives here now:
-# if ids ever gain a dot, this line is the one to revisit.
+# if ids ever gain a dot, this line is the one to revisit. `.promoted` is the
+# tombstone stamp-hunt.sh leaves where a record it promoted stood: a finished
+# hunt, nothing unread about it.
 PEND=$(cd "$DIR.pending" 2>/dev/null &&
-  find . -maxdepth 1 -type f ! -name '*.tmp' \
+  find . -maxdepth 1 -type f ! -name '*.tmp' ! -name '*.promoted' \
     -mmin "-$OHMYBUG_PENDING_TTL_MIN" 2>/dev/null |
   sed 's|^\./||' | sort)
 [ -n "$PEND" ] || exit 0
