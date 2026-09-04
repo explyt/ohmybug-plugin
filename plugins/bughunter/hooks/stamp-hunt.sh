@@ -47,21 +47,23 @@ blob = json.dumps(resp)
 # whose findings merely quote the characters status: failed used to delete the
 # pending record and lose a hunt the user had paid for, and hunting this very
 # repository produces exactly that prose.
-def status_of(r):
+def body_of(r):
     # Four envelopes for one response, and the client picks: the object itself,
     # a {content:[…]} wrapper, the bare content list, or one text part. Clean
     # hunts may have no later confirm call, so `done` must be readable in all.
+    # Returns (body, errored): the JSON object the server sent, or {} when none can be
+    # read, and whether the envelope itself said the call failed.
     if isinstance(r, str):
         try:
             r = json.loads(r)
         except Exception:
-            return ""
+            return {}, False
     if isinstance(r, list):
         r = {"content": r}
     if isinstance(r, dict):
-        s = r.get("status")
-        if isinstance(s, str):
-            return s
+        errored = r.get("isError") is True
+        if isinstance(r.get("status"), str):
+            return r, errored
         parts = [r] if isinstance(r.get("text"), str) else r.get("content")
         if isinstance(parts, list):
             for part in parts:
@@ -70,18 +72,57 @@ def status_of(r):
                         inner = json.loads(part["text"])
                     except Exception:
                         continue
-                    if isinstance(inner, dict) and isinstance(inner.get("status"), str):
-                        return inner["status"]
-    return ""
+                    if isinstance(inner, dict):
+                        return inner, errored
+        return {}, errored
+    return {}, False
 
-status = status_of(resp)
+body, errored = body_of(resp)
+status = body.get("status") if isinstance(body.get("status"), str) else ""
 done = "1" if status == "done" else "0"
 failed = "1" if status == "failed" else "0"
-review = inp.get("review_id") if isinstance(inp := d.get("tool_input") or {}, dict) else ""
+# Is this a REVIEW OF RECORD — the gate decision the server puts beside `status`
+# — or a run that ended `done` without reviewing what it was sent? `status: done`
+# is true of a cut-short, blind and protocol-holed row alike, and a marker
+# written on `done` alone opened the merge gate for every one of them. The
+# field the server sends decides; when an older server omits it, the pair it was
+# derived from decides (absent = legacy, never = refused, or a plugin rolled
+# out ahead of the server blocks every honest hunt). An errored call decides
+# nothing: it is not a response about the review at all.
+ofr = body.get("review_of_record")
+if ofr is None:
+    refused = (bool(body.get("cut_short")) or body.get("protocol") == "incomplete"
+               or body.get("pipeline_completed") is False)
+else:
+    refused = ofr is not True
+record = "0" if refused else "1"
+# The error envelope of the server carries `error` and no `status`; that of the client
+# carries `isError`. Either way nothing here describes a finished review — not
+# a promotion, and not a verdict on the review either: "not done yet" is an
+# error the agent will hear again from the next poll.
+errored = "1" if (errored or ("error" in body and not status)) else "0"
+# Whether any response was read at all. confirm_findings has no status to wait
+# for, so it is the one call where "nothing readable" must be told apart from
+# "readable, and of record": an unreadable answer promotes nothing, and the
+# pending record stays for a later get_findings to promote.
+readable = "1" if body else "0"
+inp = d.get("tool_input") or {}
+inp = inp if isinstance(inp, dict) else {}
+# WHICH review a record is filed under. For a poll or a confirm the id is the
+# argument the agent passed, and the server answers about that id. For
+# submit_review the id is MINTED BY THE SERVER and lives only in the answer:
+# the call has no review_id parameter, and the server drops unknown keys — so
+# an id typed into the input would be accepted by the server, ignored by it,
+# and used HERE to file the current diff under an older, finished review that
+# the next poll then promotes. The pending record binds a diff to a review;
+# the party constrained by that binding does not get to pick the review.
+review = "" if tool == "submit_review" else inp.get("review_id")
 # upload:true means the payload bytes leave the machine OUT OF BAND — this hook
 # never sees them, so they can prove nothing about any tree.
-upload = "1" if (isinstance(inp, dict) and inp.get("upload") is True) else "0"
+upload = "1" if inp.get("upload") is True else "0"
 if not isinstance(review, str) or not review:
+    review = body.get("review_id") if isinstance(body.get("review_id"), str) else ""
+if not review:
     # Same escaping rules as the `done` match above: \s, not \\s — the latter
     # is a literal backslash in a raw string and never matches, which recorded
     # NOTHING for every flow whose review_id lives only in the response
@@ -118,10 +159,11 @@ def one_line(v):
 # party that writes the pending record knows, at the time of writing, who it is
 # — and nothing else in the system does: the API key authenticates a machine, not
 # a session, and /mcp on the server is stateless, so "whose run is this" is not
-# answerable there at any price. Last field, so a reader that splits by
-# position keeps reading the same nine lines it always did.
+# answerable there at any price. Appended after the original nine, so a reader
+# that splits by position keeps reading the same lines it always did.
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
-      pre, failed, upload, one_line(d.get("session_id")), sep="\n")
+      pre, failed, upload, one_line(d.get("session_id")), record, readable,
+      errored, one_line(body.get("gate_note")), sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -136,10 +178,34 @@ UPLOAD=$(printf '%s' "$FIELDS" | sed -n 9p)
 # Sanitised the same way the review id is, and for the same reason: it becomes a
 # line in a file other hooks match with `grep -x`, so anything but the shape of
 # an id is not an id we need to keep.
-SESSION=$(printf '%s' "$FIELDS" | sed -n 10p | tr -c 'A-Za-z0-9_.-' '_')
+# `tr -d '\n'` first: the sanitiser rewrites every byte outside the id
+# alphabet, and the newline sed leaves on a line that is no longer the last one
+# is such a byte — without this, every session id gained a trailing `_` and no
+# nudge ever matched its own hunt again.
+SESSION=$(printf '%s' "$FIELDS" | sed -n 10p | tr -d '\n' | tr -c 'A-Za-z0-9_.-' '_')
+RECORD=$(printf '%s' "$FIELDS" | sed -n 11p)
+READABLE=$(printf '%s' "$FIELDS" | sed -n 12p)
+ERRORED=$(printf '%s' "$FIELDS" | sed -n 13p)
+GATE_NOTE=$(printf '%s' "$FIELDS" | sed -n 14p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
+
+# How a PostToolUse hook talks to the agent, in BOTH clients. The old way was
+# exit 2 with the sentence on stderr: in Claude Code that puts stderr in front
+# of the model beside a tool result that survives; in Codex the same exit code
+# REPLACES the tool result with the stderr — so once these hooks load there,
+# every confirm_findings (whose pending record the done-poll already promoted)
+# would hand the agent this hook's sentence instead of billed_usd, receipt and
+# share, and a submit that could not be recorded would lose its own review_id.
+# `hookSpecificOutput.additionalContext` on exit 0 is read by both: extra
+# context beside the result, the result untouched. Plain text on stdout at
+# exit 0 reaches only the transcript, which is how these diagnostics went a
+# year unseen (plugin#2) — so it is JSON, always, or exit 2 never.
+say() { # sentence -> the agent, result intact
+  python3 -c 'import json, sys
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": sys.argv[1]}}))' "$1" 2>/dev/null
+}
 
 . "$(dirname "$0")/diff-id.sh" 2>/dev/null || exit 0
 MARKER=$(ohmybug_marker_path) || exit 0
@@ -200,11 +266,24 @@ case "$TOOL" in
       CLEARED=$(git rev-parse --verify --quiet "$REF^{commit}" 2>/dev/null)
       [ -n "$CLEARED" ] && ohmybug_clear_attempt "ref:$CLEARED"
     fi
+    # A submit the SERVER refused (rate_limited, out of credit, bad request)
+    # minted no review: there is nothing to file a pending record for, and a
+    # record written here would say "a hunt is RUNNING" about a hunt that never
+    # started — then hold the Stop nudge and the gate on it. The tool result
+    # already tells the agent why; the attempt record above is cleared all the
+    # same, because the environment did allow the call.
+    [ "${ERRORED:-0}" = '1' ] && exit 0
+    # No id the SERVER minted could be read out of the answer: nothing to file
+    # the diff under. Silent, this was indistinguishable from a hunt that never
+    # ran; said, the agent can poll from this checkout or submit again.
+    if [ -z "$REVIEW" ]; then
+      say "ohmybug: the submit_review answer carried no review_id this hook could read, so this hunt was not recorded and the merge gate will not see it — if the tool result shows a review id, the review is running but unrecorded here: submit again from this checkout once it ends, or expect the gate to ask for a hunt."
+      exit 0
+    fi
     # Every id this submit could legitimately be known by, newline-separated.
     # The sent bytes first, because that one is true from any directory; the
     # working-tree ids only when the payload proves to BE this tree; the ref
     # last, for the no-payload path where there are no bytes to hash.
-    [ -n "$REVIEW" ] || exit 0
     mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
     TREEOK=0 REFOK=0
     {
@@ -268,44 +347,69 @@ case "$TOOL" in
     } > "$PENDING.tmp" 2>/dev/null || exit 0
     if [ -s "$PENDING.tmp" ] && grep -qv '^session:' "$PENDING.tmp" 2>/dev/null; then
       mv "$PENDING.tmp" "$PENDING"
-      # The dead ends are announced at SUBMIT time, on BOTH streams (an exit-0
-      # hook's stdout is the copy the transcript surfaces) — otherwise they
-      # surface at merge time as "never hunted" with nothing naming the cause.
+      # The dead ends are announced at SUBMIT time, to the agent (`say`) —
+      # otherwise they surface at merge time as "never hunted" with nothing
+      # naming the cause.
       # A record holding only the sent bytes' hash satisfies no gate lookup:
       if [ "$TREEOK" = 0 ] && [ "$REFOK" = 0 ] && [ -n "$SENT" ]; then
-        MSG="ohmybug: the payload does not match this working tree, so the merge gate will not recognise this tree as hunted — send the full working diff verbatim, or submit with no payload and meta.ref set to the pushed head commit sha"
-        echo "$MSG" >&2
-        echo "$MSG"
+        say "ohmybug: the payload does not match this working tree, so the merge gate will not recognise this tree as hunted — send the full working diff verbatim, or submit with no payload and meta.ref set to the pushed head commit sha"
       fi
       # ...and out-of-band bytes prove nothing about this tree, while with
       # uncommitted work the ref: line is never honoured either:
       if [ -z "$SENT" ] && [ "${UPLOAD:-0}" = 1 ] && [ "$TREEOK" = 0 ] &&
          { [ "$REFOK" = 0 ] || [ -n "$(git status --porcelain 2>/dev/null)" ]; }; then
-        MSG="ohmybug: the uploaded bytes go out of band, so the merge gate cannot verify them against this tree and will still block — to record the hunt, send the full working diff inline, or commit, push, and submit with meta.ref = the pushed head sha"
-        echo "$MSG" >&2
-        echo "$MSG"
-        exit 2
+        say "ohmybug: the uploaded bytes go out of band, so the merge gate cannot verify them against this tree and will still block — to record the hunt, send the full working diff inline, or commit, push, and submit with meta.ref = the pushed head sha"
       fi
     else
       rm -f "$PENDING.tmp"
       # Nothing identifiable was sent. Say so: this used to exit silently, and a
       # silent non-recording is indistinguishable from a hunt that never ran —
       # which is how the gate came to accuse work that had been reviewed.
-      MSG="ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on (cwd $PWD), so this hunt cannot be recorded; the merge gate will not see it"
-      echo "$MSG" >&2
-      echo "$MSG"
-      exit 2
+      say "ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on (cwd $PWD), so this hunt cannot be recorded; the merge gate will not see it"
     fi
     ;;
-  get_findings|confirm_findings)
-    # confirm_findings only exists after a done review, so it needs no status
-    # check; get_findings is polled while the review is still running.
+  get_findings|wait_review|confirm_findings)
+    # get_findings and wait_review are polled while the review is still running
+    # and answer with the same terminal body; confirm_findings only exists after
+    # a done review, so it has no status to wait for — but it does have an
+    # answer to read, and an error or nothing readable is not the answer.
     #
     # DONE is decided first. A review that ends `failed` is over and its pending
     # record must not sit there saying "a hunt is RUNNING" forever — but asking
     # that question first threw finished reviews away.
     if [ "$TOOL" != 'confirm_findings' ] && [ "${DONE:-0}" != '1' ]; then
       [ "${FAILED:-0}" = '1' ] && rm -f "$PENDING"
+      exit 0
+    fi
+    # An errored call is not a response about the review: "not done yet" on a
+    # confirm leaves the pending record exactly where it was.
+    [ "${ERRORED:-0}" = '1' ] && exit 0
+    if [ "$TOOL" = 'confirm_findings' ] && [ "${READABLE:-0}" != '1' ]; then
+      # One-shot call, unreadable answer: promote nothing, lose nothing. The
+      # pending record stays, and the next get_findings promotes it if the
+      # review is of record.
+      [ -s "$PENDING" ] && say "ohmybug: the confirm_findings answer for $REVIEW was not readable JSON, so nothing was promoted into the merge marker; call get_findings once more from this checkout to record the finished hunt."
+      exit 0
+    fi
+    # Already promoted from this checkout — the done-poll took the pending
+    # record and left this tombstone. A later poll or the confirm that always
+    # follows has nothing to do and nothing to say: without the tombstone every
+    # confirm_findings ended in the "no rev-id record" paragraph below, once per
+    # hunt, in every session — the sentence that exists for the rare worktree
+    # mix-up, taught as noise by the common case.
+    [ -e "$PENDING.promoted" ] && exit 0
+    # `done` is not the gate decision. A run stopped before it reviewed anything
+    # — cut short, blind, its protocol holed — ends `done` like any other, with
+    # `review_of_record: false` beside it. The review is over, so the pending
+    # record goes (the Stop nudge must not hold the turn for a finished run),
+    # but nothing is promoted: the gate stays shut on a diff no review of record
+    # has seen, and the sentence the server put beside the decision is the one
+    # the agent reads, so the next move is the server's, not a guess.
+    if [ "${RECORD:-0}" != '1' ]; then
+      if [ -s "$PENDING" ]; then
+        rm -f "$PENDING"
+        say "ohmybug: review $REVIEW finished but is NOT a review of record${GATE_NOTE:+ — $GATE_NOTE}. Nothing was promoted into the merge marker and the merge gate stays shut for this diff: it has not been hunted. Submit it again."
+      fi
       exit 0
     fi
     if [ -s "$PENDING" ]; then
@@ -318,6 +422,10 @@ case "$TOOL" in
       # older install still reads only that file.
       mkdir -p "$(dirname "$MARKER")" && head -n 1 "$PENDING" > "$MARKER"
       rm -f "$PENDING"
+      # The tombstone the calls after this one read (above). Empty on purpose:
+      # `ohmybug_pending_has` matches whole lines against ids, and a file with
+      # no lines can bless nothing. Aged out with the records it sits beside.
+      : > "$PENDING.promoted" 2>/dev/null
     else
       # No pending: another session owns the submit. Never hash this cwd: in a
       # worktree flow it may be a different checkout and would bless the wrong
@@ -328,12 +436,7 @@ case "$TOOL" in
       # a different checkout, so the promotion silently no-ops and the gate then
       # blocks a diff that was hunted and paid for (owner report, 2026-08-22).
       # The hook cannot tell the two apart — the agent can, and only if it is
-      # told. exit 2 is what puts stderr in front of it; the call has already
-      # run, so nothing is blocked.
-      # stderr only, unlike the submit-path diagnostics: this branch fires
-      # legitimately whenever another worktree owns the review, and exit 2
-      # already puts stderr in front of the agent. A second copy on stdout would
-      # buy nothing and print twice in every multi-worktree flow.
+      # told (`say`; the call has already run, so nothing is blocked).
       # WHAT WAS NOT FOUND, and no conclusion about the gate. The old sentence
       # ended "the merge gate will not see this hunt", which does not follow from
       # its own premise: the gate has four ways to recognise a hunted diff — the
@@ -347,8 +450,7 @@ case "$TOOL" in
       # to ask the owner for SKIP_BUGHUNT. A true fact with a false conclusion
       # attached pushes an operator to disarm the control, and it is worse than a
       # plain error because there is nothing in the message to disprove.
-      echo "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of four keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), ref:<sha> on a clean tree, or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this." >&2
-      exit 2
+      say "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of four keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), ref:<sha> on a clean tree, or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this."
     fi
     ;;
 esac

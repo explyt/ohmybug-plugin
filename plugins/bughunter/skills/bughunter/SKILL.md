@@ -64,10 +64,17 @@ depending on the surface:
   claude mcp login plugin:bughunter:ohmybug
   ```
 
+- Codex: run this in any terminal, then retry the tool call:
+
+  ```bash
+  codex mcp login ohmybug
+  ```
+
 Either way a GitHub page opens in the browser – one click (zero if the
 app was approved before), the account with a free first review is
 created automatically, once per machine. Then retry the tool call.
-(Do not run `claude mcp login` yourself: it needs an interactive tty.)
+(Do not run `claude mcp login` or `codex mcp login` yourself: they need
+an interactive tty.)
 
 ## The flow
 
@@ -163,7 +170,8 @@ the same call with an empty `diff` changes nothing. Measured twice.
 
 1. **Say it once**, in one line: the hunt tools are refused in this environment,
    and the rule that would change that is `/permissions` →
-   `mcp__plugin_bughunter_ohmybug__*`. Adding it is the user's own click in
+   `mcp__plugin_bughunter_ohmybug__*` (in Codex the tools live under
+   `mcp__ohmybug__*`). Adding it is the user's own click in
    their own settings – never add it yourself, never ask for it to be widened
    "so auto-mode stops blocking". A tool that talks its way past the control
    built to stop tools like it is the exact shape of the attack that control is
