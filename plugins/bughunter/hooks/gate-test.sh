@@ -355,7 +355,7 @@ else
     python3 -c "import json,os,sys;
 body={'review_id':sys.argv[2]}; body.update(json.loads(sys.argv[3]))
 parts=[{'type':'text','text':json.dumps(body)}]
-resp={'content':parts,'isError':True} if sys.argv[4]=='error' else {'content':parts}
+resp={'content':parts,'isError':True} if sys.argv[4]=='error' else (body if sys.argv[4]=='raw' else {'content':parts})
 print(json.dumps({
     'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[1],
     'tool_input':{'review_id':sys.argv[2],'diff':os.environ.get('OMB_DIFF','')},
@@ -368,7 +368,7 @@ print(json.dumps({
     python3 -c "import json,os,sys;
 body={'review_id':sys.argv[2]}; body.update(json.loads(sys.argv[3]))
 parts=[{'type':'text','text':json.dumps(body)}]
-resp={'content':parts,'isError':True} if sys.argv[4]=='error' else {'content':parts}
+resp={'content':parts,'isError':True} if sys.argv[4]=='error' else (body if sys.argv[4]=='raw' else {'content':parts})
 print(json.dumps({
     'tool_name':sys.argv[5]+sys.argv[1],
     'tool_input':{'review_id':sys.argv[2],'diff':os.environ.get('OMB_DIFF','')} if sys.argv[1]!='submit_review' else {'diff':os.environ.get('OMB_DIFF',''), **(json.loads(sys.argv[6]) if sys.argv[6] else {})},
@@ -433,6 +433,16 @@ print(json.dumps({
   reset_state; post submit_review 0
   postx confirm_findings rev_x '{"review_of_record":true,"acknowledged":true}' >/dev/null
   s "confirm + review_of_record:true promotes" "$ID"
+  # The RAW envelope — the object itself, no content wrapper — carries no
+  # `status` on a confirm answer. Read as "no answer", it kept the pending record
+  # and told the agent the answer was unreadable, about JSON that said
+  # review_of_record: true (round-5 regression of this very change).
+  reset_state; post submit_review 0
+  postx confirm_findings rev_x '{"review_of_record":true,"confirmed":1,"billed_usd":10}' raw >/dev/null
+  s "a raw confirm answer promotes" "$ID"
+  reset_state
+  postxo submit_review rev_x '{"error":"rate_limited","message":"Daily cap"}' raw >/dev/null
+  pend "a raw server error on submit files no pending record" 0
   # The pending record is filed under the id the SERVER minted, never under one
   # typed into submit_review's input (the server ignores unknown keys, so the
   # call succeeds): filed under an older, finished review, the current diff

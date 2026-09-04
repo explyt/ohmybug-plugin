@@ -74,7 +74,12 @@ def body_of(r):
                         continue
                     if isinstance(inner, dict):
                         return inner, errored
-        return {}, errored
+            return {}, errored
+        # No wrapper at all: the object IS the body. A confirm_findings answer
+        # has no `status` (confirmed, billed_usd, receipt_id, review_of_record),
+        # so gating the raw envelope on `status` read every raw confirm as "no
+        # answer" and refused to promote a paid, confirmed hunt.
+        return r, errored
     return {}, False
 
 body, errored = body_of(resp)
