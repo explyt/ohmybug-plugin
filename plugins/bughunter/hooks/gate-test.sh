@@ -314,8 +314,12 @@ else
   # so the poll that follows still finds the pending record and promotes it.
   reset_state
   post submit_review 0 rev_x content
-  post confirm_findings 0 rev_x garbage; s "prose in place of JSON promotes nothing" ""
+  post confirm_findings 0 rev_x garbage >"$HOME/hook.out"; s "prose in place of JSON promotes nothing" ""
   [ -s "$(ohmybug_hunt_dir).pending/rev_x" ] || { echo "FAIL stamp: prose in place of JSON must keep the pending record"; fails=$((fails + 1)); }
+  case "$(ctx <"$HOME/hook.out")" in
+    *"was not readable JSON"*) ;;
+    *) echo "FAIL stamp: an unreadable confirm answer was swallowed without telling the agent"; fails=$((fails + 1)) ;;
+  esac
   post get_findings 1 rev_x content; s "...and the next poll still promotes the confirmed hunt" "$ID"
   # Fixes written WHILE the review runs were never hunted. The marker must
   # name the diff that was sent, not whatever the tree looks like when the
@@ -1043,7 +1047,14 @@ printf 'dirty\n' >> "$PREPO/b.ts"
 printf 'dirty\n' >> "$PREPO/c.ts"
 PART_DIFF=$(git -C "$PREPO" diff "$(cd "$PREPO" && ohmybug_base)" -- a.ts)
 [ -n "$PART_DIFF" ] || { printf 'FAIL partial-payload fixture: no diff for a.ts\n'; fails=$((fails + 1)); }
-ppost submit_review running "$PREPO" "$PART_DIFF" rev_part >/dev/null 2>&1
+ppost submit_review running "$PREPO" "$PART_DIFF" rev_part >"$HOME/hook.out" 2>/dev/null
+# ...and the submit SAYS so, to the agent: a record holding only the sent
+# bytes' hash satisfies no gate lookup, and silent, that surfaced at merge time
+# as "never hunted" about a hunt that was paid for.
+case "$(ctx <"$HOME/hook.out")" in
+  *"does not match this working tree"*) ;;
+  *) printf 'FAIL a partial payload was filed without telling the agent\n'; fails=$((fails + 1)) ;;
+esac
 ppost get_findings done "$PREPO" "$PART_DIFF" rev_part
 rc=$(mk "$V" "$PREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL a one-file payload blessed the whole dirty tree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }

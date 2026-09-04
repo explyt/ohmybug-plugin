@@ -169,10 +169,11 @@ than about what you passed to it: the classifier reads the schema, so re-sending
 the same call with an empty `diff` changes nothing. Measured twice.
 
 1. **Say it once**, in one line: the hunt tools are refused in this environment,
-   and the rule that would change that is `/permissions` →
-   `mcp__plugin_bughunter_ohmybug__*` (in Codex the tools live under
-   `mcp__ohmybug__*`). Adding it is the user's own click in
-   their own settings – never add it yourself, never ask for it to be widened
+   and what would change that is the user's own step – in Claude Code the rule
+   `/permissions` → `mcp__plugin_bughunter_ohmybug__*`; in Codex, approving
+   `mcp__ohmybug__*` at the tool-approval prompt or in their Codex MCP config.
+   It is the user's own click in their own settings – never add it yourself,
+   never ask for it to be widened
    "so auto-mode stops blocking". A tool that talks its way past the control
    built to stop tools like it is the exact shape of the attack that control is
    for.
