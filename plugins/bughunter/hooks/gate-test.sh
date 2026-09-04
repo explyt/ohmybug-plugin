@@ -377,8 +377,9 @@ print(json.dumps({
     [ "$have" = "$2" ] || { printf 'FAIL pending %s: want=%s got=%s\n' "$1" "$2" "$have"; fails=$((fails + 1)); }
   }
   # The server says no. Nothing promoted, the finished run's pending record gone
-  # (the Stop nudge must not hold a turn for a review that is over), and rc 2 so
-  # the sentence reaches the agent.
+  # (the Stop nudge must not hold a turn for a review that is over), and rc 0
+  # with the sentence as additionalContext — it reaches the agent without
+  # replacing the tool result, which is what exit 2 would do under Codex.
   reset_state; post submit_review 0
   rc=$(postx get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}')
   s "done + review_of_record:false promotes nothing" ""; pend "refused run is over" 0
@@ -386,6 +387,11 @@ print(json.dumps({
   reset_state; post submit_review 0
   said=$(postxo get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}' | ctx)
   case "$said" in *"NOT a review of record"*"cut short"*) ;; *) echo "FAIL stamp: the refused run was not said to the agent with the server's note: $said"; fails=$((fails + 1));; esac
+  # ...and the confirm that follows a refused hunt is as silent as one after a
+  # promotion: the review is over either way, and the "no rev-id record"
+  # paragraph would send the agent to re-poll a review the server refused.
+  said=$(postxo confirm_findings rev_x '{"confirmed":0,"billed_usd":0}' | ctx)
+  [ -z "$said" ] || { echo "FAIL stamp: confirm after a refused hunt still talks: $said"; fails=$((fails + 1)); }
   t "$V" 2
   # The server says yes — in either polling tool.
   for tool in get_findings wait_review; do
@@ -501,6 +507,12 @@ if [ -n "$ID" ]; then
   t "$V" 0
   rm -f "$HOME/.claude/settings.json"
   t "$V" 0
+  # Under Codex (PLUGIN_DATA set) there are no Claude Code settings to consult,
+  # and MCP approval is the user's answer per call — so a bare attempt is not
+  # "the environment refused" and the gate stays shut. Read as not-permitted,
+  # one aborted submit opened the merge for the attempt's whole TTL.
+  rc=$(mk "$V" "$PWD" | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL under Codex a bare attempt stood the gate down (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
   # The warning covers the diff that was attempted, not whatever came after it.
   printf 'written after the attempt\n' >> "$SCRATCH"
   t "$V" 2
@@ -659,8 +671,12 @@ python3 -c "import json,os,sys;print(json.dumps({
   'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
   'tool_input':{'diff':os.environ.get('OMB_DIFF','')},
   'tool_response':{},
-  'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh" >/dev/null 2>&1
+  'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh" 2>/dev/null >"$HOME/hook.out"
 ohmybug_attempted "$ID" && { printf 'FAIL an empty tool_response was read as PreToolUse: the attempt record survived the call\n'; fails=$((fails + 1)); }
+case "$(ctx <"$HOME/hook.out")" in
+  *"carried no review_id"*) ;;
+  *) printf 'FAIL a submit with no readable review id was filed silently\n'; fails=$((fails + 1)) ;;
+esac
 reset_state
 
 # --- the block text speaks to one addressee per line --------------------------

@@ -408,6 +408,10 @@ case "$TOOL" in
     if [ "${RECORD:-0}" != '1' ]; then
       if [ -s "$PENDING" ]; then
         rm -f "$PENDING"
+        # The same tombstone the promote path leaves: the review is equally
+        # over, and the confirm that follows must not read its absence as the
+        # worktree mix-up and send the agent to re-poll a refused review.
+        : > "$PENDING.promoted" 2>/dev/null
         say "ohmybug: review $REVIEW finished but is NOT a review of record${GATE_NOTE:+ — $GATE_NOTE}. Nothing was promoted into the merge marker and the merge gate stays shut for this diff: it has not been hunted. Submit it again."
       fi
       exit 0
