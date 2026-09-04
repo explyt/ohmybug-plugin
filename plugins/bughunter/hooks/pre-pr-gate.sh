@@ -153,11 +153,17 @@ def segments(cmd, depth=0, quiet=False):
     for seg in list(segments_inner(tokens)):
         yield from segments(seg, depth + 1, quiet)
 
+def carries_command(flag):
+    # `-c` in any single-dash bundle: `-lc`, `-ec`, `-lic`. Agent shells spell it
+    # `bash -lc <script>`, and a head test on ("bash", "-lc", "gh pr merge")
+    # matched no merger — the merge ran with the gate silent.
+    return len(flag) > 1 and flag[0] == "-" and flag[1] != "-" and flag.endswith("c")
+
 def segments_inner(tokens):
     for i, t in enumerate(tokens):
         if t.split("/")[-1] in SHELLS:
             for j in range(i + 1, len(tokens)):
-                if tokens[j] == "-c" and j + 1 < len(tokens):
+                if carries_command(tokens[j]) and j + 1 < len(tokens):
                     yield tokens[j + 1]
                     break
 

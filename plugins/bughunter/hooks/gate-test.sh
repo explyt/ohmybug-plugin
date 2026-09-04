@@ -75,6 +75,8 @@ EOF"                                     0  # heredoc line hung forever before
 t "VERSION=1.2.3; echo \$VERSION"        0
 t "$V; DONE=1"                           2
 t "bash -c '$V'"                         2  # walked through before
+t "bash -lc '$V'"                        2  # the flag bundle agent shells emit
+t "sh -ec '$V'"                          2
 t "( $V )"                               2
 t "if true; then $V; fi"                 2
 t "npm run build && (cd api && $V)"      2
@@ -388,6 +390,17 @@ print(json.dumps({
   rc=$(postx get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}')
   s "done + review_of_record:false promotes nothing" ""; pend "refused run is over" 0
   [ "$rc" = 0 ] || { echo "FAIL stamp: a refused run must not block or replace the result (rc 0), got $rc"; fails=$((fails + 1)); }
+  # The tombstone must be EMPTY: the gate's live-pending lookup greps every
+  # file in that directory, and a tombstone carrying the record's lines would
+  # block the merge with "a hunt is RUNNING" for the whole pending TTL — on a
+  # review the server refused, with an instruction nobody can satisfy.
+  [ -e "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] && [ ! -s "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] \
+    || { echo "FAIL stamp: the refusal tombstone is missing or not empty"; fails=$((fails + 1)); }
+  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+  case "$out" in
+    *"has not been hunted"*) ;;
+    *) echo "FAIL gate: after a refused hunt the block must read 'not been hunted', got: $(printf '%s' "$out" | head -c 160)"; fails=$((fails + 1)) ;;
+  esac
   reset_state; post submit_review 0
   said=$(postxo get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}' | ctx)
   case "$said" in *"NOT a review of record"*"cut short"*) ;; *) echo "FAIL stamp: the refused run was not said to the agent with the server's note: $said"; fails=$((fails + 1));; esac
@@ -549,6 +562,9 @@ if [ -n "$ID" ]; then
   rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['bash','-c','gh pr merge 5 --squash']},'cwd':sys.argv[1]}))" "$PWD" \
        | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 2 ] || { printf 'FAIL a merge wrapped in argv bash -c slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['bash','-lc','gh pr merge 5 --squash']},'cwd':sys.argv[1]}))" "$PWD" \
+       | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL a merge wrapped in argv bash -lc slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
   # The warning covers the diff that was attempted, not whatever came after it.
   printf 'written after the attempt\n' >> "$SCRATCH"
   t "$V" 2
