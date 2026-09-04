@@ -1852,11 +1852,18 @@ for f in ("./hooks/hooks.json", "./hooks/claude-codex-hooks.json"):
         bad.append(f"codex manifest hooks: {f} not listed")
 # One offer, one sentence. The marketplace card once quoted a different number while
 # the server, README and skill said "first review free".
+# The whole tree, not a list of places: the second marketplace card lives
+# under .agents, and a list is exactly how a card gets missed. `:/` is the
+# repository top level whatever directory the suite runs from (root here is
+# plugins/bughunter, and a cwd-relative grep sees only that). git grep exits
+# 1 for "no match"; anything else is git failing, not the copy passing.
 import subprocess
-copy = subprocess.run(["git", "grep", "-n", "-i", "-E", r"first (two|three|[0-9]+) (reviews? )?free",
-                       "--", "README.md", "plugins", ".claude-plugin"], capture_output=True, text=True).stdout
-if copy.strip():
-    bad.append("free-allowance copy diverges from 'first review free': " + copy.strip().replace("\n", " | "))
+copy = subprocess.run(["git", "grep", "-n", "-i", "-E", r"first (two|three|[0-9]+) (reviews? )?free", "--", ":/"],
+                      cwd=root, capture_output=True, text=True)
+if copy.returncode not in (0, 1):
+    bad.append("free-allowance copy check: git grep failed rc=%d %s" % (copy.returncode, copy.stderr.strip()))
+elif copy.stdout.strip():
+    bad.append("free-allowance copy diverges from 'first review free': " + copy.stdout.strip().replace("\n", " | "))
 # Stop carries no matcher, so the only thing to assert is that it is wired at
 # all and to the right script: reverting that one line would otherwise leave
 # every row above green while no turn is ever held again.

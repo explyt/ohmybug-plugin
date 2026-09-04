@@ -585,9 +585,13 @@ their behalf: the post is public and carries their GitHub handle.
 
 The pre-merge gate's marker is written by a `PostToolUse` hook on the review
 tools themselves: `submit_review` records which diff was sent, and the first
-`done` from `get_findings` (or a `confirm_findings` call) promotes it. It
-lives under `~/.ohmybug/`, keyed by the git-dir path, so nothing is ever
-written into the repo or `.git/`.
+terminal answer that the server counts as a review of record – `done` with
+`review_of_record` true from `get_findings` or `wait_review`, or a
+`confirm_findings` call – promotes it. A `done` the server marks as NOT a
+review of record (a cut-short run, a blind pass, a protocol hole) promotes
+nothing: the hook drops the pending record and says so in that turn, and the
+only way forward is to re-submit. The marker lives under `~/.ohmybug/`, keyed
+by the git-dir path, so nothing is ever written into the repo or `.git/`.
 
 This used to be a step here, and that was the bug: a hunt driven by calling
 the tools directly – a normal way to use them – left no marker, so the gate
@@ -596,9 +600,11 @@ depends on someone remembering to file it will eventually accuse honest work,
 and each false accusation is an argument for disarming the control.
 
 So: never write the marker by hand, and never reach for `SKIP_BUGHUNT=1`
-because a hunt "already ran". If the gate blocks after a finished hunt, the
-diff changed since it (fixes count – hunt them too), or the hook is missing
-because the installed plugin predates it. Say which; do not paper over it.
+because a hunt "already ran". If the gate blocks after a finished hunt, one of
+three things is true: the diff changed since it (fixes count – hunt them too);
+the server did not count that run as a review of record (its answer said so –
+re-submit); or the hook is missing because the installed plugin predates it.
+Say which; do not paper over it.
 
 `SKIP_BUGHUNT=1` belongs to the operator, not to you. You cannot run it – a
 prefix that disables a safety control is what the classifier is there to refuse
