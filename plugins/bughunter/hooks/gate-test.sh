@@ -77,6 +77,8 @@ t "$V; DONE=1"                           2
 t "bash -c '$V'"                         2  # walked through before
 t "bash -lc '$V'"                        2  # the flag bundle agent shells emit
 t "sh -ec '$V'"                          2
+t "bash -cx '$V'"                        2  # c not last in the bundle
+t "sh -ce '$V'"                          2
 t "( $V )"                               2
 t "if true; then $V; fi"                 2
 t "npm run build && (cd api && $V)"      2
@@ -299,6 +301,16 @@ else
   post submit_review 0; s "submit alone does not authorise" ""
   post get_findings 1; s "done promotes the submitted diff" "$ID"
   t "$V" 0                                    # ...and the gate now lets it through
+  # wait_review is the same poll under another name: a non-terminal answer from
+  # it promotes nothing and keeps the pending record — the guard must read the
+  # status for EVERY status-carrying tool, not for get_findings by name.
+  reset_state
+  post submit_review 0
+  post wait_review 0; s "wait_review still running writes nothing" ""
+  [ -n "$(ls -A "$(ohmybug_hunt_dir).pending" 2>/dev/null)" ] || {
+    printf 'FAIL wait_review still running dropped the pending record\n'
+    fails=$((fails + 1)); }
+  post wait_review 1; s "wait_review done promotes the submitted diff" "$ID"
   # ...in EVERY envelope a client may hand the hook. A clean hunt may have no
   # later confirm call, so this `done` response is what promotes it.
   for shape in list raw string part; do
@@ -631,19 +643,21 @@ if [ -n "$ID" ]; then
 
   # A review that ends `failed` is over, and its pending record must not keep
   # saying "a hunt is RUNNING" — that is a permanent block whose instruction
-  # (poll until done) can never come true.
-  post submit_review 0
-  python3 -c "import json,sys;print(json.dumps({
-    'tool_name':'mcp__plugin_bughunter_ohmybug__get_findings',
-    'tool_input':{'review_id':'rev_x'},
-    'tool_response':{'content':[{'type':'text','text':json.dumps(
-       {'review_id':'rev_x','status':'failed'})}]},
-    'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh"
-  out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
-  case "$out" in
-    *RUNNING*) printf 'FAIL a failed review still reads as a running hunt\n'; fails=$((fails + 1)) ;;
-  esac
-  reset_state
+  # (poll until done) can never come true. Whichever poll tool brought the news.
+  for tool in get_findings wait_review; do
+    post submit_review 0
+    python3 -c "import json,sys;print(json.dumps({
+      'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[2],
+      'tool_input':{'review_id':'rev_x'},
+      'tool_response':{'content':[{'type':'text','text':json.dumps(
+         {'review_id':'rev_x','status':'failed'})}]},
+      'cwd':sys.argv[1]}))" "$PWD" "$tool" | bash "$G/stamp-hunt.sh"
+    out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
+    case "$out" in
+      *RUNNING*) printf 'FAIL a failed review via %s still reads as a running hunt\n' "$tool"; fails=$((fails + 1)) ;;
+    esac
+    reset_state
+  done
 
   # A submit that WAS allowed and is still running is not a refusal. Merging on
   # its attempt record would mean merging ahead of the findings it will return.

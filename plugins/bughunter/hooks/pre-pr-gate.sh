@@ -154,10 +154,13 @@ def segments(cmd, depth=0, quiet=False):
         yield from segments(seg, depth + 1, quiet)
 
 def carries_command(flag):
-    # `-c` in any single-dash bundle: `-lc`, `-ec`, `-lic`. Agent shells spell it
+    # `-c` anywhere in a single-dash bundle: `-lc`, `-ec`, `-lic`, and just as
+    # much `-cx`, `-ce` (bash reads the bundle letter by letter; the script is
+    # the next word whichever letter c is). Agent shells spell it
     # `bash -lc <script>`, and a head test on ("bash", "-lc", "gh pr merge")
-    # matched no merger — the merge ran with the gate silent.
-    return len(flag) > 1 and flag[0] == "-" and flag[1] != "-" and flag.endswith("c")
+    # matched no merger — the merge ran with the gate silent. A bundle that
+    # merely contains c (`-nc`) can only add a segment, i.e. only block.
+    return len(flag) > 1 and flag[0] == "-" and flag[1] != "-" and "c" in flag
 
 def segments_inner(tokens):
     for i, t in enumerate(tokens):
