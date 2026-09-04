@@ -153,11 +153,20 @@ def segments(cmd, depth=0, quiet=False):
     for seg in list(segments_inner(tokens)):
         yield from segments(seg, depth + 1, quiet)
 
+def carries_command(flag):
+    # `-c` anywhere in a single-dash bundle: `-lc`, `-ec`, `-lic`, and just as
+    # much `-cx`, `-ce` (bash reads the bundle letter by letter; the script is
+    # the next word whichever letter c is). Agent shells spell it
+    # `bash -lc <script>`, and a head test on ("bash", "-lc", "gh pr merge")
+    # matched no merger — the merge ran with the gate silent. A bundle that
+    # merely contains c (`-nc`) can only add a segment, i.e. only block.
+    return len(flag) > 1 and flag[0] == "-" and flag[1] != "-" and "c" in flag
+
 def segments_inner(tokens):
     for i, t in enumerate(tokens):
         if t.split("/")[-1] in SHELLS:
             for j in range(i + 1, len(tokens)):
-                if tokens[j] == "-c" and j + 1 < len(tokens):
+                if carries_command(tokens[j]) and j + 1 < len(tokens):
                     yield tokens[j + 1]
                     break
 
@@ -200,6 +209,18 @@ except Exception:
     # answer" and treats like a missing python3 — stand down and say so.
     sys.exit(0)
 cmd = (data.get("tool_input") or {}).get("command") or ""
+# A client that hands the command over as argv (a list) instead of one string
+# must not kill the parser: a dead parser is read below as "no verdict", and
+# that branch stands the gate DOWN. Codex documents `command` as a string like
+# Claude Code does; this is the cheap insurance for the day one of them does not.
+if isinstance(cmd, list):
+    # shlex.join, not " ".join: argv boundaries ARE the quoting. A space join
+    # turns ["bash","-c","gh pr merge 5"] into `bash -c gh pr merge 5`, whose
+    # `-c` argument is the bare word `gh` — the merge walks through, silently.
+    import shlex
+    cmd = shlex.join(str(part) for part in cmd)
+if not isinstance(cmd, str):
+    cmd = ""
 # Two facts about the COMMAND, for the branch where tokenizing failed. Read from
 # the command and nowhere else: the payload also carries `description`, which the
 # model writes itself, and a `cwd` the model chose — an opt-out honoured from

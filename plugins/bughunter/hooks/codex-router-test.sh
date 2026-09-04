@@ -45,7 +45,10 @@ assert all(event in hooks for event in ("SessionStart", "UserPromptSubmit", "Sub
 plugin = json.load(open(manifest, encoding="utf-8"))
 assert plugin["skills"] == "./skills/"
 assert plugin["mcpServers"] == "./.codex-mcp.json"
-assert plugin["hooks"] == "./hooks/claude-codex-hooks.json"
+# Both files, by name: a manifest `hooks` entry REPLACES the default
+# hooks/hooks.json, so naming only the router left Codex with no merge gate,
+# no hunt recorder and no stop nudge. Order matters to nobody; presence does.
+assert sorted(plugin["hooks"]) == sorted(["./hooks/hooks.json", "./hooks/claude-codex-hooks.json"]), plugin["hooks"]
 codex_mcp = json.load(open(mcp, encoding="utf-8"))
 assert codex_mcp == {"ohmybug": {"type": "http", "url": "https://mcp.ohmybug.ai/mcp"}}
 market = json.load(open(marketplace, encoding="utf-8"))

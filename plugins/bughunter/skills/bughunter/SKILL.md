@@ -64,10 +64,17 @@ depending on the surface:
   claude mcp login plugin:bughunter:ohmybug
   ```
 
+- Codex: run this in any terminal, then retry the tool call:
+
+  ```bash
+  codex mcp login ohmybug
+  ```
+
 Either way a GitHub page opens in the browser – one click (zero if the
 app was approved before), the account with a free first review is
 created automatically, once per machine. Then retry the tool call.
-(Do not run `claude mcp login` yourself: it needs an interactive tty.)
+(Do not run `claude mcp login` or `codex mcp login` yourself: they need
+an interactive tty.)
 
 ## The flow
 
@@ -162,9 +169,11 @@ than about what you passed to it: the classifier reads the schema, so re-sending
 the same call with an empty `diff` changes nothing. Measured twice.
 
 1. **Say it once**, in one line: the hunt tools are refused in this environment,
-   and the rule that would change that is `/permissions` →
-   `mcp__plugin_bughunter_ohmybug__*`. Adding it is the user's own click in
-   their own settings – never add it yourself, never ask for it to be widened
+   and what would change that is the user's own step – in Claude Code the rule
+   `/permissions` → `mcp__plugin_bughunter_ohmybug__*`; in Codex, approving
+   `mcp__ohmybug__*` at the tool-approval prompt or in their Codex MCP config.
+   It is the user's own click in their own settings – never add it yourself,
+   never ask for it to be widened
    "so auto-mode stops blocking". A tool that talks its way past the control
    built to stop tools like it is the exact shape of the attack that control is
    for.
@@ -576,9 +585,13 @@ their behalf: the post is public and carries their GitHub handle.
 
 The pre-merge gate's marker is written by a `PostToolUse` hook on the review
 tools themselves: `submit_review` records which diff was sent, and the first
-`done` from `get_findings` (or a `confirm_findings` call) promotes it. It
-lives under `~/.ohmybug/`, keyed by the git-dir path, so nothing is ever
-written into the repo or `.git/`.
+terminal answer that the server counts as a review of record – `done` with
+`review_of_record` true from `get_findings` or `wait_review`, or a
+`confirm_findings` call – promotes it. A `done` the server marks as NOT a
+review of record (a cut-short run, a blind pass, a protocol hole) promotes
+nothing: the hook drops the pending record and says so in that turn, and the
+only way forward is to re-submit. The marker lives under `~/.ohmybug/`, keyed
+by the git-dir path, so nothing is ever written into the repo or `.git/`.
 
 This used to be a step here, and that was the bug: a hunt driven by calling
 the tools directly – a normal way to use them – left no marker, so the gate
@@ -587,9 +600,11 @@ depends on someone remembering to file it will eventually accuse honest work,
 and each false accusation is an argument for disarming the control.
 
 So: never write the marker by hand, and never reach for `SKIP_BUGHUNT=1`
-because a hunt "already ran". If the gate blocks after a finished hunt, the
-diff changed since it (fixes count – hunt them too), or the hook is missing
-because the installed plugin predates it. Say which; do not paper over it.
+because a hunt "already ran". If the gate blocks after a finished hunt, one of
+three things is true: the diff changed since it (fixes count – hunt them too);
+the server did not count that run as a review of record (its answer said so –
+re-submit); or the hook is missing because the installed plugin predates it.
+Say which; do not paper over it.
 
 `SKIP_BUGHUNT=1` belongs to the operator, not to you. You cannot run it – a
 prefix that disables a safety control is what the classifier is there to refuse
