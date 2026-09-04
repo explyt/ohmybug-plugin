@@ -419,6 +419,15 @@ print(json.dumps({
   reset_state; post submit_review 0
   postx confirm_findings rev_x '{"error":"bad_request","message":"not done"}' error >/dev/null
   s "confirm error promotes nothing" ""; pend "confirm error keeps the pending record" 1
+  # Each half of the error test on its own: the server's envelope (an `error`
+  # body in a plain content part, no isError) and the client's (isError with
+  # no readable body). Together they always fired together, so deleting either
+  # detector kept the suite green — and the server half is the live one:
+  # payment_required and pending_verdicts arrive exactly like that.
+  postx confirm_findings rev_x '{"error":"pending_verdicts","message":"verdicts first"}' >/dev/null
+  s "a server error body without isError promotes nothing" ""; pend "server error keeps the pending record" 1
+  postx confirm_findings rev_x '{"message":"upstream said no"}' error >/dev/null
+  s "isError without an error key promotes nothing" ""; pend "client error keeps the pending record" 1
   postx confirm_findings rev_x '{"review_of_record":false,"gate_note":"blind"}' >/dev/null
   s "confirm + review_of_record:false promotes nothing" ""; pend "refused confirm ends the pending record" 0
   reset_state; post submit_review 0
@@ -523,6 +532,13 @@ if [ -n "$ID" ]; then
   rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['gh','pr','merge','5','--squash']},'cwd':sys.argv[1]}))" "$PWD" \
        | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 2 ] || { printf 'FAIL an argv-shaped merge command slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and the argv shape every shell wrapper produces: the merge is the ONE
+  # argument of `-c`. A space join makes that argument the bare word `gh` and
+  # the merge walks through — the very defect the file header lists for the
+  # string spelling (`bash -c "gh pr merge"`).
+  rc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'Bash','tool_input':{'command':['bash','-c','gh pr merge 5 --squash']},'cwd':sys.argv[1]}))" "$PWD" \
+       | PLUGIN_DATA=/x bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL a merge wrapped in argv bash -c slipped through the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
   # The warning covers the diff that was attempted, not whatever came after it.
   printf 'written after the attempt\n' >> "$SCRATCH"
   t "$V" 2

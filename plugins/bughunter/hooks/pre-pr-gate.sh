@@ -205,7 +205,11 @@ cmd = (data.get("tool_input") or {}).get("command") or ""
 # that branch stands the gate DOWN. Codex documents `command` as a string like
 # Claude Code does; this is the cheap insurance for the day one of them does not.
 if isinstance(cmd, list):
-    cmd = " ".join(str(part) for part in cmd)
+    # shlex.join, not " ".join: argv boundaries ARE the quoting. A space join
+    # turns ["bash","-c","gh pr merge 5"] into `bash -c gh pr merge 5`, whose
+    # `-c` argument is the bare word `gh` — the merge walks through, silently.
+    import shlex
+    cmd = shlex.join(str(part) for part in cmd)
 if not isinstance(cmd, str):
     cmd = ""
 # Two facts about the COMMAND, for the branch where tokenizing failed. Read from
