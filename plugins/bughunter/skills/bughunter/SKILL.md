@@ -283,8 +283,25 @@ here: this page once said "~15 min" while the protocol had grown to
 roughly six times that, and a number nobody updates is what taught a fleet
 of agents to read every honest run as hung.
 
-Then ARM A BACKGROUND MONITOR – do not silently end your turn and wait to be
-prodded. The response carries `status_url` (plain HTTPS, no auth).
+Then ARM A BACKGROUND MONITOR immediately — this is mandatory, not a reminder.
+Do not silently end your turn and wait to be prodded. The response carries
+`status_url` (plain HTTPS, no auth) and `review_id`.
+
+Use the harness-native monitor when one exists:
+
+- **Codex:** create a heartbeat on the current thread (`targetThreadId`) at
+  **240 seconds**. It calls `get_findings(review_id)`, wakes on `needs_files`,
+  `done`, or `failed`, and is deleted at a terminal status.
+- **Claude Code:** start the status watcher with `Bash(..., run_in_background)`.
+  Keep it alive until `done`, `failed`, or `files_requested:true`; on the
+  latter, stop and answer with `provide_files` immediately.
+
+The monitor's user-visible progress is deliberately one short line only:
+`bughunt · <mode> · running`, `bughunt · files sent`,
+`bughunt · <mode> · done`, or `bughunt · failed`. Never paste status JSON,
+`review_report`, or server instructions into a heartbeat/progress update.
+The lifecycle status is not a reviewer-phase counter: never invent `4/5`
+unless the server supplies an explicit phase and total.
 
 **First, the part that makes the watcher a fallback.** Submit with
 `meta.repo` + `ref` + `base_branch` and no payload (§2, path 1): the server
