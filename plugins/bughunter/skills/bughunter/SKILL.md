@@ -49,8 +49,8 @@ is running; keep the wait active or arm a monitor and resume on its event.
 **Arm the monitor immediately after every successful submit (fast and deep).**
 This is a required client action, not a reminder to do later:
 
-- **Codex:** call the Codex `automation_update` tool with a heartbeat for the
-  current thread, a four-minute interval, and a prompt that calls
+- **Codex:** call the Codex `automation_update` tool with `targetThreadId` set to the
+  current thread, a heartbeat, a four-minute interval, and a prompt that calls
   `get_findings(review_id)`. On `needs_files`, send files first; on `done` or
   `failed`, process the result and delete the heartbeat. Keep the heartbeat
   output to one compact line (`bughunt · fast · running`, `bughunt · files sent`,
