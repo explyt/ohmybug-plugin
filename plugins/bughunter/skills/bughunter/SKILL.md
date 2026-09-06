@@ -50,13 +50,15 @@ is running; keep the wait active or arm a monitor and resume on its event.
 This is a required client action, not a reminder to do later:
 
 - **Codex:** call the Codex `automation_update` tool with `targetThreadId` set to the
-  current thread, a heartbeat, a four-minute interval, and a prompt that calls
-  `get_findings(review_id)`. On `needs_files`, send files first; on `done` or
-  `failed`, process the result and delete the heartbeat. Keep the heartbeat
-  output to one compact line (`bughunt · fast · running`, `bughunt · files sent`,
-  `bughunt · fast · done`, or `bughunt · failed`).
-- **Claude Code:** immediately start the bounded background monitor described
-  below with `run_in_background`. It polls `status_url` every four minutes,
+  current thread, a heartbeat scheduled every four minutes, and a prompt that
+  calls `wait_review(review_id, timeout_s=240)` (falling back to
+  `get_findings(review_id)`). On `needs_files`, send files first; on `done` or
+  `failed`, process the result and delete the heartbeat. Keep each wake-up to
+  one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
+  `bughunt · fast · needs-files`, `bughunt · fast · done`,
+  `bughunt · fast · failed`, or `bughunt · fast · poll-failed`).
+- **Claude Code:** immediately start the unbounded background monitor described
+  below with `run_in_background`. It polls `status_url` every 45 seconds,
   prints only the same compact line, wakes on `needs_files` as well as terminal
   status, and is unbounded until one of those states. Do not paste status JSON
   into the conversation.
@@ -331,7 +333,7 @@ while :; do
   s=$(curl -fsS --max-time 20 '<status_url>'); rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'bughunt · %s · poll-failed\n' "$mode"
-    sleep 240
+    sleep 45
     continue
   fi
   status=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
@@ -343,7 +345,7 @@ while :; do
     done|failed) printf 'bughunt · %s · %s\n' "$mode" "$status"; break ;;
     *) printf 'bughunt · %s · running\n' "$mode" ;;
   esac
-  sleep 240
+  sleep 45
 done
 ```
 
@@ -369,8 +371,7 @@ review was watched. Any form you write must keep:
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
 - **Prints its first valid reading immediately, and every reading after
   it.** A watcher silent for an hour is indistinguishable from a dead one;
-  this is why the body is echoed and `grep -q` is not the only consumer of
-  it.
+  the compact status line is the liveness signal; never echo the response body.
 - **A poll failure is printed and does not end the watch.** A pipeline's
   exit status is its LAST command's, so `curl … | grep` masks curl's
   failure and grep's "no match" reads as "still running"; capture curl's
