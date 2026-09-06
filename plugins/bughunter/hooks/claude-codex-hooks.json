@@ -9,6 +9,12 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/codex-router.js\" session",
             "timeout": 5,
             "statusMessage": "Loading OhMyBug review gate..."
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/version-check.sh",
+            "timeout": 5,
+            "statusMessage": "Checking OhMyBug plugin updates..."
           }
         ]
       }
