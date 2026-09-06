@@ -46,6 +46,24 @@ sequential: call it only when the server returned `deep_offer` and the user
 explicitly agreed. Never report a clean merge or finish the turn while a review
 is running; keep the wait active or arm a monitor and resume on its event.
 
+**Arm the monitor immediately after every successful submit (fast and deep).**
+This is a required client action, not a reminder to do later:
+
+- **Codex:** call the Codex `automation_update` tool with a heartbeat for the
+  current thread, a four-minute interval, and a prompt that calls
+  `get_findings(review_id)`. On `needs_files`, send files first; on `done` or
+  `failed`, process the result and delete the heartbeat. Keep the heartbeat
+  output to one compact line (`bughunt · fast · running`, `bughunt · files sent`,
+  `bughunt · fast · done`, or `bughunt · failed`).
+- **Claude Code:** immediately start the bounded background monitor described
+  below with `run_in_background`. It polls `status_url` every four minutes,
+  prints only the same compact line, wakes on `needs_files` as well as terminal
+  status, and is unbounded until one of those states. Do not paste status JSON
+  into the conversation.
+
+If the runtime cannot create its monitor, use `wait_review` in the current turn
+or state that monitoring is unavailable; never claim that a monitor is armed.
+
 If the MCP server is missing, refused, or unauthenticated, report the hunt as
 blocked and stop. Do not replace it with a local review and do not call that
 result `APPROVE` for the merge gate.
@@ -305,14 +323,27 @@ the payload path and for waking you on `done` – it is not what keeps the
 reviewers fed.
 
 If your harness supports background shell tasks (Claude Code: `Bash` with
-`run_in_background`), start:
+`run_in_background`), start this compact, unbounded monitor immediately:
 
 ```bash
+mode=fast # use deep for a deep submit
 while :; do
-  s=$(curl -sS --max-time 20 '<status_url>') || { echo "poll failed (exit $?): ${s:-no body}"; sleep 45; continue; }
-  echo "$s"
-  echo "$s" | grep -qE '"status":"(done|failed)"|"files_requested":true' && break
-  sleep 45
+  s=$(curl -fsS --max-time 20 '<status_url>'); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'bughunt · %s · poll-failed\n' "$mode"
+    sleep 240
+    continue
+  fi
+  status=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
+  if printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true'; then
+    printf 'bughunt · %s · needs-files\n' "$mode"
+    break
+  fi
+  case "$status" in
+    done|failed) printf 'bughunt · %s · %s\n' "$mode" "$status"; break ;;
+    *) printf 'bughunt · %s · running\n' "$mode" ;;
+  esac
+  sleep 240
 done
 ```
 
