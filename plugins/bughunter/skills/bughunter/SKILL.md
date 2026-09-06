@@ -51,10 +51,10 @@ This is a required client action, not a reminder to do later:
 
 - **Codex:** call the Codex `automation_update` tool with `targetThreadId` set to the
   current thread, a heartbeat scheduled every four minutes, and a prompt that
-  calls `wait_review(review_id, poll_after_s=30, timeout_s=180)`. The server-side
+  calls `wait_review(review_id, poll_after_s=30, timeout_s=240)`. The server-side
   wait checks every 30 seconds and returns immediately on `needs_files`; if
   `wait_review` is unavailable, loop `get_findings` every 45 seconds for at most
-  180 seconds inside this wake, then let the next heartbeat take over.
+  240 seconds inside this wake, then let the next heartbeat take over.
   On `needs_files`, send files first; on `done` or
   `failed`, process the result and delete the heartbeat. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
