@@ -40,7 +40,7 @@ if [ -z "$CLIENT" ]; then
 fi
 
 mkdir -p "$STATE" 2>/dev/null || exit 0
-MARK="$STATE/version-notice-v1"
+MARK="$STATE/version-notice-v1-$CLIENT"
 KEY="$CLIENT:$installed->$latest"
 [ "$(cat "$MARK" 2>/dev/null || true)" != "$KEY" ] || exit 0
 printf '%s' "$KEY" > "$MARK" 2>/dev/null || exit 0

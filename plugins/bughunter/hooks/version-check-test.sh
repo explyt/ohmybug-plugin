@@ -17,7 +17,7 @@ run() {
 out=$(run)
 echo "$out" | grep -q '0.81.0 is available'
 echo "$out" | grep -q 'Claude Code' # default client instruction
-[ "$(cat "$TMP/state/version-notice-v1")" = 'claude:0.80.0->0.81.0' ]
+[ "$(cat "$TMP/state/version-notice-v1-claude")" = 'claude:0.80.0->0.81.0' ]
 printf '{"version":"0.82.0"}\n' > "$TMP/latest.json"
 out=$(PLUGIN_DATA=1 run)
 echo "$out" | grep -q 'codex plugin marketplace upgrade ohmybug'
@@ -25,5 +25,5 @@ echo "$out" | grep -q 'codex plugin marketplace upgrade ohmybug'
 printf '{"version":"0.82.0"}\n' > "$TMP/plugin/.codex-plugin/plugin.json"
 printf '{"version":"not-semver"}\n' > "$TMP/latest.json"
 out=$(run); [ -z "$out" ]
-[ "$(cat "$TMP/state/version-notice-v1")" = 'codex:0.80.0->0.82.0' ]
+[ "$(cat "$TMP/state/version-notice-v1-codex")" = 'codex:0.80.0->0.82.0' ]
 echo 'version-check: ok'
