@@ -49,9 +49,12 @@ is running; keep the wait active or arm a monitor and resume on its event.
 **Arm the monitor immediately after every successful submit (fast and deep).**
 This is a required client action, not a reminder to do later:
 
-- **Codex:** call the Codex `automation_update` tool with `targetThreadId` set to the
-  current thread, a heartbeat scheduled every four minutes, and a prompt that
-  calls `wait_review(review_id, poll_after_s=30, timeout_s=225)`. The server-side
+- **Codex:** immediately read the submit response's `monitor` object, then call
+  `automation_update` with `destination=thread` (not `targetThreadId`; destination
+  binds the current thread), using that exact `review_id`, `interval_s`, `wake_on`,
+  and `stop_on`. Update an existing heartbeat for the same review instead of
+  creating a duplicate, and retire/replace any heartbeat pointing at an older
+  review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=225)`. The server-side
   wait checks every 30 seconds and returns immediately on `needs_files`; if
   `wait_review` is unavailable, loop `get_findings` every 45 seconds for at most
   225 seconds inside this wake, then let the next heartbeat take over.
