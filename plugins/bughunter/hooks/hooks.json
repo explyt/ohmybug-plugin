@@ -6,6 +6,12 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/first-run.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/version-check.sh",
+            "timeout": 5,
+            "statusMessage": "Checking OhMyBug plugin updates..."
           }
         ]
       }
