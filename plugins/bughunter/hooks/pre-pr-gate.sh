@@ -20,7 +20,8 @@
 #
 # ONE reason to exit 2: "this is a merge AND the diff has not been hunted."
 # Every other outcome — cannot parse, no python3, no origin base, no recorder —
-# exits 0 and says why. That invariant is not style. It held in three branches
+# exits 0 and says why. A diff whose SIGNATURE cannot be computed is inside the
+# one reason, not outside it: there is code here and nothing vouches for it. That invariant is not style. It held in three branches
 # out of four, and the fourth (cannot parse) blocked 20 commands in one
 # operator's transcripts, none of them a merge: heredoc bodies with an
 # apostrophe in them, `git commit -F -`, `python3 - <<PY`, a ticket comment.
@@ -152,11 +153,20 @@ def segments(cmd, depth=0, quiet=False):
     for seg in list(segments_inner(tokens)):
         yield from segments(seg, depth + 1, quiet)
 
+def carries_command(flag):
+    # `-c` anywhere in a single-dash bundle: `-lc`, `-ec`, `-lic`, and just as
+    # much `-cx`, `-ce` (bash reads the bundle letter by letter; the script is
+    # the next word whichever letter c is). Agent shells spell it
+    # `bash -lc <script>`, and a head test on ("bash", "-lc", "gh pr merge")
+    # matched no merger — the merge ran with the gate silent. A bundle that
+    # merely contains c (`-nc`) can only add a segment, i.e. only block.
+    return len(flag) > 1 and flag[0] == "-" and flag[1] != "-" and "c" in flag
+
 def segments_inner(tokens):
     for i, t in enumerate(tokens):
         if t.split("/")[-1] in SHELLS:
             for j in range(i + 1, len(tokens)):
-                if tokens[j] == "-c" and j + 1 < len(tokens):
+                if carries_command(tokens[j]) and j + 1 < len(tokens):
                     yield tokens[j + 1]
                     break
 
@@ -199,6 +209,18 @@ except Exception:
     # answer" and treats like a missing python3 — stand down and say so.
     sys.exit(0)
 cmd = (data.get("tool_input") or {}).get("command") or ""
+# A client that hands the command over as argv (a list) instead of one string
+# must not kill the parser: a dead parser is read below as "no verdict", and
+# that branch stands the gate DOWN. Codex documents `command` as a string like
+# Claude Code does; this is the cheap insurance for the day one of them does not.
+if isinstance(cmd, list):
+    # shlex.join, not " ".join: argv boundaries ARE the quoting. A space join
+    # turns ["bash","-c","gh pr merge 5"] into `bash -c gh pr merge 5`, whose
+    # `-c` argument is the bare word `gh` — the merge walks through, silently.
+    import shlex
+    cmd = shlex.join(str(part) for part in cmd)
+if not isinstance(cmd, str):
+    cmd = ""
 # Two facts about the COMMAND, for the branch where tokenizing failed. Read from
 # the command and nowhere else: the payload also carries `description`, which the
 # model writes itself, and a `cwd` the model chose — an opt-out honoured from
@@ -349,7 +371,26 @@ fi
 # later changes were prose is still hunted: the gate keys on a hash, so before
 # this it demanded a fresh review (money, and a quarter of an hour) because
 # someone fixed a typo in a README.
-SIG=$(ohmybug_sig_id 2>/dev/null)
+#
+# The exit status is read, not dropped. ohmybug_sig_id answers in three states
+# and only two of them are strings: a hash, an empty string for "prose only",
+# and exit 1 for "could not tell" (no base ref, git failed, or its own
+# consistency check refused). `SIG=$(… 2>/dev/null)` alone folded the third
+# into the second, and the second is the one that ALLOWS the merge — a gate
+# that opens when its measurement breaks. Fail closed, and say what broke.
+#
+# This is still the one reason to exit 2: the diff is a real one (CURRENT above
+# is non-empty and not hunted), and no key we can compute vouches for it. The
+# stand-downs above (no python3, no base, no local changes) are cases where
+# there is nothing to judge; this is a case where there is, and the ruler broke.
+SIG_ERR=$(mktemp)
+if ! SIG=$(ohmybug_sig_id 2>"$SIG_ERR"); then
+  echo "OhMyBug: cannot compute the diff signature, so this gate cannot tell whether this diff was hunted — refusing to guess. Run /bughunter:review on this branch; a hunt recorded on the commit lifts this. $(tr '\n' ' ' < "$SIG_ERR")" >&2
+  echo "OhMyBug (operator): to merge without a hunt, run the merge yourself with SKIP_BUGHUNT=1 in front of it — the agent must never carry a prefix onto another command." >&2
+  rm -f "$SIG_ERR"
+  exit 2
+fi
+rm -f "$SIG_ERR"
 if [ -n "$SIG" ] && ohmybug_hunted "sig:$SIG"; then
   echo "OhMyBug: this diff was hunted; everything changed since then is documentation or skills, which a hunt does not speak about. Allowing the merge." >&2
   exit 0

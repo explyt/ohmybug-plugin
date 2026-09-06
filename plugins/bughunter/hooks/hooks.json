@@ -32,7 +32,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*ohmybug.*__(submit_review|get_findings|confirm_findings)",
+        "matcher": "mcp__.*ohmybug.*__(submit_review|get_findings|wait_review|confirm_findings)",
         "hooks": [
           {
             "type": "command",

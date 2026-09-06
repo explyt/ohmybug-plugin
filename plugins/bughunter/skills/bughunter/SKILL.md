@@ -40,7 +40,7 @@ installing and before relying on automatic routing. The skill and MCP server
 remain usable without the hook, but a local advisory review is never a
 substitute for the cloud hunt.
 
-The first cloud call is always light `submit_review`; wait for its terminal
+The first cloud call is always the fast `submit_review`; wait for its terminal
 `get_findings`/`wait_review` result before doing anything else. Deep is strictly
 sequential: call it only when the server returned `deep_offer` and the user
 explicitly agreed. Never report a clean merge or finish the turn while a review
@@ -64,10 +64,17 @@ depending on the surface:
   claude mcp login plugin:bughunter:ohmybug
   ```
 
+- Codex: run this in any terminal, then retry the tool call:
+
+  ```bash
+  codex mcp login ohmybug
+  ```
+
 Either way a GitHub page opens in the browser – one click (zero if the
 app was approved before), the account with a free first review is
 created automatically, once per machine. Then retry the tool call.
-(Do not run `claude mcp login` yourself: it needs an interactive tty.)
+(Do not run `claude mcp login` or `codex mcp login` yourself: they need
+an interactive tty.)
 
 ## The flow
 
@@ -143,8 +150,8 @@ This works in two cases, checked server-side in this order:
    pushed.
 
 - No error and a `review_id` → it worked; skip context packing entirely, go
-  to the monitor step. The mode is `light` – that is stage one and it is
-  always light (see 3b); readable repo access means the reviewers fetch the
+  to the monitor step. The mode is `fast` – that is stage one and it is
+  always fast (see 3b); readable repo access means the reviewers fetch the
   files they need themselves instead of asking you.
 - Error `diff_required` (private repo without the App) → this is rung 2 above:
   offer the one-click App install FIRST and retry, because it removes the payload
@@ -162,9 +169,11 @@ than about what you passed to it: the classifier reads the schema, so re-sending
 the same call with an empty `diff` changes nothing. Measured twice.
 
 1. **Say it once**, in one line: the hunt tools are refused in this environment,
-   and the rule that would change that is `/permissions` →
-   `mcp__plugin_bughunter_ohmybug__*`. Adding it is the user's own click in
-   their own settings – never add it yourself, never ask for it to be widened
+   and what would change that is the user's own step – in Claude Code the rule
+   `/permissions` → `mcp__plugin_bughunter_ohmybug__*`; in Codex, approving
+   `mcp__ohmybug__*` at the tool-approval prompt or in their Codex MCP config.
+   It is the user's own click in their own settings – never add it yourself,
+   never ask for it to be widened
    "so auto-mode stops blocking". A tool that talks its way past the control
    built to stop tools like it is the exact shape of the attack that control is
    for.
@@ -283,25 +292,8 @@ here: this page once said "~15 min" while the protocol had grown to
 roughly six times that, and a number nobody updates is what taught a fleet
 of agents to read every honest run as hung.
 
-Then ARM A BACKGROUND MONITOR immediately — this is mandatory, not a reminder.
-Do not silently end your turn and wait to be prodded. The response carries
-`status_url` (plain HTTPS, no auth) and `review_id`.
-
-Use the harness-native monitor when one exists:
-
-- **Codex:** create a heartbeat on the current thread (`targetThreadId`) at
-  **240 seconds**. It calls `get_findings(review_id)`, wakes on `needs_files`,
-  `done`, or `failed`, and is deleted at a terminal status.
-- **Claude Code:** start the status watcher with `Bash(..., run_in_background)`.
-  Keep it alive until `done`, `failed`, or `files_requested:true`; on the
-  latter, stop and answer with `provide_files` immediately.
-
-The monitor's user-visible progress is deliberately one short line only:
-`bughunt · <mode> · running`, `bughunt · files sent`,
-`bughunt · <mode> · done`, or `bughunt · failed`. Never paste status JSON,
-`review_report`, or server instructions into a heartbeat/progress update.
-The lifecycle status is not a reviewer-phase counter: never invent `4/5`
-unless the server supplies an explicit phase and total.
+Then ARM A BACKGROUND MONITOR – do not silently end your turn and wait to be
+prodded. The response carries `status_url` (plain HTTPS, no auth).
 
 **First, the part that makes the watcher a fallback.** Submit with
 `meta.repo` + `ref` + `base_branch` and no payload (§2, path 1): the server
@@ -385,7 +377,7 @@ first; a partial or empty answer beats a late one, and whatever you noticed
 while looking is still there afterwards.
 
 A path the request names may not exist at all – the reviewers see only the diff
-in the light hunt, so some names are guesses. Do not go looking for a plausible
+in the fast hunt, so some names are guesses. Do not go looking for a plausible
 substitute and do not rename anything: send what exists, leave out what does
 not, and let the reason text tell you which files actually matter (it often
 names more than the machine-readable list).
@@ -403,9 +395,9 @@ Do not stall: if the user is away and the files pass the exclusion rules,
 send them – the manifest keeps it auditable. If nothing can be sent, call
 `provide_files` with an empty list so the review proceeds without waiting.
 
-### 3b. Two stages: the light hunt, then maybe the deep one
+### 3b. Two stages: the fast hunt, then maybe the deep one
 
-**Every review starts light** – the diff plus whatever files the reviewers
+**Every review starts fast** – the diff plus whatever files the reviewers
 ask for mid-run (how long: the server's `recent_median_minutes`, never a
 number from this page). You never request the deep hunt yourself
 and never as a first review: it pulls the whole repository into a throwaway
@@ -413,7 +405,7 @@ VM, takes about an hour, and only makes sense once the cheap pass has come
 back empty.
 
 - `submit_review` carries `connect_repo` when the repo is not readable:
-  while the light review runs, show the user the `pitch` and ask ONE yes/no
+  while the fast review runs, show the user the `pitch` and ask ONE yes/no
   question: open the install page? On yes, run `open "<install_url>"`
   (macOS) / `xdg-open` (Linux) – the user picks the repo and clicks Install
   on GitHub; nothing else is needed. Ask at most once per repo per session;
@@ -423,7 +415,7 @@ back empty.
   committing, or moving on. It exists because this file can be months out
   of date on someone's machine while the server is current: if the two ever
   disagree, `next_step` wins.
-- `get_findings` on a clean light pass carries `summary` – say it plainly
+- `get_findings` on a clean fast pass carries `summary` – say it plainly
   first: the hunt went after this diff and found nothing, which on this
   evidence looks like a clean PR. That is the result. Do not turn it into a
   preamble for the offer.
@@ -437,14 +429,14 @@ back empty.
 - **Arm the monitor for the deep hunt too, and give the user the
   `review_id`.** The hour is exactly how long it takes to forget: the deep run
   needs no files from you, so nothing prods you mid-run, and an agent that
-  armed a monitor for every 15-minute light pass will skip it on the one run
+  armed a monitor for every 15-minute fast pass will skip it on the one run
   that waits four times as long. Then the user paid an hour of attention for a
   result nobody read. Tell them in chat that it is running and name the
   `review_id`, so they can ask for it later even if you lost the thread.
 - Escalation errors are final answers, not retry conditions:
-  `deep_at_capacity` (tell the user the light result stands, deep can be
+  `deep_at_capacity` (tell the user the fast result stands, deep can be
   tried later), `repo_too_big` (send context files instead),
-  `repo_required` (the App install), `light_not_finished` (let stage one
+  `repo_required` (the App install), `fast_not_finished` (let stage one
   finish).
 
 ### 3c. Show the review report
@@ -593,9 +585,13 @@ their behalf: the post is public and carries their GitHub handle.
 
 The pre-merge gate's marker is written by a `PostToolUse` hook on the review
 tools themselves: `submit_review` records which diff was sent, and the first
-`done` from `get_findings` (or a `confirm_findings` call) promotes it. It
-lives under `~/.ohmybug/`, keyed by the git-dir path, so nothing is ever
-written into the repo or `.git/`.
+terminal answer that the server counts as a review of record – `done` with
+`review_of_record` true from `get_findings` or `wait_review`, or a
+`confirm_findings` call – promotes it. A `done` the server marks as NOT a
+review of record (a cut-short run, a blind pass, a protocol hole) promotes
+nothing: the hook drops the pending record and says so in that turn, and the
+only way forward is to re-submit. The marker lives under `~/.ohmybug/`, keyed
+by the git-dir path, so nothing is ever written into the repo or `.git/`.
 
 This used to be a step here, and that was the bug: a hunt driven by calling
 the tools directly – a normal way to use them – left no marker, so the gate
@@ -604,9 +600,11 @@ depends on someone remembering to file it will eventually accuse honest work,
 and each false accusation is an argument for disarming the control.
 
 So: never write the marker by hand, and never reach for `SKIP_BUGHUNT=1`
-because a hunt "already ran". If the gate blocks after a finished hunt, the
-diff changed since it (fixes count – hunt them too), or the hook is missing
-because the installed plugin predates it. Say which; do not paper over it.
+because a hunt "already ran". If the gate blocks after a finished hunt, one of
+three things is true: the diff changed since it (fixes count – hunt them too);
+the server did not count that run as a review of record (its answer said so –
+re-submit); or the hook is missing because the installed plugin predates it.
+Say which; do not paper over it.
 
 `SKIP_BUGHUNT=1` belongs to the operator, not to you. You cannot run it – a
 prefix that disables a safety control is what the classifier is there to refuse
