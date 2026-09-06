@@ -29,9 +29,10 @@ def run(event, payload=None):
 session = run("session")
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
-for phrase in ("submit_review", "wait_review", "automation_update", "targetThreadId", "four-minute heartbeat", "poll_after_s=30", "timeout_s=225", "every 45s for 225s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
+for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "poll_after_s=30", "timeout_s=225", "every 45s for 225s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
+assert "set targetThreadId" not in session_text
 
 skill = open(str(Path(router).parent.parent / "skills/bughunter/SKILL.md"), encoding="utf-8").read()
 monitor_section = skill.split("If your harness supports background shell tasks", 1)[1]
