@@ -7,7 +7,7 @@ const ROUTING = [
   'For review, bug-hunt, PR, or merge requests use the bughunter skill and the ohmybug MCP tools.',
   'A local code-review or advisory agent is not a hunt; its APPROVE or zero findings cannot authorize a merge.',
   'Run the fast submit_review first, then wait_review until terminal and read review_report.',
-  'Immediately after every successful submit_review (including deep), create a four-minute heartbeat for this thread with automation_update; it must call get_findings, answer needs_files first, print only one compact bughunt status line, and delete itself on done or failed.',
+  'Immediately after every successful submit_review (including deep), create a four-minute heartbeat with automation_update and set targetThreadId to the current thread; it must call wait_review for up to 240 seconds (or get_findings), answer needs_files first, print only one compact bughunt status line, and delete itself on done or failed.',
   'Only start deep after the server returns deep_offer and the user explicitly agrees; never run fast and deep in parallel.',
   'Only server review_report plus get_attestation, verified findings, and green CI can satisfy the merge gate.',
   'If the MCP tools are unavailable or authentication fails, report the review as blocked; do not substitute a local review.'
