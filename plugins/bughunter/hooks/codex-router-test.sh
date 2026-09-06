@@ -29,7 +29,7 @@ def run(event, payload=None):
 session = run("session")
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
-for phrase in ("submit_review", "wait_review", "automation_update", "targetThreadId", "review_report", "get_attestation", "never run fast and deep in parallel"):
+for phrase in ("submit_review", "wait_review", "automation_update", "targetThreadId", "poll_after_s=30", "timeout_s=180", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
 
@@ -39,6 +39,9 @@ monitor_code = monitor_section.split("```", 2)[1]
 assert "while :" in monitor_code
 assert monitor_code.count("sleep 45") == 2
 assert "seq " not in monitor_code
+codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
+for phrase in ("poll_after_s=30", "timeout_s=180", "`get_findings` every 45 seconds", "needs_files"):
+    assert phrase in codex_bullet, phrase
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})
 review_text = review["hookSpecificOutput"]["additionalContext"]
