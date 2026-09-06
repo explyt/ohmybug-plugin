@@ -35,15 +35,15 @@ PY
 ) || exit 0
 [ "$is_newer" = 1 ] || exit 0
 
-mkdir -p "$STATE" 2>/dev/null || exit 0
-MARK="$STATE/version-notice-v1"
-KEY="$installed->$latest"
-[ "$(cat "$MARK" 2>/dev/null || true)" != "$KEY" ] || exit 0
-printf '%s' "$KEY" > "$MARK" 2>/dev/null || exit 0
-
 if [ -z "$CLIENT" ]; then
   [ -n "${PLUGIN_DATA:-}" ] && CLIENT=codex || CLIENT=claude
 fi
+
+mkdir -p "$STATE" 2>/dev/null || exit 0
+MARK="$STATE/version-notice-v1"
+KEY="$CLIENT:$installed->$latest"
+[ "$(cat "$MARK" 2>/dev/null || true)" != "$KEY" ] || exit 0
+printf '%s' "$KEY" > "$MARK" 2>/dev/null || exit 0
 if [ "$CLIENT" = codex ]; then
   NOTE="OhMyBug: bughunter $latest is available (you have $installed). Update Codex with: codex plugin marketplace upgrade ohmybug && codex plugin add bughunter@ohmybug. Then start a new Codex thread."
 else
