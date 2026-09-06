@@ -12,6 +12,7 @@ python3 - "$ROUTER" "$CONFIG" "$MANIFEST" "$MCP" "$MARKETPLACE" <<'PY'
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 router, config, manifest, mcp, marketplace = sys.argv[1:]
 
@@ -31,6 +32,13 @@ session_text = session["hookSpecificOutput"]["additionalContext"]
 for phrase in ("submit_review", "wait_review", "automation_update", "targetThreadId", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
+
+skill = open(str(Path(router).parent.parent / "skills/bughunter/SKILL.md"), encoding="utf-8").read()
+monitor_section = skill.split("If your harness supports background shell tasks", 1)[1]
+monitor_code = monitor_section.split("```", 2)[1]
+assert "while :" in monitor_code
+assert monitor_code.count("sleep 45") == 2
+assert "seq " not in monitor_code
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})
 review_text = review["hookSpecificOutput"]["additionalContext"]
