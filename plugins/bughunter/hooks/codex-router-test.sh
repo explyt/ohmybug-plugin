@@ -101,13 +101,15 @@ assert loop.count("printf 'bughunt · %s · poll-failed") == 1
 # dies before its first line. Run the loop under zsh with curl/sleep shimmed.
 import os, re, shutil, tempfile
 assert not re.search(r"(?m)^\s*status=", monitor_code), "status is read-only in zsh"
+# Mandatory, not opportunistic: a skipped run here is the incident again with a
+# green build in front of it. CI installs zsh for this step.
 zsh = shutil.which("zsh")
-if zsh:
-    with tempfile.TemporaryDirectory() as d:
-        open(f"{d}/curl", "w").write('#!/bin/sh\nprintf \'{"status":"done"}\'\n'); os.chmod(f"{d}/curl", 0o755)
-        open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
-        r = subprocess.run([zsh, "-c", monitor_code.replace("<status_url>", "http://x/")], capture_output=True, text=True, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
-    assert r.returncode == 0 and r.stdout == "bughunt · fast · done\n", (r.returncode, r.stdout, r.stderr)
+assert zsh, "zsh is required: the loop must be executed under the shell Claude Code runs it in"
+with tempfile.TemporaryDirectory() as d:
+    open(f"{d}/curl", "w").write('#!/bin/sh\nprintf \'{"status":"done"}\'\n'); os.chmod(f"{d}/curl", 0o755)
+    open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
+    r = subprocess.run([zsh, "-c", monitor_code.replace("<status_url>", "http://x/")], capture_output=True, text=True, timeout=60, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
+assert r.returncode == 0 and r.stdout == "bughunt · fast · done\n", (r.returncode, r.stdout, r.stderr)
 # The properties list is normative for any rewrite of the loop: property 4
 # must describe the shipped loop (clock-gated poll-failed, retirement after 12
 # failures), not the pre-retirement one that printed per failure and never ended.
