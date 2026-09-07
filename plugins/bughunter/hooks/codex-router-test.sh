@@ -89,7 +89,7 @@ for line in loop.splitlines():
 assert loop.count("printf 'bughunt · %s · running") == 1
 assert loop.count("printf 'bughunt · %s · poll-failed") == 1
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "KEEP this job", "one line and nothing else", "TaskStop"):
+for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "KEEP this job", "3 consecutive poll failures", "older than\n  150 minutes", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]

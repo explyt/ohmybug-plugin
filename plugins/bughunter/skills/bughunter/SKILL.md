@@ -83,9 +83,13 @@ This is a required client action, not a reminder to do later:
   `TaskStop` the monitor if it did not exit.
   No `Monitor` tool in this harness? Fall back to `CronCreate` every 4 minutes
   off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
-  heartbeat: curl `<status_url>` once and print the compact line; on
-  needs_files call `get_findings`, serve the files and KEEP this job; on
-  done/failed call `get_findings` and `CronDelete` this job". Only
+  heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
+  line; on needs_files call `get_findings`, serve the files and KEEP this job;
+  on done/failed call `get_findings` and `CronDelete` this job; also
+  `CronDelete` it after 3 consecutive poll failures or once it is older than
+  150 minutes – a job nothing can satisfy is how a control gets disarmed".
+  One job per review: `CronDelete` any earlier bughunt job before creating
+  the next – never leave one pointing at an older review id. Only
   as the last resort keep a `run_in_background` until-loop – and say so:
   "monitoring armed without heartbeat – the cache will cool".
 
