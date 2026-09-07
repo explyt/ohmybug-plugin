@@ -417,8 +417,10 @@ review was watched. Any form you write must keep:
   missed the event, and silence from it reads exactly like "still
   running".
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
-- **Prints a reading at least every 240 seconds, and every state change
-  immediately.** The heartbeat budget (180 s) is checked once per 45 s poll, so
+- **Prints a reading at least every 240 seconds, and every review status
+  change immediately.** (A poll that recovers after `poll-failed` is not one:
+  the failure line already woke you, and a flapping endpoint must not double
+  the wakes — the next `running` lands on the heartbeat clock.) The heartbeat budget (180 s) is checked once per 45 s poll, so
   the real gap is the budget rounded up to whole poll cycles; keep the sum under
   `interval_s` (240) and the 300 s cache TTL when you touch either number. A watcher silent for an hour is indistinguishable from a dead
   one; the compact status line is the liveness signal AND the heartbeat that

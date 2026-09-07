@@ -61,6 +61,21 @@ assert ('''    if [ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]; 
     failing=1
 ''') in monitor_code, "poll-failed branch lost its shape"
 assert "failing=1" in monitor_code and "failing=0" in monitor_code
+# The running gate, verbatim, for the same reason: moving `last=$now` one line
+# down (out of the gate) keeps count == 2 and silences the heartbeat for the
+# whole hunt; `-lt` or a literal 45 in the gate floods it.
+assert ('''  now=$(date +%s)
+  if [ $((now - last)) -ge "$heartbeat" ]; then
+    printf 'bughunt · %s · running\\n' "$mode"
+    last=$now
+  fi
+  sleep 45
+done
+''') in monitor_code, "running heartbeat gate lost its shape"
+# needs-files must exit the loop, not print every 45 s.
+assert ('''    printf 'bughunt · %s · needs-files\\n' "$mode"
+    break
+''') in monitor_code, "needs-files no longer breaks"
 # Every printf inside the loop is either terminal (break follows) or gated.
 loop = monitor_code.split("while :; do", 1)[1]
 for line in loop.splitlines():
