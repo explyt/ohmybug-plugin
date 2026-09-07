@@ -385,18 +385,18 @@ while :; do
     continue
   fi
   fails=0
-  status=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
+  st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
   if printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true'; then
     printf 'bughunt · %s · needs-files\n' "$mode"
     break
   fi
-  case "$status" in
-    done|failed) printf 'bughunt · %s · %s\n' "$mode" "$status"; break ;;
+  case "$st" in
+    done|failed) printf 'bughunt · %s · %s\n' "$mode" "$st"; break ;;
   esac
   now=$(date +%s)
-  if [ "$status" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
+  if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
     printf 'bughunt · %s · running\n' "$mode"
-    last=$now; prev=$status
+    last=$now; prev=$st
   fi
   sleep 45
 done

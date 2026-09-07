@@ -77,9 +77,9 @@ assert "    fails=$((fails + 1))\n" in monitor_code and "\n  fails=0\n" in monit
 # down (out of the gate) keeps count == 2 and silences the heartbeat for the
 # whole hunt; `-lt` or a literal 45 in the gate floods it.
 assert ('''  now=$(date +%s)
-  if [ "$status" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
+  if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
     printf 'bughunt · %s · running\\n' "$mode"
-    last=$now; prev=$status
+    last=$now; prev=$st
   fi
   sleep 45
 done
@@ -95,6 +95,19 @@ for line in loop.splitlines():
         assert line.startswith("      printf") or line.startswith("    printf 'bughunt · %s · running") or line.startswith("    printf 'bughunt · %s · needs-files"), line
 assert loop.count("printf 'bughunt · %s · running") == 1
 assert loop.count("printf 'bughunt · %s · poll-failed") == 1
+# Claude Code's Monitor tool runs the loop in the user's login shell – zsh on
+# macOS – where `status` is a read-only alias of `$?`: `status=$(...)` aborts
+# the script on its first poll ("read-only variable: status") and the watch
+# dies before its first line. Run the loop under zsh with curl/sleep shimmed.
+import os, re, shutil, tempfile
+assert not re.search(r"(?m)^\s*status=", monitor_code), "status is read-only in zsh"
+zsh = shutil.which("zsh")
+if zsh:
+    with tempfile.TemporaryDirectory() as d:
+        open(f"{d}/curl", "w").write('#!/bin/sh\nprintf \'{"status":"done"}\'\n'); os.chmod(f"{d}/curl", 0o755)
+        open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
+        r = subprocess.run([zsh, "-c", monitor_code.replace("<status_url>", "http://x/")], capture_output=True, text=True, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
+    assert r.returncode == 0 and r.stdout == "bughunt · fast · done\n", (r.returncode, r.stdout, r.stderr)
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
 for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "3 consecutive poll failures", "older than\n  150 minutes", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
