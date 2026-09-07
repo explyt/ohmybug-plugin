@@ -64,7 +64,8 @@ This is a required client action, not a reminder to do later:
   and cleanup before the next heartbeat. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
   `bughunt · fast · needs-files`, `bughunt · fast · done`,
-  `bughunt · fast · failed`, or `bughunt · fast · poll-failed`).
+  `bughunt · fast · failed`, `bughunt · fast · poll-failed`, or
+  `bughunt · fast · watch-retired`).
 - **Claude Code:** immediately start the monitor described below with the
   **`Monitor` tool** – not `Bash run_in_background`. Claude Code wakes a session
   on a background command only when it EXITS, so a `run_in_background` loop
@@ -365,10 +366,16 @@ mode=fast # use deep for a deep submit
 heartbeat=180 # seconds; the gate is checked once per iteration (45 s sleep +
               # a poll of at most 15 s), so a line lands within 180 + 60 = 240 s:
               # the server's interval_s, and well under the 300 s prompt-cache TTL
-last=$(date +%s); prev= # empty prev: the first reading prints at once
+start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
+fails=0 # consecutive failed polls; 12 (~9 min dead) retires the watch
 while :; do
+  now=$(date +%s)
+  if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
+    printf 'bughunt · %s · watch-retired\n' "$mode"; break # past 180 min, or a dead URL
+  fi
   s=$(curl -fsS --max-time 15 '<status_url>'); rc=$?
   if [ "$rc" -ne 0 ]; then
+    fails=$((fails + 1))
     now=$(date +%s)
     if [ $((now - last)) -ge "$heartbeat" ]; then
       printf 'bughunt · %s · poll-failed\n' "$mode"
@@ -377,6 +384,7 @@ while :; do
     sleep 45
     continue
   fi
+  fails=0
   status=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
   if printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true'; then
     printf 'bughunt · %s · needs-files\n' "$mode"
@@ -398,7 +406,9 @@ Every printed line wakes you. A plain `running` line is a heartbeat: answer it
 with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. `poll-failed` lands on the heartbeat clock, never per poll: a
+nothing to stop. `watch-retired` → the URL has been dead for ~9 min or the
+watch is 3 h old: call `get_findings` once; if the review is still running,
+tell the user and arm a fresh monitor. `poll-failed` lands on the heartbeat clock, never per poll: a
 dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
 an hour, and a flood stops the watch. The first good poll after it prints
 `running` once (recovery), then the clock takes over again.
@@ -415,10 +425,13 @@ never prints anything and treats a failed poll exactly like "still running"
 – a dead status URL kept it sleeping forever while the agent believed the
 review was watched. Any form you write must keep:
 
-- **Unbounded.** No iteration cap shorter than the hunt's own budget
-  (≥ 150 min). A watcher that dies before the hunt is a watcher that
-  missed the event, and silence from it reads exactly like "still
-  running".
+- **Unbounded while the hunt can still end.** No iteration cap shorter than
+  the hunt's own budget (≥ 150 min): a watcher that dies before the hunt is a
+  watcher that missed the event, and silence from it reads exactly like "still
+  running". The two retirements it DOES have — 180 min of age, or 12 consecutive
+  failed polls (~9 min of a dead URL) — print `watch-retired` first, so the
+  session learns the watch ended rather than inferring it from silence. Every
+  printed line is a wake; a watch nothing can satisfy must not wake you forever.
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
 - **Prints its first reading immediately, then a reading at least every 240
   seconds, and every review status change immediately.** Poll failures are

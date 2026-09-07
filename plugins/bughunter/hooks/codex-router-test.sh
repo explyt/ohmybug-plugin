@@ -65,7 +65,14 @@ assert ('''    if [ $((now - last)) -ge "$heartbeat" ]; then
 ''') in monitor_code, "poll-failed branch lost its shape"
 assert "failing" not in monitor_code
 # The init line: an empty prev is what makes the first reading print at once.
-assert "\nlast=$(date +%s); prev= #" in monitor_code
+assert "\nstart=$(date +%s); last=$start; prev= #" in monitor_code
+# The watch retires (with a line) at 180 min or after 12 consecutive failed
+# polls: a dead URL must not wake the session every heartbeat forever, and a
+# cap SHORTER than the 150 min hunt budget would drop a live hunt.
+assert ('''  if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
+    printf 'bughunt · %s · watch-retired\\n' "$mode"; break # past 180 min, or a dead URL
+''') in monitor_code, "watch retirement lost its shape"
+assert "    fails=$((fails + 1))\n" in monitor_code and "\n  fails=0\n" in monitor_code
 # The running gate, verbatim, for the same reason: moving `last=$now` one line
 # down (out of the gate) keeps count == 2 and silences the heartbeat for the
 # whole hunt; `-lt` or a literal 45 in the gate floods it.
@@ -89,7 +96,7 @@ for line in loop.splitlines():
 assert loop.count("printf 'bughunt · %s · running") == 1
 assert loop.count("printf 'bughunt · %s · poll-failed") == 1
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "KEEP this job", "3 consecutive poll failures", "older than\n  150 minutes", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
+for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "3 consecutive poll failures", "older than\n  150 minutes", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
