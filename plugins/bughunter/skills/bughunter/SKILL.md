@@ -65,11 +65,28 @@ This is a required client action, not a reminder to do later:
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
   `bughunt · fast · needs-files`, `bughunt · fast · done`,
   `bughunt · fast · failed`, or `bughunt · fast · poll-failed`).
-- **Claude Code:** immediately start the unbounded background monitor described
-  below with `run_in_background`. It polls `status_url` every 45 seconds,
-  prints only the same compact line, wakes on `needs_files` as well as terminal
-  status, and is unbounded until one of those states. Do not paste status JSON
-  into the conversation.
+- **Claude Code:** immediately start the monitor described below with the
+  **`Monitor` tool** – not `Bash run_in_background`. Claude Code wakes a session
+  on a background command only when it EXITS, so a `run_in_background` loop
+  woke every session exactly once per hunt, 15–25 minutes after submit, and the
+  prompt cache (5-minute TTL) went cold each time. `Monitor` delivers every
+  stdout line as an event: the loop polls `status_url` every 45 seconds, prints
+  the compact line at least every 225 seconds even when nothing changed (that
+  line is the heartbeat – under the 240 s `interval_s` and the 300 s cache TTL
+  with lag to spare), prints immediately and exits on `needs_files` / `done` /
+  `failed`. Use `persistent: true` (a deep hunt runs up to 2 h; a 1 h
+  `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
+  conversation.
+  **A heartbeat wake is answered with that one line and nothing else** –
+  `bughunt · fast · running` – no `get_findings`, no file reads, no summary. On
+  `needs-files` → files first (§3a); on `done`/`failed` → `get_findings`, then
+  `TaskStop` the monitor if it did not exit.
+  No `Monitor` tool in this harness? Fall back to `CronCreate` every 4 minutes
+  off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
+  heartbeat: curl `<status_url>` once and print the compact line; on
+  done/failed/needs_files call `get_findings` and `CronDelete` this job". Only
+  as the last resort keep a `run_in_background` until-loop – and say so:
+  "monitoring armed without heartbeat – the cache will cool".
 
 If the runtime cannot create its monitor, use `wait_review` in the current turn
 or state that monitoring is unavailable; never claim that a monitor is armed.
@@ -332,15 +349,21 @@ payload-only submit with a mistyped repo slug. The watcher below exists for
 the payload path and for waking you on `done` – it is not what keeps the
 reviewers fed.
 
-If your harness supports background shell tasks (Claude Code: `Bash` with
-`run_in_background`), start this compact, unbounded monitor immediately:
+In Claude Code, start this compact, unbounded loop immediately with the
+**`Monitor` tool** (`persistent: true`; every stdout line reaches you as an
+event). With `Bash run_in_background` the same loop wakes you ONCE, at exit –
+measured over ~45 hunts in five sessions – so that is the last-resort form,
+not the default:
 
 ```bash
 mode=fast # use deep for a deep submit
+heartbeat=225 # seconds; under the server's interval_s (240) and the 300 s prompt-cache TTL
+last=$(date +%s)
 while :; do
   s=$(curl -fsS --max-time 20 '<status_url>'); rc=$?
   if [ "$rc" -ne 0 ]; then
     printf 'bughunt · %s · poll-failed\n' "$mode"
+    last=$(date +%s)
     sleep 45
     continue
   fi
@@ -351,14 +374,22 @@ while :; do
   fi
   case "$status" in
     done|failed) printf 'bughunt · %s · %s\n' "$mode" "$status"; break ;;
-    *) printf 'bughunt · %s · running\n' "$mode" ;;
   esac
+  now=$(date +%s)
+  if [ $((now - last)) -ge "$heartbeat" ]; then
+    printf 'bughunt · %s · running\n' "$mode"
+    last=$now
+  fi
   sleep 45
 done
 ```
 
-Its completion wakes you: call `get_findings(review_id)` then. If it woke
-on `files_requested`, serve `provide_files` first and re-arm the monitor.
+Every printed line wakes you. A plain `running` line is a heartbeat: answer it
+with that one line and do nothing else – no `get_findings`, no reading files.
+`needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
+`failed` → call `get_findings(review_id)`; the loop has exited, so there is
+nothing to stop. The `poll-failed` line resets the heartbeat clock: it already
+woke you, and two lines 45 s apart would be noise, not liveness.
 
 The loop above keeps the four properties below, and each line of it is
 there for one of them – read it before you shorten it. What has failed in
@@ -377,9 +408,12 @@ review was watched. Any form you write must keep:
   missed the event, and silence from it reads exactly like "still
   running".
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
-- **Prints its first valid reading immediately, and every reading after
-  it.** A watcher silent for an hour is indistinguishable from a dead one;
-  the compact status line is the liveness signal; never echo the response body.
+- **Prints a reading at least every 225 seconds, and every state change
+  immediately.** A watcher silent for an hour is indistinguishable from a dead
+  one; the compact status line is the liveness signal AND the heartbeat that
+  keeps the session's prompt cache warm between wakes – drop it and the terminal
+  wake re-reads the whole context uncached. Never echo the response body. Do not
+  print every 45-second poll either: `Monitor` stops a watch that floods it.
 - **A poll failure is printed and does not end the watch.** A pipeline's
   exit status is its LAST command's, so `curl … | grep` masks curl's
   failure and grep's "no match" reads as "still running"; capture curl's

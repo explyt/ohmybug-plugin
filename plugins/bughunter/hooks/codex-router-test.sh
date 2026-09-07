@@ -35,11 +35,19 @@ assert "local code-review" in session_text
 assert "set targetThreadId" not in session_text
 
 skill = open(str(Path(router).parent.parent / "skills/bughunter/SKILL.md"), encoding="utf-8").read()
-monitor_section = skill.split("If your harness supports background shell tasks", 1)[1]
+monitor_section = skill.split("start this compact, unbounded loop immediately with the", 1)[1]
 monitor_code = monitor_section.split("```", 2)[1]
 assert "while :" in monitor_code
 assert monitor_code.count("sleep 45") == 2
 assert "seq " not in monitor_code
+# The heartbeat (#57): a line at least every 225 s even when nothing changed, and
+# never one per 45 s poll – Monitor floods stop the watch.
+assert "heartbeat=225" in monitor_code
+assert "-ge \"$heartbeat\"" in monitor_code
+assert "*) printf" not in monitor_code
+claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
+for phrase in ("`Monitor` tool", "225 seconds", "persistent: true", "CronCreate", "one line and nothing else", "TaskStop"):
+    assert phrase in claude_bullet, phrase
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
 for phrase in ("poll_after_s=30", "timeout_s=225", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap"):
     assert phrase in codex_bullet, phrase
