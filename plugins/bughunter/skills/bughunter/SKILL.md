@@ -361,16 +361,15 @@ mode=fast # use deep for a deep submit
 heartbeat=180 # seconds; the gate is checked once per iteration (45 s sleep +
               # a poll of at most 15 s), so a line lands within 180 + 60 = 240 s:
               # the server's interval_s, and well under the 300 s prompt-cache TTL
-last=$(date +%s); failing=0; prev=
+last=$(date +%s); prev= # empty prev: the first reading prints at once
 while :; do
   s=$(curl -fsS --max-time 15 '<status_url>'); rc=$?
   if [ "$rc" -ne 0 ]; then
     now=$(date +%s)
-    if [ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]; then
+    if [ $((now - last)) -ge "$heartbeat" ]; then
       printf 'bughunt · %s · poll-failed\n' "$mode"
-      last=$now
+      last=$now; prev=
     fi
-    failing=1
     sleep 45
     continue
   fi
@@ -385,7 +384,7 @@ while :; do
   now=$(date +%s)
   if [ "$status" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
     printf 'bughunt · %s · running\n' "$mode"
-    last=$now; prev=$status; failing=0
+    last=$now; prev=$status
   fi
   sleep 45
 done
@@ -395,9 +394,10 @@ Every printed line wakes you. A plain `running` line is a heartbeat: answer it
 with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. `poll-failed` prints on the first failed poll and then on the
-heartbeat clock like `running` does: a status endpoint that is down for an hour
-must not turn into 80 wakes, and a flood stops the watch.
+nothing to stop. `poll-failed` lands on the heartbeat clock, never per poll: a
+dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
+an hour, and a flood stops the watch. The first good poll after it prints
+`running` once (recovery), then the clock takes over again.
 
 The loop above keeps the four properties below, and each line of it is
 there for one of them – read it before you shorten it. What has failed in
@@ -416,11 +416,11 @@ review was watched. Any form you write must keep:
   missed the event, and silence from it reads exactly like "still
   running".
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
-- **Prints a reading at least every 240 seconds, and every review status
-  change immediately.** (A poll that recovers after `poll-failed` is not one:
-  the failure line already woke you, and a flapping endpoint must not double
-  the wakes — `failing` clears only when a `running` line prints, so a flap
-  costs one line per heartbeat, and the next `running` lands on the clock.) The heartbeat budget (180 s) is checked once per 45 s poll, so
+- **Prints its first reading immediately, then a reading at least every 240
+  seconds, and every review status change immediately.** Poll failures are
+  the exception: they land on the clock only, so a flapping endpoint costs at
+  most two lines per heartbeat window (`poll-failed` on the clock, `running`
+  once on recovery) and never one per poll. The heartbeat budget (180 s) is checked once per 45 s poll, so
   the real gap is the budget rounded up to whole iterations (45 s sleep + a poll
   of at most 15 s); keep 180 + 60 at or under `interval_s` (240) and under the
   300 s cache TTL when you touch any of the three numbers. A watcher silent for an hour is indistinguishable from a dead

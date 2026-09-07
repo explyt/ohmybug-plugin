@@ -50,35 +50,33 @@ assert "*) printf" not in monitor_code
 # The heartbeat is a heartbeat only because the clock resets when it prints:
 # drop `last=$now` and the loop prints every poll after the first 180 s, with
 # every pin above still green. Both gated branches (running AND poll-failed)
-# reset it, and the failure branch prints once, then on the clock.
+# reset it.
 assert monitor_code.count("last=$now") == 2, monitor_code.count("last=$now")
-assert '[ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]' in monitor_code
-# ...and the failure branch resets the clock INSIDE its gate: moved next to
-# `failing=1`, every failed poll refreshes `last`, the gap never reaches the
-# budget, and an hour-long outage prints one line and then nothing.
-assert ('''    if [ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]; then
+# The failure branch prints on the clock only (a first-failure-immediate rule
+# floods under a flapping endpoint), resets the clock INSIDE its gate (moved
+# out, every failed poll refreshes `last` and an outage prints once, then
+# nothing) and clears `prev` so the first good poll prints the recovery.
+assert ('''    if [ $((now - last)) -ge "$heartbeat" ]; then
       printf 'bughunt · %s · poll-failed\\n' "$mode"
-      last=$now
+      last=$now; prev=
     fi
-    failing=1
+    sleep 45
+    continue
 ''') in monitor_code, "poll-failed branch lost its shape"
-assert "failing=1" in monitor_code
+assert "failing" not in monitor_code
+# The init line: an empty prev is what makes the first reading print at once.
+assert "\nlast=$(date +%s); prev= #" in monitor_code
 # The running gate, verbatim, for the same reason: moving `last=$now` one line
 # down (out of the gate) keeps count == 2 and silences the heartbeat for the
 # whole hunt; `-lt` or a literal 45 in the gate floods it.
 assert ('''  now=$(date +%s)
   if [ "$status" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
     printf 'bughunt · %s · running\\n' "$mode"
-    last=$now; prev=$status; failing=0
+    last=$now; prev=$status
   fi
   sleep 45
 done
 ''') in monitor_code, "running heartbeat gate lost its shape"
-# `failing` clears only where a running line prints: an unconditional
-# `failing=0` after a good poll lets a flapping endpoint print poll-failed
-# every other cycle.
-assert monitor_code.count("failing=0") == 2, monitor_code.count("failing=0")
-assert "\n  failing=0\n" not in monitor_code
 # needs-files must exit the loop, not print every 45 s.
 assert ('''    printf 'bughunt · %s · needs-files\\n' "$mode"
     break
