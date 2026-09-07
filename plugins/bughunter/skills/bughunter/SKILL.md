@@ -86,9 +86,12 @@ This is a required client action, not a reminder to do later:
   off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
   heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
   line; on needs_files call `get_findings`, serve the files and KEEP this job;
-  on done/failed call `get_findings` and `CronDelete` this job; also
-  `CronDelete` it after 3 consecutive poll failures or once it is older than
-  150 minutes – a job nothing can satisfy is how a control gets disarmed".
+  on done/failed call `get_findings` and `CronDelete` this job; after 3
+  consecutive poll failures or once it is older than 180 minutes (the hunt's
+  150 min budget plus queue time – the job's age starts at submit, the
+  budget at claim) print `bughunt · <mode> · watch-retired` and only then
+  `CronDelete` it – a job nothing can satisfy is how a control gets
+  disarmed, and a job that vanishes in silence reads as 'still running'".
   One job per review: `CronDelete` any earlier bughunt job before creating
   the next – never leave one pointing at an older review id. Only
   as the last resort keep a `run_in_background` until-loop – and say so:
@@ -367,7 +370,8 @@ heartbeat=180 # seconds; the gate is checked once per iteration (45 s sleep +
               # a poll of at most 15 s), so a line lands within 180 + 60 = 240 s:
               # the server's interval_s, and well under the 300 s prompt-cache TTL
 start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
-fails=0 # consecutive failed polls; 12 (~9 min dead) retires the watch
+fails=0 # consecutive failed polls; 12 retires the watch (9 min if they fail
+        # fast, ~13 min against a hanging endpoint: 45 s sleep + 15 s timeout each)
 while :; do
   now=$(date +%s)
   if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
@@ -406,7 +410,7 @@ Every printed line wakes you. A plain `running` line is a heartbeat: answer it
 with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. `watch-retired` → the URL has been dead for ~9 min or the
+nothing to stop. `watch-retired` → the URL has been dead for 9–13 min or the
 watch is 3 h old: call `get_findings` once; if the review is still running,
 tell the user and arm a fresh monitor. `poll-failed` lands on the heartbeat clock, never per poll: a
 dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
@@ -429,7 +433,7 @@ review was watched. Any form you write must keep:
   the hunt's own budget (≥ 150 min): a watcher that dies before the hunt is a
   watcher that missed the event, and silence from it reads exactly like "still
   running". The two retirements it DOES have — 180 min of age, or 12 consecutive
-  failed polls (~9 min of a dead URL) — print `watch-retired` first, so the
+  failed polls (9–13 min of a dead URL) — print `watch-retired` first, so the
   session learns the watch ended rather than inferring it from silence. Every
   printed line is a wake; a watch nothing can satisfy must not wake you forever.
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
@@ -445,10 +449,12 @@ review was watched. Any form you write must keep:
   keeps the session's prompt cache warm between wakes – drop it and the terminal
   wake re-reads the whole context uncached. Never echo the response body. Do not
   print every 45-second poll either: `Monitor` stops a watch that floods it.
-- **A poll failure is printed and does not end the watch.** A pipeline's
-  exit status is its LAST command's, so `curl … | grep` masks curl's
-  failure and grep's "no match" reads as "still running"; capture curl's
-  output and exit code first, print the failure, and keep polling.
+- **A poll failure is seen, not swallowed.** A pipeline's exit status is
+  its LAST command's, so `curl … | grep` masks curl's failure and grep's
+  "no match" reads as "still running"; capture curl's output and exit code
+  first, count the failure, print `poll-failed` on the heartbeat clock
+  (property 3) and keep polling – only 12 consecutive failures end the
+  watch, and they do so with `watch-retired` (property 1).
 
 No background tasks in your harness? Then poll `get_findings` every 45-60
 seconds IN the current turn while doing other work – never leave a

@@ -108,8 +108,16 @@ if zsh:
         open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
         r = subprocess.run([zsh, "-c", monitor_code.replace("<status_url>", "http://x/")], capture_output=True, text=True, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
     assert r.returncode == 0 and r.stdout == "bughunt · fast · done\n", (r.returncode, r.stdout, r.stderr)
+# The properties list is normative for any rewrite of the loop: property 4
+# must describe the shipped loop (clock-gated poll-failed, retirement after 12
+# failures), not the pre-retirement one that printed per failure and never ended.
+props = skill.split("Any form you write must keep:", 1)[1].split("\n\nNo background tasks", 1)[0]
+assert "- **A poll failure is seen, not swallowed.**" in props
+assert "print `poll-failed` on the heartbeat clock" in props and "only 12 consecutive failures end the\n  watch" in props
+assert "does not end the watch" not in props and "print the failure, and keep polling" not in props
+assert "~9 min" not in skill, "12 failed polls take 9-13 min, not ~9"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "3 consecutive poll failures", "older than\n  150 minutes", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
+for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
