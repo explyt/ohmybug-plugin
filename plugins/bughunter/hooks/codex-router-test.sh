@@ -40,7 +40,7 @@ monitor_code = monitor_section.split("```", 2)[1]
 assert "while :" in monitor_code
 assert monitor_code.count("sleep 45") == 2
 assert "seq " not in monitor_code
-# The heartbeat (#57): a line at least every 225 s even when nothing changed, and
+# The heartbeat (#57): a line at least every 240 s even when nothing changed, and
 # never one per 45 s poll – Monitor floods stop the watch.
 assert "heartbeat=180" in monitor_code
 assert "-ge \"$heartbeat\"" in monitor_code
@@ -51,6 +51,15 @@ assert "*) printf" not in monitor_code
 # reset it, and the failure branch prints once, then on the clock.
 assert monitor_code.count("last=$now") == 2, monitor_code.count("last=$now")
 assert '[ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]' in monitor_code
+# ...and the failure branch resets the clock INSIDE its gate: moved next to
+# `failing=1`, every failed poll refreshes `last`, the gap never reaches the
+# budget, and an hour-long outage prints one line and then nothing.
+assert ('''    if [ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]; then
+      printf 'bughunt · %s · poll-failed\\n' "$mode"
+      last=$now
+    fi
+    failing=1
+''') in monitor_code, "poll-failed branch lost its shape"
 assert "failing=1" in monitor_code and "failing=0" in monitor_code
 # Every printf inside the loop is either terminal (break follows) or gated.
 loop = monitor_code.split("while :; do", 1)[1]
@@ -60,8 +69,9 @@ for line in loop.splitlines():
 assert loop.count("printf 'bughunt · %s · running") == 1
 assert loop.count("printf 'bughunt · %s · poll-failed") == 1
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "CronCreate", "one line and nothing else", "TaskStop"):
+for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "KEEP this job", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
+assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
 for phrase in ("poll_after_s=30", "timeout_s=225", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap"):
     assert phrase in codex_bullet, phrase

@@ -74,7 +74,7 @@ This is a required client action, not a reminder to do later:
   the compact line at least every 240 seconds even when nothing changed (that
   line is the heartbeat: a 180 s budget checked once per poll, so under the 240 s
   `interval_s` and the 300 s cache TTL with lag to spare), prints immediately
-  and exits on `needs_files` / `done` / `failed`. Use `persistent: true` (a deep hunt runs up to 2 h; a 1 h
+  and exits on `needs_files` / `done` / `failed`. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
   **A heartbeat wake is answered with that one line and nothing else** –
@@ -84,7 +84,8 @@ This is a required client action, not a reminder to do later:
   No `Monitor` tool in this harness? Fall back to `CronCreate` every 4 minutes
   off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
   heartbeat: curl `<status_url>` once and print the compact line; on
-  done/failed/needs_files call `get_findings` and `CronDelete` this job". Only
+  needs_files call `get_findings`, serve the files and KEEP this job; on
+  done/failed call `get_findings` and `CronDelete` this job". Only
   as the last resort keep a `run_in_background` until-loop – and say so:
   "monitoring armed without heartbeat – the cache will cool".
 
