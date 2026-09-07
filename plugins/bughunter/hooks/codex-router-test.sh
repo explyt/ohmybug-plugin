@@ -42,7 +42,9 @@ assert monitor_code.count("sleep 45") == 2
 assert "seq " not in monitor_code
 # The heartbeat (#57): a line at least every 240 s even when nothing changed, and
 # never one per 45 s poll – Monitor floods stop the watch.
-assert "heartbeat=180" in monitor_code
+# The whole assignment: "heartbeat=180" is a prefix of "heartbeat=1800".
+assert "\nheartbeat=180 #" in monitor_code
+assert "--max-time 15 " in monitor_code
 assert "-ge \"$heartbeat\"" in monitor_code
 assert "*) printf" not in monitor_code
 # The heartbeat is a heartbeat only because the clock resets when it prints:
@@ -60,18 +62,23 @@ assert ('''    if [ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]; 
     fi
     failing=1
 ''') in monitor_code, "poll-failed branch lost its shape"
-assert "failing=1" in monitor_code and "failing=0" in monitor_code
+assert "failing=1" in monitor_code
 # The running gate, verbatim, for the same reason: moving `last=$now` one line
 # down (out of the gate) keeps count == 2 and silences the heartbeat for the
 # whole hunt; `-lt` or a literal 45 in the gate floods it.
 assert ('''  now=$(date +%s)
-  if [ $((now - last)) -ge "$heartbeat" ]; then
+  if [ "$status" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
     printf 'bughunt · %s · running\\n' "$mode"
-    last=$now
+    last=$now; prev=$status; failing=0
   fi
   sleep 45
 done
 ''') in monitor_code, "running heartbeat gate lost its shape"
+# `failing` clears only where a running line prints: an unconditional
+# `failing=0` after a good poll lets a flapping endpoint print poll-failed
+# every other cycle.
+assert monitor_code.count("failing=0") == 2, monitor_code.count("failing=0")
+assert "\n  failing=0\n" not in monitor_code
 # needs-files must exit the loop, not print every 45 s.
 assert ('''    printf 'bughunt · %s · needs-files\\n' "$mode"
     break

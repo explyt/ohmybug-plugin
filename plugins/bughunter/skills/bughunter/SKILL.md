@@ -72,9 +72,9 @@ This is a required client action, not a reminder to do later:
   prompt cache (5-minute TTL) went cold each time. `Monitor` delivers every
   stdout line as an event: the loop polls `status_url` every 45 seconds, prints
   the compact line at least every 240 seconds even when nothing changed (that
-  line is the heartbeat: a 180 s budget checked once per poll, so under the 240 s
-  `interval_s` and the 300 s cache TTL with lag to spare), prints immediately
-  and exits on `needs_files` / `done` / `failed`. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
+  line is the heartbeat: a 180 s budget checked once per poll, so at most the
+  240 s `interval_s` and well under the 300 s cache TTL), prints immediately on
+  every review status change and exits on `needs_files` / `done` / `failed`. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
   **A heartbeat wake is answered with that one line and nothing else** –
@@ -358,12 +358,12 @@ not the default:
 
 ```bash
 mode=fast # use deep for a deep submit
-heartbeat=180 # seconds; the gate is checked once per 45 s poll, so a line lands
-              # within 180 s + one poll cycle: under the server's interval_s (240)
-              # and well under the 300 s prompt-cache TTL
-last=$(date +%s); failing=0
+heartbeat=180 # seconds; the gate is checked once per iteration (45 s sleep +
+              # a poll of at most 15 s), so a line lands within 180 + 60 = 240 s:
+              # the server's interval_s, and well under the 300 s prompt-cache TTL
+last=$(date +%s); failing=0; prev=
 while :; do
-  s=$(curl -fsS --max-time 20 '<status_url>'); rc=$?
+  s=$(curl -fsS --max-time 15 '<status_url>'); rc=$?
   if [ "$rc" -ne 0 ]; then
     now=$(date +%s)
     if [ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]; then
@@ -374,7 +374,6 @@ while :; do
     sleep 45
     continue
   fi
-  failing=0
   status=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
   if printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true'; then
     printf 'bughunt · %s · needs-files\n' "$mode"
@@ -384,9 +383,9 @@ while :; do
     done|failed) printf 'bughunt · %s · %s\n' "$mode" "$status"; break ;;
   esac
   now=$(date +%s)
-  if [ $((now - last)) -ge "$heartbeat" ]; then
+  if [ "$status" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
     printf 'bughunt · %s · running\n' "$mode"
-    last=$now
+    last=$now; prev=$status; failing=0
   fi
   sleep 45
 done
@@ -420,9 +419,11 @@ review was watched. Any form you write must keep:
 - **Prints a reading at least every 240 seconds, and every review status
   change immediately.** (A poll that recovers after `poll-failed` is not one:
   the failure line already woke you, and a flapping endpoint must not double
-  the wakes — the next `running` lands on the heartbeat clock.) The heartbeat budget (180 s) is checked once per 45 s poll, so
-  the real gap is the budget rounded up to whole poll cycles; keep the sum under
-  `interval_s` (240) and the 300 s cache TTL when you touch either number. A watcher silent for an hour is indistinguishable from a dead
+  the wakes — `failing` clears only when a `running` line prints, so a flap
+  costs one line per heartbeat, and the next `running` lands on the clock.) The heartbeat budget (180 s) is checked once per 45 s poll, so
+  the real gap is the budget rounded up to whole iterations (45 s sleep + a poll
+  of at most 15 s); keep 180 + 60 at or under `interval_s` (240) and under the
+  300 s cache TTL when you touch any of the three numbers. A watcher silent for an hour is indistinguishable from a dead
   one; the compact status line is the liveness signal AND the heartbeat that
   keeps the session's prompt cache warm between wakes – drop it and the terminal
   wake re-reads the whole context uncached. Never echo the response body. Do not
