@@ -143,8 +143,8 @@ ALSO=''
 
 echo "ohmybug: $WHOSE: $IDS — do not end the turn waiting" \
      "to be prodded. Call get_findings on each now, unless you already know one is still" \
-     "running: for those, arm the heartbeat monitor on the status_url (the Monitor tool," \
-     "per the bughunter skill – a line every 225 s and on needs_files/done/failed) so it" \
+     "running: for those, arm the heartbeat monitor on the status_url per the bughunter" \
+     "skill (Claude Code: the Monitor tool; Codex: automation_update + wait_review) so it" \
      "wakes you, rather than polling in a loop or waiting for a background shell to exit." \
      "$ALSO" \
      "This fires once per stop, and again after you do work — the counter is honest, the" \

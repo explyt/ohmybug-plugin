@@ -71,10 +71,10 @@ This is a required client action, not a reminder to do later:
   woke every session exactly once per hunt, 15–25 minutes after submit, and the
   prompt cache (5-minute TTL) went cold each time. `Monitor` delivers every
   stdout line as an event: the loop polls `status_url` every 45 seconds, prints
-  the compact line at least every 225 seconds even when nothing changed (that
-  line is the heartbeat – under the 240 s `interval_s` and the 300 s cache TTL
-  with lag to spare), prints immediately and exits on `needs_files` / `done` /
-  `failed`. Use `persistent: true` (a deep hunt runs up to 2 h; a 1 h
+  the compact line at least every 240 seconds even when nothing changed (that
+  line is the heartbeat: a 180 s budget checked once per poll, so under the 240 s
+  `interval_s` and the 300 s cache TTL with lag to spare), prints immediately
+  and exits on `needs_files` / `done` / `failed`. Use `persistent: true` (a deep hunt runs up to 2 h; a 1 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
   **A heartbeat wake is answered with that one line and nothing else** –
@@ -357,16 +357,23 @@ not the default:
 
 ```bash
 mode=fast # use deep for a deep submit
-heartbeat=225 # seconds; under the server's interval_s (240) and the 300 s prompt-cache TTL
-last=$(date +%s)
+heartbeat=180 # seconds; the gate is checked once per 45 s poll, so a line lands
+              # within 180 s + one poll cycle: under the server's interval_s (240)
+              # and well under the 300 s prompt-cache TTL
+last=$(date +%s); failing=0
 while :; do
   s=$(curl -fsS --max-time 20 '<status_url>'); rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf 'bughunt · %s · poll-failed\n' "$mode"
-    last=$(date +%s)
+    now=$(date +%s)
+    if [ "$failing" -eq 0 ] || [ $((now - last)) -ge "$heartbeat" ]; then
+      printf 'bughunt · %s · poll-failed\n' "$mode"
+      last=$now
+    fi
+    failing=1
     sleep 45
     continue
   fi
+  failing=0
   status=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
   if printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true'; then
     printf 'bughunt · %s · needs-files\n' "$mode"
@@ -388,8 +395,9 @@ Every printed line wakes you. A plain `running` line is a heartbeat: answer it
 with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. The `poll-failed` line resets the heartbeat clock: it already
-woke you, and two lines 45 s apart would be noise, not liveness.
+nothing to stop. `poll-failed` prints on the first failed poll and then on the
+heartbeat clock like `running` does: a status endpoint that is down for an hour
+must not turn into 80 wakes, and a flood stops the watch.
 
 The loop above keeps the four properties below, and each line of it is
 there for one of them – read it before you shorten it. What has failed in
@@ -408,8 +416,10 @@ review was watched. Any form you write must keep:
   missed the event, and silence from it reads exactly like "still
   running".
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
-- **Prints a reading at least every 225 seconds, and every state change
-  immediately.** A watcher silent for an hour is indistinguishable from a dead
+- **Prints a reading at least every 240 seconds, and every state change
+  immediately.** The heartbeat budget (180 s) is checked once per 45 s poll, so
+  the real gap is the budget rounded up to whole poll cycles; keep the sum under
+  `interval_s` (240) and the 300 s cache TTL when you touch either number. A watcher silent for an hour is indistinguishable from a dead
   one; the compact status line is the liveness signal AND the heartbeat that
   keeps the session's prompt cache warm between wakes – drop it and the terminal
   wake re-reads the whole context uncached. Never echo the response body. Do not
