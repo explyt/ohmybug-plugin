@@ -252,6 +252,7 @@ verdict = "none"
 # read as "no hunt" while the hunt sat on the PR head. Flags that take a value
 # are skipped so `--subject foo` does not read as PR "foo".
 VALUE_FLAGS = {"-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"}
+SHORT_VALUE = "bFtAR"  # the one-letter spellings of the value-taking flags above
 pr_sel, pr_repo = "", ""
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
@@ -269,6 +270,25 @@ for seg in segments(cmd):
                 i = 0
                 while i < len(rest):
                     w = rest[i]
+                    # pflag shorthand: `-Rorg/other`, `-R=org/other` and clusters
+                    # such as `-st subj` (`-s`, then `-t` taking `subj`). Unfold
+                    # them into the separated spelling the two branches below read,
+                    # or `-Rorg/other` is a boolean nobody asked about and `subj`
+                    # becomes the pull request.
+                    if len(w) > 2 and w[0] == "-" and w[1] != "-":
+                        letters = w[1:]
+                        for k, ch in enumerate(letters):
+                            if ch in SHORT_VALUE:
+                                val = letters[k + 1:].lstrip("=")
+                                w = "-" + ch
+                                if val:
+                                    rest = rest[:i] + [w, val] + rest[i + 1:]
+                                else:
+                                    rest = rest[:i] + [w] + rest[i + 1:]
+                                break
+                        else:
+                            i += 1  # a cluster of booleans
+                            continue
                     if w in VALUE_FLAGS:
                         if w in ("-R", "--repo") and i + 1 < len(rest):
                             pr_repo = rest[i + 1]
@@ -522,6 +542,11 @@ if ohmybug_attempted "$CURRENT"; then
 elif [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] &&
      ohmybug_attempted "ref:$HEAD_SHA"; then
   ATTEMPT="ref:$HEAD_SHA"
+# The PR head is the third spelling of the same identity: an offer of that
+# commit the environment refused is a dead end whatever tree this process
+# stands in, and the two branches above never see it from a dirty primary.
+elif [ -n "$PR_HEAD" ] && ohmybug_attempted "ref:$PR_HEAD"; then
+  ATTEMPT="ref:$PR_HEAD"
 fi
 # ...and only where the hunt could not have run anyway.
 #

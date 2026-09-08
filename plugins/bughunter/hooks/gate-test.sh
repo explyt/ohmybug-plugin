@@ -1328,20 +1328,29 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   # The selector is found behind flags – gh accepts them anywhere – and a
   # value-taking flag's value is not the selector: `-t subj` must not ask gh
   # about PR "subj". Both rows would fall back to judging the dirty primary.
+  # Each argv row clears the shim's record first: a lookup that never ran must
+  # not pass on the previous row's line.
+  ghargs() { rm -f "$HOME/ghshim/last-args"; mk "$1" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)"; }
   FL="gh pr"; FL="$FL merge --squash -t subj --body-file /dev/null 5"
-  rc=$(mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
-  [ "$rc" = 0 ] || { printf 'FAIL flags before the selector hid the PR head (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
-  case "$(cat "$HOME/ghshim/last-args")" in "pr view 5 "*) ;; *) printf 'FAIL the lookup asked gh for the wrong PR: %s\n' "$(cat "$HOME/ghshim/last-args")"; fails=$((fails + 1)) ;; esac
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL flags before the selector hid the PR head: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # pflag shorthand: an attached value and a cluster ending in a value flag.
+  FL="gh pr"; FL="$FL merge -st subj 5"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL a clustered short flag swallowed the selector: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  FL="gh pr"; FL="$FL merge 5 -Rorg/other"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL an attached -R value was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
   # ...and -R after the selector still reaches the lookup: without it gh
   # resolves the same-numbered PR of the LOCAL repository, a head nobody asked
   # about, which can allow a foreign merge through a worktree that happens to
   # stand at it.
   FL="gh pr"; FL="$FL merge 5 -R org/other --squash"
-  mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1
-  case "$(cat "$HOME/ghshim/last-args")" in *" -R org/other "*) ;; *) printf 'FAIL -R after the selector was dropped from the lookup: %s\n' "$(cat "$HOME/ghshim/last-args")"; fails=$((fails + 1)) ;; esac
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL -R after the selector was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
   FL="gh pr"; FL="$FL merge --repo=org/other 5"
-  mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1
-  case "$(cat "$HOME/ghshim/last-args")" in *" -R org/other "*) ;; *) printf 'FAIL --repo=value was dropped from the lookup: %s\n' "$(cat "$HOME/ghshim/last-args")"; fails=$((fails + 1)) ;; esac
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL --repo=value was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
   git -C "$WREPO" checkout -q -- b.ts 2>/dev/null
 else
   printf 'FAIL could not create a worktree for the cross-checkout ref row\n'; fails=$((fails + 1))
@@ -1370,6 +1379,18 @@ out=$(mk "$V" "$VREPO" | bash "$G/pre-pr-gate.sh" 2>/dev/null)
 case "$out" in
   *"no findings came back"*) ;;
   *) printf 'FAIL the ref-keyed warn-through said nothing on stdout: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+# ...and through the PR head: the same refused offer, judged from a dirty
+# primary checkout with no local tree at that commit. The two ref branches above
+# see only this tree's HEAD; the PR head is the third spelling of the identity,
+# and without it the dead end comes back as a hard block.
+VSHA=$(git -C "$VREPO" rev-parse HEAD)
+git -C "$VREPO" checkout -q --detach HEAD~1 2>/dev/null
+printf 'unrelated edits\n' >> "$VREPO/b.ts"
+out=$(mk "$V" "$VREPO" | OHMYBUG_TEST_GH_HEAD=$VSHA bash "$G/pre-pr-gate.sh" 2>/dev/null; echo "rc=$?")
+case "$out" in
+  *"no findings came back"*"rc=0") ;;
+  *) printf 'FAIL a refused offer of the PR head did not warn the merge through from a dirty primary: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
 rm -rf "$(dirname "$VREPO")"
 
