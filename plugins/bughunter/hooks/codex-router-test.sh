@@ -29,9 +29,9 @@ def run(event, payload=None):
 session = run("session")
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
-# The hold cap is the server's, not ours: one long wait_review is cut by the
-# client's MCP timeout, so the heartbeat loops short waits instead — and only
-# for a fast hunt, since a deep one outlives any loop (#988).
+# The hold cap is the server's, not ours: a longer timeout_s comes back at the
+# same 45 s with timed_out:true, so the heartbeat loops short waits instead —
+# and only for a fast hunt, since a deep one outlives any loop (#988).
 for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "timeout_s=45 up to 5 times", "timed_out:true", "deep hunt call wait_review once", "every 45s for 225s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
@@ -152,8 +152,20 @@ for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 5 times 
 
     assert phrase in codex_bullet, phrase
 # The 225 s hold is gone from every surface: the server caps a hold at 45 s, so
-# asking for more only buys the client-side MCP timeout this change removes.
-assert "timeout_s=225" not in skill, "a 225 s hold is capped by the server and dies on the client"
+# asking for more returns the same timed_out answer at 45 s and waits no longer.
+assert "timeout_s=225" not in skill, "a 225 s hold is capped by the server to 45 s"
+# The reason must not survive as the pre-clamp one: a client told to expect a
+# dead socket books ordinary timed_out answers as unreachable-server wakes and
+# retires a healthy watch after three of them.
+for text in (skill, open(router, encoding="utf-8").read()):
+    assert "client MCP timeout" not in text and "client-side timeout" not in text, "the clamp answers; it does not kill the socket"
+# The no-monitor fallback is the one place with no heartbeat to hand the wait
+# to, so it must loop for a DEEP hunt as well: one call there ends the turn on
+# an hour-long review nobody reads.
+fallback = skill.split("If the runtime cannot create its monitor,", 1)[1].split("\n\nIf the MCP server is missing", 1)[0]
+for phrase in ("in a loop until the\nanswer is terminal", "the loop is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed"):
+    assert phrase in fallback, phrase
+assert "one call for a deep one" not in fallback
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})
 review_text = review["hookSpecificOutput"]["additionalContext"]

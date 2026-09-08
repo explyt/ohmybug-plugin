@@ -58,12 +58,13 @@ This is a required client action, not a reminder to do later:
   loop, up to 5 times inside one wake (5 x 45 s covers the four-minute cadence).
   The server holds a wait for at most `WAIT_REVIEW_MAX_S` (45 s) however long a
   `timeout_s` you ask for, and answers the ordinary body plus `timed_out: true`
-  and a `next_step` when the hold expires — so ONE long call does not wait
-  longer, it just sits past the client's own MCP timeout and dies as "The
-  operation timed out" or a closed socket. Loop instead, and stop the loop the
-  moment the answer is `done`, `failed` or `needs_files`. That loop is for a
-  FAST hunt: a deep hunt runs about an hour, so call `wait_review` once, read its
-  `next_step`, and let the heartbeat carry the waiting. If `wait_review` is
+  and a `next_step` when the hold expires — so a bigger `timeout_s` buys no
+  extra waiting, only the same answer at 45 s. A `timed_out: true` answer is a
+  healthy server, not an unreachable one: never count it towards the retirement
+  rule below. Loop instead, and stop the loop the moment the answer is `done`,
+  `failed` or `needs_files`. That loop is for a FAST hunt: a deep hunt runs about
+  an hour, so call `wait_review` once, read its `next_step`, and let the
+  heartbeat carry the waiting. If `wait_review` is
   unavailable, loop `get_findings` every 45 seconds for at most
   225 seconds inside this wake, then let the next heartbeat take over.
   On `needs_files`, send files first; on `done` or
@@ -109,11 +110,14 @@ This is a required client action, not a reminder to do later:
   as the last resort keep a `run_in_background` until-loop – and say so:
   "monitoring armed without heartbeat – the cache will cool".
 
-If the runtime cannot create its monitor, wait in the current turn the same way
-the heartbeat does — `wait_review(review_id, poll_after_s=30, timeout_s=45)` in
-a loop for a fast hunt, one call for a deep one, since the server caps every
-hold at 45 s and a longer `timeout_s` only buys a client-side timeout — or state
-that monitoring is unavailable; never claim that a monitor is armed.
+If the runtime cannot create its monitor, wait in the current turn:
+`wait_review(review_id, poll_after_s=30, timeout_s=45)` in a loop until the
+answer is terminal — a longer `timeout_s` is clamped to the same 45 s, so
+looping is the only way to wait. Here the loop is for a deep hunt TOO: with no
+heartbeat there is nothing to hand the waiting to, and a deep hunt is the one
+that runs about an hour, so a single call would end the turn on a review nobody
+reads — the failure §3b records. If you cannot keep waiting, say the hunt is
+running and unwatched; never claim that a monitor is armed.
 
 If the MCP server is missing, refused, or unauthenticated, report the hunt as
 blocked and stop. Do not replace it with a local review and do not call that
