@@ -192,6 +192,18 @@ assert "Retire a heartbeat older than 180 minutes" in router_text, "ROUTING must
 # never handed, on the longest hunt there is.
 assert "status_url, interval_s, wake_on, stop_on, and wake_rule" in router_text
 assert "each of its wakes polling status_url once and reporting that" in router_text
+# ...and that poll sees a file request only in the body's flags, never in the
+# status word, so the deep wake is told to read them; a failed poll falls back to
+# one get_findings before it counts against retirement, and a retired watch calls
+# once and re-arms — a deep wake is a single plain-HTTPS poll, so three blocked
+# ones would otherwise drop the watch of a hunt budgeted at 150 min at minute 12.
+assert "awaiting_client_files" in router_text and "files_requested" in router_text
+assert "`awaiting_client_files`/`files_requested`, not off its\n  status word" in codex_bullet
+assert "needs-files` and serves the files first" in codex_bullet
+assert "before it counts as a wake that read nothing" in codex_bullet
+assert "before it counts as a wake that read nothing" in router_text
+assert "call `get_findings` once: if the review is\n  still running, tell the user and arm a fresh heartbeat" in codex_bullet
+assert "on retiring, call get_findings once and arm a fresh heartbeat if the review is still running" in router_text
 assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
 assert "each of its wakes polls `status_url` once and\n  reports that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet

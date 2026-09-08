@@ -76,7 +76,12 @@ This is a required client action, not a reminder to do later:
   `failed` or `needs_files`. That loop is for a FAST hunt: a deep hunt runs about
   an hour, so call `wait_review` once, read its `next_step`, and let the
   heartbeat carry the waiting — each of its wakes polls `status_url` once and
-  reports that, which is the read `wake_rule` names for a deep hunt. If `wait_review` is
+  reports that, which is the read `wake_rule` names for a deep hunt. That body
+  keys a file request off `awaiting_client_files`/`files_requested`, not off its
+  status word, so a wake that sees either flag prints `bughunt · <mode> ·
+  needs-files` and serves the files first. If the poll itself fails, the wake
+  falls back to one `get_findings` before it counts as a wake that read nothing.
+  If `wait_review` is
   unavailable, loop `get_findings` every 45 seconds for at most
   180 seconds inside this wake — the same three iterations, the same 60 s left —
   then let the next heartbeat take over.
@@ -85,8 +90,10 @@ This is a required client action, not a reminder to do later:
   it is older than 180 minutes or after 3 consecutive wakes that could not read
   a status at all — a failed `wait_review`, `get_findings` or `status_url` read,
   whichever that wake uses: print `bughunt · <mode> ·
-  watch-retired`, then delete it – a heartbeat nothing can satisfy must not
-  wake the thread forever. Those 60 seconds are
+  watch-retired`, then delete it, then call `get_findings` once: if the review is
+  still running, tell the user and arm a fresh heartbeat – a heartbeat nothing
+  can satisfy must not wake the thread forever, and a live hunt must not lose
+  its watch. Those 60 seconds are
   deliberate handover slack, not spare waiting: finish the status line and the
   cleanup inside them, or the next heartbeat fires while this wake still loops. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
