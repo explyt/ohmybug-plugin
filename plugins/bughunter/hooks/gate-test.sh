@@ -1375,7 +1375,29 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   # nothing (and say so) rather than the wrong PR.
   FL="GH_HOST=ghe.example gh pr"; FL="$FL merge 5"
   out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
-  case "$out" in *"rc=2 args=") ;; *) printf 'FAIL a GH_HOST prefix must resolve no head: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  case "$out" in *"gh pr view 5: head not resolved (GH_HOST=ghe.example"*"rc=2 args=") ;; *) printf 'FAIL a GH_HOST prefix must resolve no head and say so: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # Every value-taking flag, before the selector: a flag missing from the
+  # list makes its value the pull request, and the lookup fails silently into
+  # the session-tree judgement this change exists to remove.
+  for FLAGS in "-b msg" "--body msg" "--subject subj" "-A me@x.io" "--author-email me@x.io" "--match-head-commit deadbeef" "-F /dev/null"; do
+    FL="gh pr"; FL="$FL merge $FLAGS 5"
+    out=$(ghargs "$FL")
+    case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL value flag %s before the selector hid the PR head: %s\n' "$FLAGS" "$out"; fails=$((fails + 1)) ;; esac
+  done
+  # Two merges in one command: the hook answers once for the whole line, so a
+  # hunt of the first pull request must not carry the second one through. The
+  # gate then judges the session tree only, and says why.
+  FL="gh pr"; FL="$FL merge 5 --squash && gh pr merge 6 --squash"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"head not resolved (2 merges in one command"*"rc=2 args=") ;; *) printf 'FAIL a second merge rode through on the first PR head: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # ...while the same pull request merged twice is still one pull request.
+  FL="gh pr"; FL="$FL merge 5 --squash || gh pr merge 5 --squash --admin"
+  rc=$(mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL the same PR merged twice in one command was refused (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and an opted-out merge later in the line does not downgrade the first.
+  FL="gh pr"; FL="$FL merge 6 --squash; SKIP_BUGHUNT=1 gh pr merge 5 --squash"
+  rc=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL a later opted-out merge disarmed the gate for the first (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
   git -C "$WREPO" checkout -q -- b.ts 2>/dev/null
 else
   printf 'FAIL could not create a worktree for the cross-checkout ref row\n'; fails=$((fails + 1))

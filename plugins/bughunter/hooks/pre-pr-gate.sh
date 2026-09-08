@@ -258,7 +258,8 @@ verdict = "none"
 # are skipped so `--subject foo` does not read as PR "foo".
 VALUE_FLAGS = {"-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"}
 SHORT_VALUE = "bFtAR"  # the one-letter spellings of the value-taking flags above
-pr_sel, pr_repo = "", ""
+pr_sel, pr_repo, pr_skip = "", "", ""
+merges = []  # (selector, repo) per merge segment – the hook answers once for the whole command
 gh_env = {}
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
@@ -270,8 +271,13 @@ for seg in segments(cmd):
     if any(head[: len(m)] == m for m in MERGERS):
         # The opt-out counts only on the merge itself. Anywhere else it is just
         # a variable someone happened to set.
-        verdict = "skip" if skip else "merge"
-        if verdict == "merge":
+        # A merge WITHOUT the opt-out anywhere in the command is what the gate
+        # judges; a later opted-out merge must not downgrade an earlier one.
+        this = "skip" if skip else "merge"
+        if verdict != "merge":
+            verdict = this
+        if this == "merge":
+            seg_sel, seg_repo = "", ""
             if words[0] == "gh":
                 rest = words[3:]
                 i = 0
@@ -298,28 +304,36 @@ for seg in segments(cmd):
                             continue
                     if w in VALUE_FLAGS:
                         if w in ("-R", "--repo") and i + 1 < len(rest):
-                            pr_repo = rest[i + 1]
+                            seg_repo = rest[i + 1]
                         i += 2
                         continue
                     if w.startswith("-"):
                         if "=" in w and w.split("=", 1)[0] in ("-R", "--repo"):
-                            pr_repo = w.split("=", 1)[1]
+                            seg_repo = w.split("=", 1)[1]
                         i += 1
                         continue
                     # The first positional is the selector; keep walking, because
                     # gh accepts flags after it and `gh pr merge 7 -R org/other`
                     # names a repository the lookup must not lose.
-                    if not pr_sel:
-                        pr_sel = w
+                    if not seg_sel:
+                        seg_sel = w
                     i += 1
                 # An explicit -R wins over the environment, as it does in gh. A
                 # GH_HOST prefix names another GitHub instance the lookup cannot
-                # follow from here: resolve nothing rather than the wrong PR.
-                if not pr_repo and gh_env.get("GH_REPO"):
-                    pr_repo = gh_env["GH_REPO"]
+                # follow from here: keep the selector for the refusal text, but
+                # resolve nothing rather than the wrong PR.
+                if not seg_repo and gh_env.get("GH_REPO"):
+                    seg_repo = gh_env["GH_REPO"]
                 if gh_env.get("GH_HOST"):
-                    pr_sel = ""
-            break
+                    pr_skip = "GH_HOST=" + gh_env["GH_HOST"] + " names a host this gate cannot ask"
+            merges.append((seg_sel, seg_repo))
+            # No break: the hook answers ONCE for the whole command, so a second
+            # merge in the same line (`gh pr merge 61 && gh pr merge 62`) would ride
+            # through on the hunt of the first pull request. Every merge is collected.
+if merges:
+    pr_sel, pr_repo = merges[0]
+    if len(set(merges)) > 1:
+        pr_skip = "%d merges in one command name different pull requests; judged the session tree only" % len(set(merges))
 # One field per line, same convention as the recorder. Not \x01-separated: the
 # bash that ships with macOS is 3.2 and does not split IFS on that byte, so the
 # whole answer arrived as field one and every verdict read as "not a merge" —
@@ -329,7 +343,7 @@ for seg in segments(cmd):
 # recorder learned this in the same change; this protocol is the same shape.
 cwd_line = (data.get("cwd") or "").replace("\n", " ").replace("\r", " ")
 one = lambda v: v.replace("\n", " ").replace("\r", " ")
-print(cwd_line, verdict, looks_merge, opts_out, one(pr_sel), one(pr_repo), sep="\n")
+print(cwd_line, verdict, looks_merge, opts_out, one(pr_sel), one(pr_repo), one(pr_skip), sep="\n")
 ' 2>/dev/null)
 
 if [ -z "$DECIDE" ]; then
@@ -354,6 +368,7 @@ LOOKS_MERGE=$(printf '%s' "$DECIDE" | sed -n 3p)
 OPTS_OUT=$(printf '%s' "$DECIDE" | sed -n 4p)
 PR_SEL=$(printf '%s' "$DECIDE" | sed -n 5p)
 PR_REPO=$(printf '%s' "$DECIDE" | sed -n 6p)
+PR_SKIP=$(printf '%s' "$DECIDE" | sed -n 7p)
 
 case "$VERDICT" in
   merge) ;;
@@ -389,7 +404,11 @@ GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
 # gh, not a GitHub remote) changes nothing except the refusal text, which then
 # says the head could not be resolved.
 PR_HEAD="" PR_SRC="" PR_TREES=""
-if [ -n "$PR_SEL" ]; then
+if [ -n "$PR_SEL" ] && [ -n "$PR_SKIP" ]; then
+  # A pull request was named and deliberately not looked up: say which and why,
+  # so the refusal never reads as "no hunt" on a command the gate half-judged.
+  PR_SRC="gh pr view $PR_SEL: head not resolved ($PR_SKIP)"
+elif [ -n "$PR_SEL" ]; then
   PR_SRC="gh pr view $PR_SEL"
   if [ -n "$PR_REPO" ]; then
     PR_HEAD=$(GH_PROMPT_DISABLED=1 perl -e 'alarm 15; exec @ARGV' gh pr view "$PR_SEL" -R "$PR_REPO" --json headRefOid -q .headRefOid 2>/dev/null)
