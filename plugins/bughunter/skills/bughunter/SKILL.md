@@ -119,7 +119,9 @@ This is a required client action, not a reminder to do later:
   No `Monitor` tool in this harness? Fall back to `CronCreate` every 4 minutes
   off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
   heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
-  line; on needs_files call `get_findings`, serve the files and KEEP this job;
+  line; on `awaiting_client_files`/`files_requested` in that body (it flags a
+  request there, never in its status word) call `get_findings`, serve the files
+  and KEEP this job;
   on done/failed call `get_findings` and `CronDelete` this job; after 3
   consecutive poll failures or once it is older than 180 minutes (the hunt's
   150 min budget plus queue time – the job's age starts at submit, the
