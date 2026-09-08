@@ -108,7 +108,12 @@ assert zsh, "zsh is required: the loop must be executed under the shell Claude C
 with tempfile.TemporaryDirectory() as d:
     open(f"{d}/curl", "w").write('#!/bin/sh\nprintf \'{"status":"done"}\'\n'); os.chmod(f"{d}/curl", 0o755)
     open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
-    r = subprocess.run([zsh, "-c", monitor_code.replace("<status_url>", "http://x/")], capture_output=True, text=True, timeout=60, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
+    # monitor_code starts with the fence's info string ("bash"); executed, that
+    # line is a real bash reading the suite's stdin. Strip it, and give the loop
+    # no stdin at all.
+    loop_src = monitor_code.split("\n", 1)[1]
+    assert not loop_src.startswith("bash"), "fence info string leaked into the executed loop"
+    r = subprocess.run([zsh, "-c", loop_src.replace("<status_url>", "http://x/")], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
 assert r.returncode == 0 and r.stdout == "bughunt · fast · done\n", (r.returncode, r.stdout, r.stderr)
 # The properties list is normative for any rewrite of the loop: property 4
 # must describe the shipped loop (clock-gated poll-failed, retirement after 12

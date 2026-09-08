@@ -30,7 +30,7 @@ jobs:
       - run: bash plugins/bughunter/hooks/gate-test.sh
       # The router test executes the skill's watch loop under zsh – the shell
       # Claude Code runs it in on macOS – and fails, not skips, without it.
-      - run: sudo apt-get install -y --no-install-recommends zsh
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
       - run: bash plugins/bughunter/hooks/codex-router-test.sh
       - run: bash plugins/bughunter/hooks/version-check-test.sh
       - run: bash scripts/version.sh --self-test
