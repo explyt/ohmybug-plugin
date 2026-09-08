@@ -118,6 +118,12 @@ def segments(cmd, depth=0, quiet=False):
         return
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
+    # shlex eats a newline as whitespace, so the direct pass over a multi-line
+    # command yields segments that SPAN lines: `gh pr merge 5<newline>gh pr list
+    # -R org/other` is one segment here, and a walk over its words harvests the
+    # next line. Those segments still decide the verdict; the per-line re-read
+    # below is where the arguments of a merge are read from. The flag says which.
+    spanning = "\n" in cmd
     try:
         tokens = list(lex)
     except ValueError:
@@ -125,18 +131,18 @@ def segments(cmd, depth=0, quiet=False):
         # Only the top-level parse gets to say that; a per-line retry that fails
         # is just a line we could not read, not a verdict about the command.
         if not quiet:
-            yield ["\x00unparsed"]
+            yield ["\x00unparsed"], False
         return
     cur = []
     for t in tokens:
         if t in SEPS:
             if cur:
-                yield cur
+                yield cur, spanning
             cur = []
         else:
             cur.append(t)
     if cur:
-        yield cur
+        yield cur, spanning
     # A newline ends a command as surely as `;` does, but shlex eats it as
     # whitespace, so `npm test<newline>gh pr merge 5` arrives here as ONE
     # segment whose head is ("npm", "test", "gh") and walks straight through.
@@ -261,7 +267,7 @@ SHORT_VALUE = "bFtAR"  # the one-letter spellings of the value-taking flags abov
 pr_sel, pr_repo, pr_skip = "", "", ""
 merges = []  # (selector, repo) per merge segment – the hook answers once for the whole command
 gh_env = {}
-for seg in segments(cmd):
+for seg, spanning in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
         # A merge the tokenizer already recognised stays recognised: since the
         # loop no longer breaks at the first merge, an unparsable segment AFTER
@@ -286,8 +292,20 @@ for seg in segments(cmd):
             if words[0] == "gh":
                 rest = words[3:]
                 i = 0
+                sel_at = -1
                 while i < len(rest):
                     w = rest[i]
+                    # A redirection and its operand belong to the shell, not to
+                    # gh: `2>&1` arrives as `2`, `>&`, `1`, and without this the
+                    # `2` is a pull request. A 0, 1 or 2 right before `>` or `<`
+                    # was its file descriptor, so a selector read from there is
+                    # unread (`gh pr merge 2 >log` loses its selector too, and
+                    # falls back to the session tree: strictly the older rule).
+                    if w[0] in "<>" or w.startswith("&>"):
+                        if sel_at == i - 1 and w[0] in "<>" and seg_sel in ("0", "1", "2"):
+                            seg_sel = ""
+                        i += 2
+                        continue
                     # pflag shorthand: `-Rorg/other`, `-R=org/other` and clusters
                     # such as `-st subj` (`-s`, then `-t` taking `subj`). Unfold
                     # them into the separated spelling the two branches below read,
@@ -322,6 +340,7 @@ for seg in segments(cmd):
                     # names a repository the lookup must not lose.
                     if not seg_sel:
                         seg_sel = w
+                        sel_at = i
                     i += 1
                 # An explicit -R wins over the environment, as it does in gh. A
                 # GH_HOST prefix names another GitHub instance the lookup cannot
@@ -331,7 +350,12 @@ for seg in segments(cmd):
                     seg_repo = gh_env["GH_REPO"]
                 if gh_env.get("GH_HOST"):
                     pr_skip = "GH_HOST=" + gh_env["GH_HOST"] + " names a host this gate cannot ask"
-            merges.append((seg_sel, seg_repo))
+            # A segment that spans lines still decides the verdict, but its
+            # arguments may belong to the next line: the per-line re-read
+            # supplies the accurate ones. A merge only the spanning pass saw
+            # keeps the older rule, the session tree.
+            if not spanning:
+                merges.append((seg_sel, seg_repo))
             # No break: the hook answers ONCE for the whole command, so a second
             # merge in the same line (`gh pr merge 61 && gh pr merge 62`) would ride
             # through on the hunt of the first pull request. Every merge is collected.

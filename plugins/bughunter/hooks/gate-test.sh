@@ -1390,6 +1390,29 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   FL="gh pr"; FL="$FL merge 5 --squash && gh pr merge 6 --squash"
   out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
   case "$out" in *"head not resolved (2 merges in one command"*"rc=2 args=") ;; *) printf 'FAIL a second merge rode through on the first PR head: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # A redirection is the shell's, not gh's: `2>&1` on a selector-less merge
+  # must not make pull request 2 the one the gate asks about (a hunted head of
+  # an old PR #2 would then vouch for whatever branch is being merged), and a
+  # redirection must not hide a real selector before or after it.
+  FL="gh pr"; FL="$FL merge --squash 2>&1"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=2 args=") ;; *) printf 'FAIL a redirection became the pull request selector: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  for FL2 in "5 --squash 2>&1" "1>&2 5" "5 >out 2>&1" "2>/dev/null 5"; do
+    FL="gh pr"; FL="$FL merge $FL2"
+    out=$(ghargs "$FL")
+    case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL a redirection hid the selector in %s: %s\n' "$FL2" "$out"; fails=$((fails + 1)) ;; esac
+  done
+  # A multi-line command: the merge on line 1 must not harvest line 2's -R
+  # (that read as two different pull requests and lost the lookup), and a
+  # selector-less merge on line 1 must not take line 2's first word as one.
+  FL="gh pr"; FL="$FL merge 5 --squash
+gh pr list -R org/other"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 --json"*) ;; *) printf 'FAIL the next line leaked into the merge arguments: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  FL="gh pr"; FL="$FL merge --squash
+npm test"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"merges in one command"*|*"gh pr view"*) printf 'FAIL a selector-less merge borrowed the next line: %s\n' "$out"; fails=$((fails + 1)) ;; *"rc=2 args=") ;; *) printf 'FAIL selector-less multi-line merge: %s\n' "$out"; fails=$((fails + 1)) ;; esac
   # ...while the same pull request merged twice is still one pull request.
   FL="gh pr"; FL="$FL merge 5 --squash || gh pr merge 5 --squash --admin"
   rc=$(mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
