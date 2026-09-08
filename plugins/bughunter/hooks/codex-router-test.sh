@@ -147,6 +147,10 @@ claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtim
 for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
+# The fourth statement of the same rule lives after the watch loop, outside the
+# claude_bullet slice — the surface that owns the loop must re-arm on the same
+# predicate as the three that do not.
+assert "call `get_findings` once; if the review is still running or\nwaiting for files, tell the user and arm a fresh monitor" in skill
 # The bullet is what an agent condenses when it rewrites the loop, so its exit
 # condition must be the one the loop actually breaks on: the flags, not a status
 # word that body never carries. And the cron job, the surface with no Monitor

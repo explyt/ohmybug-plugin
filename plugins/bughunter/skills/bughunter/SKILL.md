@@ -466,8 +466,8 @@ with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
 nothing to stop. `watch-retired` → the URL has been dead for 9–12 min or the
-watch is 3 h old: call `get_findings` once; if the review is still running,
-tell the user and arm a fresh monitor. `poll-failed` lands on the heartbeat clock, never per poll: a
+watch is 3 h old: call `get_findings` once; if the review is still running or
+waiting for files, tell the user and arm a fresh monitor. `poll-failed` lands on the heartbeat clock, never per poll: a
 dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
 an hour, and a flood stops the watch. The first good poll after it prints
 `running` once (recovery), then the clock takes over again.
