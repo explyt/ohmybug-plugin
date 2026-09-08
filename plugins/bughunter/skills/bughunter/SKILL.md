@@ -58,8 +58,8 @@ This is a required client action, not a reminder to do later:
   or `get_findings` on a fast hunt, from the `status_url` read on a deep one —
   and a wake with no answer prints `bughunt · <mode> · poll-failed`, never the
   previous status. A heartbeat that
-  answers from memory reported `running` for fourteen minutes after the hunt was
-  done, and the merge waited on it. Update an existing heartbeat for the same review instead of
+  answers from memory reported `running` on three wakes — twelve minutes — after
+  the hunt was done, and the merge waited on it. Update an existing heartbeat for the same review instead of
   creating a duplicate, and retire/replace any heartbeat pointing at an older
   review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a
   loop, up to 3 times inside one wake. Budget an iteration the way the Claude
@@ -109,7 +109,9 @@ This is a required client action, not a reminder to do later:
   the compact line at least every 240 seconds even when nothing changed (that
   line is the heartbeat: a 180 s budget checked once per poll, so at most the
   240 s `interval_s` and well under the 300 s cache TTL), prints immediately on
-  every review status change and exits on `needs_files` / `done` / `failed`. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
+  every review status change and exits on `done` / `failed` or on the
+  `awaiting_client_files`/`files_requested` flags — that body carries a file
+  request in those flags, never in its status word. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
   **A heartbeat wake is answered with that one line and nothing else** –
@@ -126,7 +128,8 @@ This is a required client action, not a reminder to do later:
   consecutive poll failures or once it is older than 180 minutes (the hunt's
   150 min budget plus queue time – the job's age starts at submit, the
   budget at claim) print `bughunt · <mode> · watch-retired` and only then
-  `CronDelete` it – a job nothing can satisfy is how a control gets
+  `CronDelete` it, then call `get_findings` once and create a fresh job if the
+  review is still running – a job nothing can satisfy is how a control gets
   disarmed, and a job that vanishes in silence reads as 'still running'".
   One job per review: `CronDelete` any earlier bughunt job before creating
   the next – never leave one pointing at an older review id. Only

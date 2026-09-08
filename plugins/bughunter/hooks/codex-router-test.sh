@@ -147,6 +147,14 @@ claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtim
 for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
+# The bullet is what an agent condenses when it rewrites the loop, so its exit
+# condition must be the one the loop actually breaks on: the flags, not a status
+# word that body never carries. And the cron job, the surface with no Monitor
+# behind it, retires with the same remedy as the other two: read once, re-arm.
+assert "exits on `done` / `failed` or on the\n  `awaiting_client_files`/`files_requested` flags" in claude_bullet
+assert "never in its status word" in claude_bullet
+assert "call `get_findings` once and create a fresh job if the\n  review is still running" in claude_bullet
+assert "fourteen minutes" not in skill, "three wakes at a four-minute cadence is twelve minutes"
 # The cron fallback curls the same status body as the deep wake, so it reads the
 # request off the flags too: keyed to the status word it sits through the window.
 assert "on `awaiting_client_files`/`files_requested` in that body (it flags a\n  request there, never in its status word) call `get_findings`, serve the files\n  and KEEP this job" in claude_bullet
