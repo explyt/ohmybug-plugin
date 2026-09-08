@@ -279,8 +279,12 @@ for seg in segments(cmd):
                             pr_repo = w.split("=", 1)[1]
                         i += 1
                         continue
-                    pr_sel = w
-                    break
+                    # The first positional is the selector; keep walking, because
+                    # gh accepts flags after it and `gh pr merge 7 -R org/other`
+                    # names a repository the lookup must not lose.
+                    if not pr_sel:
+                        pr_sel = w
+                    i += 1
             break
 # One field per line, same convention as the recorder. Not \x01-separated: the
 # bash that ships with macOS is 3.2 and does not split IFS on that byte, so the
@@ -359,9 +363,20 @@ if [ -n "$PR_SEL" ]; then
     *[!0-9a-f]*|"") PR_HEAD="" PR_SRC="$PR_SRC: head not resolved" ;;
   esac
   if [ -n "$PR_HEAD" ]; then
-    PR_WT=$(git worktree list --porcelain 2>/dev/null | awk -v h="HEAD $PR_HEAD" '
-      /^worktree /{wt=substr($0,10)} $0==h{print wt; exit}')
-    if [ -n "$PR_WT" ] && [ -d "$PR_WT" ] && [ "$PR_WT" != "$(pwd -P)" ]; then
+    # Every local tree at that commit; git lists the primary checkout first,
+    # and a primary parked at the PR head with unrelated edits is the wrong tree
+    # to judge when a clean branch worktree stands at the same commit. Prefer a
+    # clean one, then the first.
+    PR_WT=""; PR_WT_ANY=""
+    while IFS= read -r wt; do
+      [ -n "$wt" ] && [ -d "$wt" ] || continue
+      [ -n "$PR_WT_ANY" ] || PR_WT_ANY=$wt
+      if [ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then PR_WT=$wt; break; fi
+    done <<EOF_WT
+$(git worktree list --porcelain 2>/dev/null | awk -v h="HEAD $PR_HEAD" '/^worktree /{wt=substr($0,10)} $0==h{print wt}')
+EOF_WT
+    [ -n "$PR_WT" ] || PR_WT=$PR_WT_ANY
+    if [ -n "$PR_WT" ] && [ "$PR_WT" != "$(pwd -P)" ]; then
       cd "$PR_WT" 2>/dev/null && PR_SRC="$PR_SRC; judged the worktree at that commit" \
         && GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null)
     fi

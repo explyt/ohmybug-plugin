@@ -46,7 +46,7 @@ TREE_BEFORE=$(git status --porcelain | grep -v "$SCRATCH" || true)
 # would be slow offline and green for the wrong reason online. The shim answers
 # with OHMYBUG_TEST_GH_HEAD when set and fails like an unreachable gh otherwise.
 mkdir -p "$HOME/ghshim"
-printf '#!/bin/sh\n[ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1\nprintf "%%s\\n" "$OHMYBUG_TEST_GH_HEAD"\n' > "$HOME/ghshim/gh"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "$HOME/ghshim/last-args"\n[ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1\nprintf "%%s\\n" "$OHMYBUG_TEST_GH_HEAD"\n' > "$HOME/ghshim/gh"
 chmod +x "$HOME/ghshim/gh"
 export PATH="$HOME/ghshim:$PATH"
 printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
@@ -1325,6 +1325,23 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   # no local worktree stands at that commit any more (the record IS repo@sha).
   rc=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 0 ] || { printf 'FAIL a hunted PR head with no local worktree was blocked (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # The selector is found behind flags – gh accepts them anywhere – and a
+  # value-taking flag's value is not the selector: `-t subj` must not ask gh
+  # about PR "subj". Both rows would fall back to judging the dirty primary.
+  FL="gh pr"; FL="$FL merge --squash -t subj --body-file /dev/null 5"
+  rc=$(mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL flags before the selector hid the PR head (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  case "$(cat "$HOME/ghshim/last-args")" in "pr view 5 "*) ;; *) printf 'FAIL the lookup asked gh for the wrong PR: %s\n' "$(cat "$HOME/ghshim/last-args")"; fails=$((fails + 1)) ;; esac
+  # ...and -R after the selector still reaches the lookup: without it gh
+  # resolves the same-numbered PR of the LOCAL repository, a head nobody asked
+  # about, which can allow a foreign merge through a worktree that happens to
+  # stand at it.
+  FL="gh pr"; FL="$FL merge 5 -R org/other --squash"
+  mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1
+  case "$(cat "$HOME/ghshim/last-args")" in *" -R org/other "*) ;; *) printf 'FAIL -R after the selector was dropped from the lookup: %s\n' "$(cat "$HOME/ghshim/last-args")"; fails=$((fails + 1)) ;; esac
+  FL="gh pr"; FL="$FL merge --repo=org/other 5"
+  mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1
+  case "$(cat "$HOME/ghshim/last-args")" in *" -R org/other "*) ;; *) printf 'FAIL --repo=value was dropped from the lookup: %s\n' "$(cat "$HOME/ghshim/last-args")"; fails=$((fails + 1)) ;; esac
   git -C "$WREPO" checkout -q -- b.ts 2>/dev/null
 else
   printf 'FAIL could not create a worktree for the cross-checkout ref row\n'; fails=$((fails + 1))
@@ -1587,6 +1604,32 @@ else
   echo "worktree rows skipped: could not create a worktree here" >&2
   fails=$((fails + 1))
 fi
+
+# Two trees at the PR head. git lists the primary checkout first, and a primary
+# parked at that commit with unrelated uncommitted edits is the wrong tree to
+# judge when a clean branch worktree at the same commit carries the (payload,
+# diff-id keyed) hunt. First-match picked the primary, found no hunt for its
+# edits, and refused the hunted PR.
+R2=$(mktemp -d)/repo
+mkrepo "$R2"
+if git -C "$R2" worktree add -q -b feature "$R2.wt" HEAD 2>/dev/null; then
+  printf 'work\n' >> "$R2.wt/a.ts"
+  git -C "$R2.wt" add a.ts 2>/dev/null
+  git -C "$R2.wt" -c user.email=t@t -c user.name=t commit -qm work 2>/dev/null
+  SHA2=$(git -C "$R2.wt" rev-parse HEAD)
+  DIFF2=$(git -C "$R2.wt" diff origin/main)
+  rm -rf "$(cd "$R2" && ohmybug_hunt_dir)"
+  wpost submit_review 0 "$R2.wt" "$DIFF2" >/dev/null 2>&1
+  wpost get_findings 1 "$R2.wt" "$DIFF2" >/dev/null 2>&1
+  git -C "$R2" checkout -q --detach "$SHA2" 2>/dev/null
+  printf 'parked edits\n' >> "$R2/b.ts"
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL two trees at the PR head: the dirty primary was judged instead of the clean worktree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git -C "$R2" worktree remove --force "$R2.wt" 2>/dev/null
+else
+  printf 'FAIL could not create a worktree for the two-trees row\n'; fails=$((fails + 1))
+fi
+rm -rf "$(dirname "$R2")"
 
 # --- the no-payload path -----------------------------------------------------
 # The DEFAULT submit sends no diff at all — the server fetches it for repo@ref —
