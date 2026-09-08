@@ -154,7 +154,11 @@ assert "up to 2 h" not in claude_bullet
 assert "exits on `done` / `failed` or on the\n  `awaiting_client_files`/`files_requested` flags" in claude_bullet
 assert "never in its status word" in claude_bullet
 assert "call `get_findings` once and create a fresh job if the\n  review is still running" in claude_bullet
-assert "fourteen minutes" not in skill, "three wakes at a four-minute cadence is twelve minutes"
+assert "fourteen minutes" not in skill
+# The cron prompt is the whole instruction its wake sees, so it carries the wake
+# rule itself: without it, failures one and two have no line but the remembered
+# one, which is the incident.
+assert "print `bughunt ·\n  <mode> · poll-failed`, never the previous status" in claude_bullet
 # The cron fallback curls the same status body as the deep wake, so it reads the
 # request off the flags too: keyed to the status word it sits through the window.
 assert "on `awaiting_client_files`/`files_requested` in that body (it flags a\n  request there, never in its status word) call `get_findings`, serve the files\n  and KEEP this job" in claude_bullet
@@ -166,6 +170,9 @@ codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[
 # automation_update is free to omit it.
 WAKE_RULE = ("every wake reports the status it just read — from `wait_review`\n  or `get_findings` on a fast hunt, from the `status_url` read on a deep one —\n  and a wake with no answer prints `bughunt · <mode> · poll-failed`, never the\n  previous status")
 assert WAKE_RULE in codex_bullet, "the heartbeat prompt must carry the server's wake_rule word for word"
+# The war story that justifies the rule carries the magnitude the record supports:
+# three wakes at the four-minute cadence is twelve minutes, not more.
+assert "on three wakes — twelve minutes — after" in codex_bullet
 assert "`wake_rule` — copy `wake_rule` into the prompt word for word" in codex_bullet
 # ...and the hand-wait path prints on the same terms: it is the path with no
 # heartbeat, i.e. the one where nothing else would catch a remembered status.
