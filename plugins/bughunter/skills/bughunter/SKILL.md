@@ -112,8 +112,10 @@ This is a required client action, not a reminder to do later:
 
 If the runtime cannot create its monitor, wait in the current turn:
 `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a loop until the
-answer is terminal — a longer `timeout_s` is clamped to the same 45 s, so
-looping is the only way to wait. Here the loop is for a deep hunt TOO: with no
+answer is `done`, `failed` or `needs_files` — the same three the heartbeat loop
+stops on, because `needs_files` is not terminal and the request behind it is
+held open for minutes only (§3a): send the files, then keep looping. A longer
+`timeout_s` is clamped to the same 45 s, so looping is the only way to wait. Here the loop is for a deep hunt TOO: with no
 heartbeat there is nothing to hand the waiting to, and a deep hunt is the one
 that runs about an hour, so a single call would end the turn on a review nobody
 reads — the failure §3b records. If you cannot keep waiting, say the hunt is

@@ -151,19 +151,26 @@ codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[
 for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 5 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
 
     assert phrase in codex_bullet, phrase
-# The 225 s hold is gone from every surface: the server caps a hold at 45 s, so
-# asking for more returns the same timed_out answer at 45 s and waits no longer.
-assert "timeout_s=225" not in skill, "a 225 s hold is capped by the server to 45 s"
+# The 225 s hold is gone from BOTH surfaces (the comment used to promise that
+# while the assert read one): the server caps a hold at 45 s, so asking for more
+# returns the same timed_out answer at 45 s and waits no longer.
 # The reason must not survive as the pre-clamp one: a client told to expect a
 # dead socket books ordinary timed_out answers as unreachable-server wakes and
-# retires a healthy watch after three of them.
-for text in (skill, open(router, encoding="utf-8").read()):
+# retires a healthy watch after three of them. And that consequence is the whole
+# point of this change, so the rule that forbids it is asserted on both surfaces
+# in its own words — the bare token `timed_out` also matches the clause above it,
+# so deleting the rule used to ship green.
+router_text = open(router, encoding="utf-8").read()
+for text in (skill, router_text):
+    assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"
     assert "client MCP timeout" not in text and "client-side timeout" not in text, "the clamp answers; it does not kill the socket"
+assert "never count it towards the retirement" in skill
+assert "never a wake to count towards retirement" in router_text
 # The no-monitor fallback is the one place with no heartbeat to hand the wait
 # to, so it must loop for a DEEP hunt as well: one call there ends the turn on
 # an hour-long review nobody reads.
 fallback = skill.split("If the runtime cannot create its monitor,", 1)[1].split("\n\nIf the MCP server is missing", 1)[0]
-for phrase in ("in a loop until the\nanswer is terminal", "the loop is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed"):
+for phrase in ("`done`, `failed` or `needs_files`", "held open for minutes only", "the loop is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed"):
     assert phrase in fallback, phrase
 assert "one call for a deep one" not in fallback
 
