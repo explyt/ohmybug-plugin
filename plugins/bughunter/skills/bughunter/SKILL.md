@@ -124,15 +124,16 @@ This is a required client action, not a reminder to do later:
   line for what THAT read answered; if it answered nothing, call `get_findings`
   once and print what that answered, and only if THAT fails too print `bughunt ·
   <mode> · poll-failed` and count the wake as a poll failure — never the
-  previous status; on `awaiting_client_files`/`files_requested` in that body (it flags a
-  request there, never in its status word) call `get_findings`, serve the files
-  and KEEP this job;
+  previous status; on `awaiting_client_files`/`files_requested` in the status
+  body (which flags a request there, not in its status word) or `needs_files`
+  from the `get_findings` fallback (which flags it exactly there) call
+  `get_findings`, serve the files and KEEP this job;
   on done/failed call `get_findings` and `CronDelete` this job; after 3
   consecutive poll failures or once it is older than 180 minutes (the hunt's
   150 min budget plus queue time – the job's age starts at submit, the
   budget at claim) print `bughunt · <mode> · watch-retired` and only then
   `CronDelete` it, then call `get_findings` once and create a fresh job if the
-  review is still running – a job nothing can satisfy is how a control gets
+  review is still running or waiting for files – a job nothing can satisfy is how a control gets
   disarmed, and a job that vanishes in silence reads as 'still running'".
   One job per review: `CronDelete` any earlier bughunt job before creating
   the next – never leave one pointing at an older review id. Only

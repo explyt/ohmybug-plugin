@@ -159,9 +159,14 @@ assert "fourteen minutes" not in skill
 # rule itself: without it, failures one and two have no line but the remembered
 # one, which is the incident.
 assert "call `get_findings`\n  once and print what that answered, and only if THAT fails too print `bughunt ·\n  <mode> · poll-failed` and count the wake as a poll failure — never the\n  previous status" in claude_bullet
+# Either shape means a file request: the status body flags it beside the word,
+# get_findings puts it IN the word — and the wake that falls back to the tool
+# is exactly the one that would otherwise match neither branch.
+assert "or `needs_files`\n  from the `get_findings` fallback (which flags it exactly there) call\n  `get_findings`, serve the files and KEEP this job" in claude_bullet
+assert "review is still running or waiting for files" in claude_bullet
 # The cron fallback curls the same status body as the deep wake, so it reads the
 # request off the flags too: keyed to the status word it sits through the window.
-assert "on `awaiting_client_files`/`files_requested` in that body (it flags a\n  request there, never in its status word) call `get_findings`, serve the files\n  and KEEP this job" in claude_bullet
+assert "on `awaiting_client_files`/`files_requested` in the status\n  body (which flags a request there, not in its status word)" in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
 # #1003: a heartbeat printed `running` on three wakes after the hunt was done,
 # with no tool call in the thread — the cadence fields say when to wake, and
@@ -189,7 +194,10 @@ for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times 
 # point of this change, so the rule that forbids it is asserted on both surfaces
 # in its own words — the bare token `timed_out` also matches the clause above it,
 # so deleting the rule used to ship green.
-router_text = open(router, encoding="utf-8").read()
+# The routing rules are asserted against the context the router EMITS, not its
+# source: a clause parked in the file but dropped from the emitted array would
+# otherwise ship green, and every Codex session would be routed without it.
+router_text = session_text
 # The ROUTING text is the other Codex surface and restates the whole heartbeat
 # contract on its own, so a rule stated only in the skill still ships an agent
 # that arms a heartbeat allowed to answer from memory.
