@@ -221,6 +221,14 @@ PENDING_DIR="$REPO_HUNTS.pending"
 # ids are alphanumeric; anything else is not an id we need to preserve.
 REVIEW=$(printf '%s' "$REVIEW" | tr -c 'A-Za-z0-9_.-' '_' | sed 's/^[.-]*//')
 PENDING="$PENDING_DIR/${REVIEW:-unknown}"
+# The tombstone a promotion leaves lives in its OWN directory, not beside the
+# record it replaced. Sessions keep the hooks they started with (the plugin
+# cache is one directory per version), and a Stop nudge from before the
+# tombstone existed globs every file in `.pending` and reads an empty one as an
+# unread hunt with no owner — "unknown, so mine" — on every Stop, in every old
+# session on the machine, for the whole TTL (#58). A sibling directory is
+# invisible to every reader that was ever shipped.
+TOMB="$REPO_HUNTS.promoted/${REVIEW:-unknown}"
 
 # PreToolUse: the model OFFERED this diff for hunting.
 # Recorded before anyone gets to allow or refuse the call, because the refusal is
@@ -402,7 +410,7 @@ case "$TOOL" in
     # confirm_findings ended in the "no rev-id record" paragraph below, once per
     # hunt, in every session — the sentence that exists for the rare worktree
     # mix-up, taught as noise by the common case.
-    [ -e "$PENDING.promoted" ] && exit 0
+    [ -e "$TOMB" ] && exit 0
     # `done` is not the gate decision. A run stopped before it reviewed anything
     # — cut short, blind, its protocol holed — ends `done` like any other, with
     # `review_of_record: false` beside it. The review is over, so the pending
@@ -416,7 +424,7 @@ case "$TOOL" in
         # The same tombstone the promote path leaves: the review is equally
         # over, and the confirm that follows must not read its absence as the
         # worktree mix-up and send the agent to re-poll a refused review.
-        : > "$PENDING.promoted" 2>/dev/null
+        mkdir -p "$(dirname "$TOMB")" 2>/dev/null && : > "$TOMB" 2>/dev/null
         say "ohmybug: review $REVIEW finished but is NOT a review of record${GATE_NOTE:+ — $GATE_NOTE}. Nothing was promoted into the merge marker and the merge gate stays shut for this diff: it has not been hunted. Submit it again."
       fi
       exit 0
@@ -431,10 +439,9 @@ case "$TOOL" in
       # older install still reads only that file.
       mkdir -p "$(dirname "$MARKER")" && head -n 1 "$PENDING" > "$MARKER"
       rm -f "$PENDING"
-      # The tombstone the calls after this one read (above). Empty on purpose:
-      # `ohmybug_pending_has` matches whole lines against ids, and a file with
-      # no lines can bless nothing. Aged out with the records it sits beside.
-      : > "$PENDING.promoted" 2>/dev/null
+      # The tombstone the calls after this one read (above). Empty, and in its
+      # own directory (see TOMB): no gate or nudge, of any version, reads it.
+      mkdir -p "$(dirname "$TOMB")" 2>/dev/null && : > "$TOMB" 2>/dev/null
     else
       # No pending: another session owns the submit. Never hash this cwd: in a
       # worktree flow it may be a different checkout and would bless the wrong

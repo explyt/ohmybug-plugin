@@ -269,7 +269,7 @@ M=$(ohmybug_marker_path)
 # directory hangs off the HUNT dir, not off the marker path, so the old
 # three-path incantation left live pending records between sections — and a
 # stale one makes the next section read as "a hunt is running here".
-reset_state() { rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)" "$(ohmybug_hunt_dir).pending"; }
+reset_state() { rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)" "$(ohmybug_hunt_dir).pending" "$(ohmybug_hunt_dir).promoted"; }
 # What a PostToolUse hook may say to the agent in BOTH clients: JSON on stdout,
 # exit 0, `hookSpecificOutput.additionalContext`. Exit 2 with stderr is read by
 # Codex as "replace the tool result with this", so a diagnostic there would
@@ -402,11 +402,12 @@ print(json.dumps({
   rc=$(postx get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}')
   s "done + review_of_record:false promotes nothing" ""; pend "refused run is over" 0
   [ "$rc" = 0 ] || { echo "FAIL stamp: a refused run must not block or replace the result (rc 0), got $rc"; fails=$((fails + 1)); }
-  # The tombstone must be EMPTY: the gate's live-pending lookup greps every
-  # file in that directory, and a tombstone carrying the record's lines would
-  # block the merge with "a hunt is RUNNING" for the whole pending TTL — on a
-  # review the server refused, with an instruction nobody can satisfy.
-  [ -e "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] && [ ! -s "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] \
+  # The tombstone must be EMPTY. Nothing parses it any more – it lives in
+  # `.promoted/`, which no reader walks (#58) – so emptiness is a shape
+  # guarantee: a tombstone that ever carried the record's lines would be one
+  # move away from re-blocking the merge with "a hunt is RUNNING" on a review
+  # the server refused, as it did when it sat inside `.pending`.
+  [ -e "$(ohmybug_hunt_dir).promoted/rev_x" ] && [ ! -s "$(ohmybug_hunt_dir).promoted/rev_x" ] \
     || { echo "FAIL stamp: the refusal tombstone is missing or not empty"; fails=$((fails + 1)); }
   out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
   case "$out" in
@@ -493,7 +494,7 @@ print(json.dumps({
   # paragraph on every single hunt.
   said=$(postxo confirm_findings rev_x '{"review_of_record":true,"billed_usd":10}' content mcp__ohmybug__ | ctx)
   [ -z "$said" ] || { echo "FAIL stamp: confirm after a promotion from this checkout still talks: $said"; fails=$((fails + 1)); }
-  [ -e "$(ohmybug_hunt_dir).pending/rev_x.promoted" ] || { echo "FAIL stamp: no promotion tombstone"; fails=$((fails + 1)); }
+  [ -e "$(ohmybug_hunt_dir).promoted/rev_x" ] || { echo "FAIL stamp: no promotion tombstone"; fails=$((fails + 1)); }
 fi
 
 # --- block -> warn: a refused hunt must not dead-end the merge ---------------
@@ -1646,8 +1647,32 @@ post get_findings 1 rev_nudge content
 n 'a read hunt is silent'                      0 0
 # ...and the tombstone the promotion left behind is not an unread hunt: it is
 # the record of one that was read. Counted, every finished hunt nagged forever.
-[ -e "$(ohmybug_hunt_dir).pending/rev_nudge.promoted" ] || { echo "FAIL nudge: promotion left no tombstone"; fails=$((fails + 1)); }
+[ -e "$(ohmybug_hunt_dir).promoted/rev_nudge" ] || { echo "FAIL nudge: promotion left no tombstone"; fails=$((fails + 1)); }
 n 'a promotion tombstone is silent'            0 0
+# ...and so is the tombstone a 0.68–0.83 stamp left INSIDE `.pending`: sessions
+# keep the hooks they started with, so on one machine an old stamp still writes
+# `<rev>.promoted` beside the record while this nudge reads the directory. The
+# `! -name '*.promoted'` filter is what keeps that file from reading as an
+# unread hunt; this row is its only test – delete the filter and it reddens.
+: > "$(ohmybug_hunt_dir).pending/rev_legacy.promoted"
+n 'a legacy in-place tombstone is silent'      0 0
+rm -f "$(ohmybug_hunt_dir).pending/rev_legacy.promoted"
+# ...and silent for a session still running the hooks it started with. Sessions
+# keep their plugin version until restart; the nudge at 9de61cb (the 0.67–0.69
+# line, three sessions on one machine on 2026-09-07) globs every file in
+# `.pending`, so a tombstone written THERE was "an unread hunt, owner unknown,
+# so mine" on every Stop (#58). Pin: the old script, the new tombstone,
+# nothing said. Writing the tombstone back beside the record reddens this row.
+OLDH=$(mktemp -d)
+for f in pending-nudge.sh diff-id.sh; do
+  git -C "$G" show "9de61cb:plugins/bughunter/hooks/$f" > "$OLDH/$f" 2>/dev/null \
+    || { echo "FAIL nudge: cannot read the 9de61cb hooks from git history"; fails=$((fails + 1)); }
+done
+grep -q "'\*.promoted'" "$OLDH/pending-nudge.sh" && { echo "FAIL nudge: the 9de61cb fixture already knows the tombstone suffix"; fails=$((fails + 1)); }
+oldrc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop','stop_hook_active':False,'cwd':sys.argv[1]}))" "$PWD" \
+  | perl -e 'alarm 10; exec @ARGV' bash "$OLDH/pending-nudge.sh" >/dev/null 2>&1; echo $?)
+[ "$oldrc" = 0 ] || { echo "FAIL nudge: a pre-tombstone nudge (9de61cb) still sees the tombstone as an unread hunt: rc=$oldrc"; fails=$((fails + 1)); }
+rm -rf "$OLDH"
 
 # Six unread hunts, five named: the cap is fine, hiding the remainder is not.
 # The next Stop is suppressed by the anti-loop guard, so this message is the only
