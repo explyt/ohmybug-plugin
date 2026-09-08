@@ -29,7 +29,10 @@ def run(event, payload=None):
 session = run("session")
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
-for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "poll_after_s=30", "timeout_s=225", "every 45s for 225s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
+# The hold cap is the server's, not ours: one long wait_review is cut by the
+# client's MCP timeout, so the heartbeat loops short waits instead — and only
+# for a fast hunt, since a deep one outlives any loop (#988).
+for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "timeout_s=45 up to 5 times", "timed_out:true", "deep hunt call wait_review once", "every 45s for 225s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
 assert "set targetThreadId" not in session_text
@@ -145,8 +148,12 @@ for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: tru
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
-for phrase in ("poll_after_s=30", "timeout_s=225", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
+for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 5 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
+
     assert phrase in codex_bullet, phrase
+# The 225 s hold is gone from every surface: the server caps a hold at 45 s, so
+# asking for more only buys the client-side MCP timeout this change removes.
+assert "timeout_s=225" not in skill, "a 225 s hold is capped by the server and dies on the client"
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})
 review_text = review["hookSpecificOutput"]["additionalContext"]
