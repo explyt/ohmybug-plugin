@@ -371,7 +371,7 @@ heartbeat=180 # seconds; the gate is checked once per iteration (45 s sleep +
               # the server's interval_s, and well under the 300 s prompt-cache TTL
 start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
 fails=0 # consecutive failed polls; 12 retires the watch (9 min if they fail
-        # fast, ~13 min against a hanging endpoint: 45 s sleep + 15 s timeout each)
+        # fast, 12 min against a hanging endpoint: 45 s sleep + 15 s timeout each)
 while :; do
   now=$(date +%s)
   if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
@@ -410,7 +410,7 @@ Every printed line wakes you. A plain `running` line is a heartbeat: answer it
 with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. `watch-retired` → the URL has been dead for 9–13 min or the
+nothing to stop. `watch-retired` → the URL has been dead for 9–12 min or the
 watch is 3 h old: call `get_findings` once; if the review is still running,
 tell the user and arm a fresh monitor. `poll-failed` lands on the heartbeat clock, never per poll: a
 dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
@@ -433,7 +433,7 @@ review was watched. Any form you write must keep:
   the hunt's own budget (≥ 150 min): a watcher that dies before the hunt is a
   watcher that missed the event, and silence from it reads exactly like "still
   running". The two retirements it DOES have — 180 min of age, or 12 consecutive
-  failed polls (9–13 min of a dead URL) — print `watch-retired` first, so the
+  failed polls (9–12 min of a dead URL) — print `watch-retired` first, so the
   session learns the watch ended rather than inferring it from silence. Every
   printed line is a wake; a watch nothing can satisfy must not wake you forever.
 - **Wakes on `files_requested:true`**, not only on `done|failed`.

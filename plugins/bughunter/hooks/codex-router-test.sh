@@ -105,16 +105,19 @@ assert not re.search(r"(?m)^\s*status=", monitor_code), "status is read-only in 
 # green build in front of it. CI installs zsh for this step.
 zsh = shutil.which("zsh")
 assert zsh, "zsh is required: the loop must be executed under the shell Claude Code runs it in"
-with tempfile.TemporaryDirectory() as d:
-    open(f"{d}/curl", "w").write('#!/bin/sh\nprintf \'{"status":"done"}\'\n'); os.chmod(f"{d}/curl", 0o755)
-    open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
-    # monitor_code starts with the fence's info string ("bash"); executed, that
-    # line is a real bash reading the suite's stdin. Strip it, and give the loop
-    # no stdin at all.
-    loop_src = monitor_code.split("\n", 1)[1]
-    assert not loop_src.startswith("bash"), "fence info string leaked into the executed loop"
-    r = subprocess.run([zsh, "-c", loop_src.replace("<status_url>", "http://x/")], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
-assert r.returncode == 0 and r.stdout == "bughunt · fast · done\n", (r.returncode, r.stdout, r.stderr)
+# monitor_code starts with the fence's info string ("bash"); executed, that
+# line is a real bash reading the suite's stdin. Strip it, and give the loop
+# no stdin at all. Every exit path is driven: `done`, `failed` (dropping the
+# `failed` arm makes a failed review heartbeat `running` for 3 h) and
+# `needs-files`.
+loop_src = monitor_code.split("\n", 1)[1]
+assert not loop_src.startswith("bash"), "fence info string leaked into the executed loop"
+for body, want in (('{"status":"done"}', "done"), ('{"status":"failed"}', "failed"), ('{"status":"running","files_requested":true}', "needs-files")):
+    with tempfile.TemporaryDirectory() as d:
+        open(f"{d}/curl", "w").write("#!/bin/sh\nprintf '%s' '" + body + "'\n"); os.chmod(f"{d}/curl", 0o755)
+        open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
+        r = subprocess.run([zsh, "-c", loop_src.replace("<status_url>", "http://x/")], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
+    assert r.returncode == 0 and r.stdout == f"bughunt · fast · {want}\n", (want, r.returncode, r.stdout, r.stderr)
 # The properties list is normative for any rewrite of the loop: property 4
 # must describe the shipped loop (clock-gated poll-failed, retirement after 12
 # failures), not the pre-retirement one that printed per failure and never ended.
@@ -122,7 +125,7 @@ props = skill.split("Any form you write must keep:", 1)[1].split("\n\nNo backgro
 assert "- **A poll failure is seen, not swallowed.**" in props
 assert "print `poll-failed` on the heartbeat clock" in props and "only 12 consecutive failures end the\n  watch" in props
 assert "does not end the watch" not in props and "print the failure, and keep polling" not in props
-assert "~9 min" not in skill, "12 failed polls take 9-13 min, not ~9"
+assert "~9 min" not in skill and "13 min" not in skill, "12 failed polls take 9-12 min: 12 x (45 + 15) s"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
 for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
