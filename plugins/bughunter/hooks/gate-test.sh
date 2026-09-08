@@ -52,6 +52,8 @@ mkdir -p "$HOME/ghshim"
 cat > "$HOME/ghshim/gh" <<'GHSHIM'
 #!/bin/sh
 printf '%s\n' "$*" > "$HOME/ghshim/last-args"
+# A hanging gh is one process holding the pipe, as the real binary would be.
+[ -n "${OHMYBUG_TEST_GH_SLEEP:-}" ] && exec sleep "$OHMYBUG_TEST_GH_SLEEP"
 [ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1
 case " $* " in
   " pr view "*" --json headRefOid -q .headRefOid ") printf '%s\n' "$OHMYBUG_TEST_GH_HEAD" ;;
@@ -1318,6 +1320,24 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   case "$out" in
     *"gh pr view 5: head not resolved"*"rc=2") ;;
     *) printf 'FAIL refusal must say when the PR head could not be resolved: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # ...and an answer that is not a sha (a branch name, a JSON object) is no
+  # head either: it must not reach the record lookup or the refusal as one.
+  for BAD in "feature/x" '{"headRefOid":"abc"}'; do
+    out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$BAD bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+    case "$out" in
+      *"$BAD"*) printf 'FAIL a non-sha gh answer was taken as the PR head: %s\n' "$out"; fails=$((fails + 1)) ;;
+      *"gh pr view 5: head not resolved"*"rc=2") ;;
+      *) printf 'FAIL a non-sha gh answer must read as unresolved: %s\n' "$out"; fails=$((fails + 1)) ;;
+    esac
+  done
+  # A gh that hangs (blackholed proxy, unreachable host) must not hang the
+  # hook: the lookup is bounded and the gate still answers. The row's own cap
+  # is longer than the lookup bound and shorter than the shim's sleep.
+  out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$BASESHA OHMYBUG_TEST_GH_SLEEP=40 perl -e 'alarm 25; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"gh pr view 5: head not resolved"*"rc=2") ;;
+    *) printf 'FAIL a hanging gh must be cut off by the lookup bound: %s\n' "$out"; fails=$((fails + 1)) ;;
   esac
   # A running hunt on the PR head, with no local tree at that commit, is
   # "RUNNING", not "never hunted".
