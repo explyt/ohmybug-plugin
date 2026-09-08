@@ -1297,8 +1297,8 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   # session stands in the primary checkout (main, with its own uncommitted
   # edits), the branch being merged lives in a sibling worktree, and the gate
   # judged main's tree — no hunt there, so "not hunted", while the hunt sat on
-  # the PR head. The gate now asks gh for that head and judges the worktree
-  # standing at it. Main is made dirty first: clean, the gate stands down on
+  # the PR head. The gate now asks gh for that head and lets the worktree
+  # standing at it vouch for the merge. Main is made dirty first: clean, the gate stands down on
   # "no changes" and this row would pass for the wrong reason.
   BASESHA=$(git -C "$WREPO" rev-parse HEAD)
   printf 'unhunted edit in the primary checkout\n' >> "$WREPO/b.ts"
@@ -1671,6 +1671,14 @@ if git -C "$R2" worktree add -q -b feature "$R2.wt" HEAD 2>/dev/null; then
   printf 'parked edits\n' >> "$R2/b.ts"
   rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 0 ] || { printf 'FAIL two trees at the PR head: the dirty primary was judged instead of the clean worktree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # A doc edit in the hunted worktree after its hunt moves its diff id but not
+  # its signature; the sig: key of a tree at the PR head is what keeps a typo
+  # fix from costing a paid re-hunt when the merge runs from the dirty primary.
+  printf 'typo fixed\n' >> "$R2.wt/README.md"
+  git -C "$R2.wt" add -N README.md 2>/dev/null  # untracked files are invisible to git diff
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL a doc edit in the hunted worktree at the PR head demanded a re-hunt from the primary (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git -C "$R2.wt" reset -q -- README.md 2>/dev/null; rm -f "$R2.wt/README.md"
   # The mirror image: the session stands in the DIRTY tree, and that dirty
   # diff – commits plus uncommitted edits – is what was hunted, while the clean
   # sibling at the same head was never hunted. "Prefer a clean tree" alone

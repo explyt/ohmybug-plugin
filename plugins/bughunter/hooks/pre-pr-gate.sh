@@ -376,15 +376,18 @@ esac
 
 GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
 
-# ...and judge the PULL REQUEST the command names, not whatever tree the session
-# happens to stand in. `gh pr merge 59` from the primary checkout on main merges
-# a branch that lives in a sibling worktree; judging main's tree there is how a
-# hunted PR read as unhunted (five times in 48 hours on one worktree-disciplined
-# repository). Ask GitHub for the head once; if a local worktree stands at that
-# commit, every check below runs against IT. Without one, the commit itself is
-# still an identity a no-payload hunt recorded (`ref:<sha>`, checked below).
-# A failed lookup (offline, no gh, not a GitHub remote) changes nothing except
-# the refusal text, which then says the head could not be resolved.
+# ...and ALSO judge the PULL REQUEST the command names. `gh pr merge 59` from the
+# primary checkout on main merges a branch that lives in a sibling worktree;
+# judging only main's tree there is how a hunted PR read as unhunted (five
+# times in 48 hours on one worktree-disciplined repository). Ask GitHub for the
+# head once; every local tree standing at that commit then ADDS what it knows
+# (its hunt allows, its running review or refused offer is carried into the
+# branches below), and the commit itself is an identity a no-payload hunt
+# recorded (`ref:<sha>`). The session's own tree is still judged exactly as
+# before – never replaced: the revision that swapped trees lost the session's
+# hunt, its running review and its refused offer. A failed lookup (offline, no
+# gh, not a GitHub remote) changes nothing except the refusal text, which then
+# says the head could not be resolved.
 PR_HEAD="" PR_SRC="" PR_TREES=""
 if [ -n "$PR_SEL" ]; then
   PR_SRC="gh pr view $PR_SEL"
