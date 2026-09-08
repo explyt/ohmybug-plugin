@@ -121,8 +121,10 @@ This is a required client action, not a reminder to do later:
   No `Monitor` tool in this harness? Fall back to `CronCreate` every 4 minutes
   off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
   heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
-  line for what THAT read answered; if it answered nothing, print `bughunt ·
-  <mode> · poll-failed`, never the previous status; on `awaiting_client_files`/`files_requested` in that body (it flags a
+  line for what THAT read answered; if it answered nothing, call `get_findings`
+  once and print what that answered, and only if THAT fails too print `bughunt ·
+  <mode> · poll-failed` and count the wake as a poll failure — never the
+  previous status; on `awaiting_client_files`/`files_requested` in that body (it flags a
   request there, never in its status word) call `get_findings`, serve the files
   and KEEP this job;
   on done/failed call `get_findings` and `CronDelete` this job; after 3
