@@ -52,7 +52,13 @@ This is a required client action, not a reminder to do later:
 - **Codex:** immediately read the submit response's `monitor` object, then call
   `automation_update` with `destination=thread` (not `targetThreadId`; destination
   binds the current thread), using that exact `review_id`, `interval_s`, `wake_on`,
-  and `stop_on`. Update an existing heartbeat for the same review instead of
+  `stop_on` and `wake_rule` — copy `wake_rule` into the prompt word for word,
+  because it is the sentence that makes a wake a reading rather than a
+  recollection: every wake MUST call `wait_review` (or `get_findings`) and print
+  the `status` field of THAT response; a wake with no tool response prints
+  `bughunt · <mode> · poll-failed`, never the previous status. A heartbeat that
+  answers from memory reported `running` for fourteen minutes after the hunt was
+  done, and the merge waited on it. Update an existing heartbeat for the same review instead of
   creating a duplicate, and retire/replace any heartbeat pointing at an older
   review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a
   loop, up to 3 times inside one wake. Budget an iteration the way the Claude
@@ -114,6 +120,9 @@ This is a required client action, not a reminder to do later:
   the next – never leave one pointing at an older review id. Only
   as the last resort keep a `run_in_background` until-loop – and say so:
   "monitoring armed without heartbeat – the cache will cool".
+
+The same rule holds when you wait by hand instead of by heartbeat: a status you
+print is a status a tool just answered.
 
 If the runtime cannot create its monitor, wait in the current turn:
 `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a loop until the

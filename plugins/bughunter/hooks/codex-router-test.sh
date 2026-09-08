@@ -148,6 +148,17 @@ for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: tru
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
+# #1003: a heartbeat printed `running` on three wakes after the hunt was done,
+# with no tool call in the thread — the cadence fields say when to wake, and
+# nothing said what a wake IS. The server ships that sentence as `wake_rule`;
+# the bullet must carry it verbatim, or the prompt the agent writes into
+# automation_update is free to omit it.
+WAKE_RULE = ("every wake MUST call `wait_review` (or `get_findings`) and print\n  the `status` field of THAT response; a wake with no tool response prints\n  `bughunt · <mode> · poll-failed`, never the previous status")
+assert WAKE_RULE in codex_bullet, "the heartbeat prompt must carry the server's wake_rule word for word"
+assert "`wake_rule` — copy `wake_rule` into the prompt word for word" in codex_bullet
+# ...and the hand-wait path prints on the same terms: it is the path with no
+# heartbeat, i.e. the one where nothing else would catch a remembered status.
+assert "a status you\nprint is a status a tool just answered" in skill
 for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  180 seconds", "needs_files", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
 
     assert phrase in codex_bullet, phrase
