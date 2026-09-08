@@ -159,7 +159,7 @@ assert "`wake_rule` — copy `wake_rule` into the prompt word for word" in codex
 # ...and the hand-wait path prints on the same terms: it is the path with no
 # heartbeat, i.e. the one where nothing else would catch a remembered status.
 assert "a status you\nprint is a status a tool just answered" in skill
-for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  180 seconds", "needs_files", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
+for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  180 seconds", "needs_files", "older than 180 minutes", "watch-retired`, then delete it"):
 
     assert phrase in codex_bullet, phrase
 # The 225 s hold is gone from BOTH surfaces (the comment used to promise that
@@ -175,9 +175,17 @@ router_text = open(router, encoding="utf-8").read()
 # The ROUTING text is the other Codex surface and restates the whole heartbeat
 # contract on its own, so a rule stated only in the skill still ships an agent
 # that arms a heartbeat allowed to answer from memory.
-assert "wake_rule" in router_text, "ROUTING must name wake_rule among the fields to copy"
-assert "reports the status it just read" in router_text, "ROUTING must define a wake as a reading, not a recollection"
-assert "poll-failed, never the previous status" in router_text, "ROUTING must say what a wake with no answer prints"
+ROUTER_WAKE_RULE = ("wake_rule — copy wake_rule into the prompt word for word: every wake reports the status it just read "
+                    "(from wait_review or get_findings on a fast hunt, from the status_url read on a deep one), "
+                    "and a wake with no answer prints bughunt · <mode> · poll-failed, never the previous status")
+assert ROUTER_WAKE_RULE in router_text, "ROUTING must carry the whole wake rule, not a fragment of it"
+# ...and the retirement counter must count wakes that read nothing, whatever the
+# wake reads: a deep wake reads status_url, so a counter keyed to wait_review
+# alone can never fire there and only the 180-minute cap is left.
+assert "3 consecutive wakes that could not read\n  a status at all" in codex_bullet, "the skill must retire on wakes that read nothing, not on failed wait_review calls"
+assert "3 consecutive wakes that could not read a status at all" in router_text, "ROUTING must carry the same retirement counter"
+assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
+assert "status_url read, whichever that wake uses" in router_text
 for text in (skill, router_text):
     assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"
     assert "client MCP timeout" not in text and "client-side timeout" not in text, "the clamp answers; it does not kill the socket"

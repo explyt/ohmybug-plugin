@@ -81,8 +81,9 @@ This is a required client action, not a reminder to do later:
   then let the next heartbeat take over.
   On `needs_files`, send files first; on `done` or
   `failed`, process the result and delete the heartbeat. Retire it too when
-  it is older than 180 minutes or after 3 consecutive wakes in which
-  `wait_review` could not reach the server: print `bughunt · <mode> ·
+  it is older than 180 minutes or after 3 consecutive wakes that could not read
+  a status at all — a failed `wait_review`, `get_findings` or `status_url` read,
+  whichever that wake uses: print `bughunt · <mode> ·
   watch-retired`, then delete it – a heartbeat nothing can satisfy must not
   wake the thread forever. Those 60 seconds are
   deliberate handover slack, not spare waiting: finish the status line and the
