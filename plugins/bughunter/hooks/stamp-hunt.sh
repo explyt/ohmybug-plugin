@@ -455,10 +455,11 @@ case "$TOOL" in
       # told (`say`; the call has already run, so nothing is blocked).
       # WHAT WAS NOT FOUND, and no conclusion about the gate. The old sentence
       # ended "the merge gate will not see this hunt", which does not follow from
-      # its own premise: the gate has four ways to recognise a hunted diff — the
+      # its own premise: the gate has five ways to recognise a hunted diff — the
       # diff id, `sig:<id>` (prose-only changes since the hunt), `ref:<sha>` on a
-      # clean tree, and a live pending record — and the absence of a rev-id record
-      # in THIS cwd rules out none of them.
+      # clean tree, `ref:<sha>` of the pull request the merge command names, and
+      # a live pending record — and the absence of a rev-id record in THIS cwd
+      # rules out none of them.
       #
       # The cost of that inference was measured on a client wave: three sessions
       # read it as a statement about the gate and reported their hunts uncounted

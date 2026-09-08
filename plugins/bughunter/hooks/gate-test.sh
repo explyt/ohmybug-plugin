@@ -1311,7 +1311,7 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   # sent operators to SKIP_BUGHUNT five times.
   out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$BASESHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
   case "$out" in
-    *"PR head $BASESHA (gh pr view 5)"*"rc=2") ;;
+    *"PR head $BASESHA (gh pr view 5"*"rc=2") ;;
     *) printf 'FAIL refusal must name the PR head and where it came from: %s\n' "$out"; fails=$((fails + 1)) ;;
   esac
   out=$(mk "$V" "$WREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
@@ -1362,6 +1362,20 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   FL="gh pr"; FL="$FL merge --repo=org/other 5"
   out=$(ghargs "$FL")
   case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL --repo=value was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # gh reads GH_REPO too, and the command's own prefix is where it would be set;
+  # a lookup that ignored it would ask about the LOCAL repository's PR 5 while
+  # gh merges another one. An explicit -R still wins, as in gh.
+  FL="GH_REPO=org/other gh pr"; FL="$FL merge 5"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL a GH_REPO= prefix was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  FL="GH_REPO=org/other gh pr"; FL="$FL merge 5 -R org/third"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/third "*) ;; *) printf 'FAIL -R must win over GH_REPO: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # ...and GH_HOST names another GitHub the lookup cannot follow: resolve
+  # nothing (and say so) rather than the wrong PR.
+  FL="GH_HOST=ghe.example gh pr"; FL="$FL merge 5"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"rc=2 args=") ;; *) printf 'FAIL a GH_HOST prefix must resolve no head: %s\n' "$out"; fails=$((fails + 1)) ;; esac
   git -C "$WREPO" checkout -q -- b.ts 2>/dev/null
 else
   printf 'FAIL could not create a worktree for the cross-checkout ref row\n'; fails=$((fails + 1))
@@ -1693,6 +1707,53 @@ if git -C "$R2" worktree add -q -b feature "$R2.wt" HEAD 2>/dev/null; then
   case "$out" in
     *"RUNNING"*"rc=2") ;;
     *) printf 'FAIL a running hunt on the worktree at the PR head must read as RUNNING from the primary: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # The session tree keeps its own evidence when it is NOT at the PR head: the
+  # worktree carries one more, unpushed commit on top of the PR head, the
+  # primary is parked at the head with unrelated edits, and the PR head itself
+  # was hunted nowhere. Judging the primary INSTEAD of the session tree lost a
+  # hunted diff, a running review and a refused offer – each came back as a
+  # hard block.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  git -C "$R2.wt" add c.ts 2>/dev/null
+  git -C "$R2.wt" -c user.email=t@t -c user.name=t commit -qm 'unpushed' 2>/dev/null
+  git -C "$R2" checkout -q --detach "$SHA2" 2>/dev/null
+  printf 'parked again\n' >> "$R2/b.ts"
+  printf 'and one more edit\n' >> "$R2.wt/a.ts"
+  WTPAST=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTPAST" >/dev/null 2>&1
+  out=$(mk "$V" "$R2.wt" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL the session tree past the PR head lost its running review: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  wpost get_findings 1 "$R2.wt" "$WTPAST" >/dev/null 2>&1
+  rc=$(mk "$V" "$R2.wt" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL the session tree past the PR head lost its own hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # Two trees at the PR head, neither hunted, the session in the second one
+  # with a running review of its diff: RUNNING, from the tree the session is in.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  git -C "$R2.wt" checkout -q -- a.ts 2>/dev/null
+  git -C "$R2.wt" reset -q --hard "$SHA2" 2>/dev/null
+  printf 'in review\n' >> "$R2.wt/c.ts"
+  WTAT=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTAT" >/dev/null 2>&1
+  out=$(mk "$V" "$R2.wt" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL with two trees at the PR head the session tree must still report its own running review: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # A refused offer of the worktree's diff (the environment would not run the
+  # hunt tools) is a dead end from the primary too: warn through, not block.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+    'tool_input':{'diff':sys.argv[1]},
+    'cwd':sys.argv[2]}))" "$WTAT" "$R2.wt" | bash "$G/stamp-hunt.sh"
+  out=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>/dev/null; echo "rc=$?")
+  case "$out" in
+    *"no findings came back"*"rc=0") ;;
+    *) printf 'FAIL a refused offer of the worktree diff did not warn the merge through from the primary: %s\n' "$out"; fails=$((fails + 1)) ;;
   esac
   git -C "$R2" worktree remove --force "$R2.wt" 2>/dev/null
 else

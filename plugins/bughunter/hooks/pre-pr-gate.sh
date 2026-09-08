@@ -194,6 +194,11 @@ def strip_env(seg):
                 break
             if name == "SKIP_BUGHUNT" and word.split("=", 1)[1] == "1":
                 skip = True
+            # gh reads these too: `GH_REPO=org/other gh pr merge 5` merges another
+            # PR of another repository, and a head lookup that ignored the prefix would ask
+            # about the local one. Kept on the segment for the walker below.
+            if name in ("GH_REPO", "GH_HOST"):
+                gh_env[name] = word.split("=", 1)[1]
             i += 1
             continue
         if word.split("/")[-1] in WRAPPERS:
@@ -254,10 +259,12 @@ verdict = "none"
 VALUE_FLAGS = {"-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"}
 SHORT_VALUE = "bFtAR"  # the one-letter spellings of the value-taking flags above
 pr_sel, pr_repo = "", ""
+gh_env = {}
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
         verdict = "unparsed"
         continue
+    gh_env = {}
     words, skip = strip_env(seg)
     head = tuple(words[:3])
     if any(head[: len(m)] == m for m in MERGERS):
@@ -305,6 +312,13 @@ for seg in segments(cmd):
                     if not pr_sel:
                         pr_sel = w
                     i += 1
+                # An explicit -R wins over the environment, as it does in gh. A
+                # GH_HOST prefix names another GitHub instance the lookup cannot
+                # follow from here: resolve nothing rather than the wrong PR.
+                if not pr_repo and gh_env.get("GH_REPO"):
+                    pr_repo = gh_env["GH_REPO"]
+                if gh_env.get("GH_HOST"):
+                    pr_sel = ""
             break
 # One field per line, same convention as the recorder. Not \x01-separated: the
 # bash that ships with macOS is 3.2 and does not split IFS on that byte, so the
@@ -416,38 +430,39 @@ fi
 # merge – a payload hunt is keyed on the diff of the tree it was sent from, so a
 # dirty session tree whose edits were hunted counts as much as a clean sibling,
 # and a clean sibling as much as a dirty primary with unrelated edits (each was
-# a false block on its own). When none is hunted the gate still needs one tree
-# to speak about – its pending offer, its refused attempt, the refusal text –
-# and that is the tree the session stands in when it is at the head, else the
-# first git lists.
-tree_hunted() ( # dir -> 0 when that tree's own keys say hunted
+# a false block on its own). The session's own tree is judged below exactly as
+# before – never swapped for a sibling, because that swap dropped its hunt, its
+# running review and its refused offer on the floor – and the trees at the PR
+# head only ADD what they know: a hunt allows here, a running review or a
+# refused offer is carried into the pending and attempt branches below.
+tree_keys() ( # dir -> this tree's hunt keys, one per line (diff id, sig:, ref: when clean)
   cd "$1" 2>/dev/null || return 1
   local c sg h
   c=$(ohmybug_diff_id 2>/dev/null) || return 1
-  [ -n "$c" ] && ohmybug_hunted "$c" && return 0
-  sg=$(ohmybug_sig_id 2>/dev/null) && [ -n "$sg" ] && ohmybug_hunted "sig:$sg" && return 0
+  [ -n "$c" ] && printf '%s\n' "$c"
+  sg=$(ohmybug_sig_id 2>/dev/null) && [ -n "$sg" ] && printf 'sig:%s\n' "$sg"
   h=$(git rev-parse HEAD 2>/dev/null)
-  [ -n "$h" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && ohmybug_hunted "ref:$h" && return 0
-  return 1
+  [ -n "$h" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && printf 'ref:%s\n' "$h"
+  return 0
 )
+PR_PENDING="" PR_ATTEMPT=""
 if [ -n "$PR_TREES" ]; then
-  HERE=$(pwd -P); PICK=""
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
-    if tree_hunted "$wt"; then
-      echo "OhMyBug: PR head $PR_HEAD ($PR_SRC) was hunted in the tree at ${wt/#$HOME/\~}. Allowing the merge." >&2
-      exit 0
-    fi
-    [ "$wt" = "$HERE" ] && PICK=$HERE
-    [ -n "$PICK" ] || PICK=$wt
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      if ohmybug_hunted "$k"; then
+        echo "OhMyBug: PR head $PR_HEAD ($PR_SRC) was hunted in the tree at ${wt/#$HOME/\~}. Allowing the merge." >&2
+        exit 0
+      fi
+      [ -n "$PR_PENDING" ] || ! ohmybug_pending_has "$k" || PR_PENDING=$k
+      [ -n "$PR_ATTEMPT" ] || ! ohmybug_attempted "$k" || PR_ATTEMPT=$k
+    done <<EOF_K
+$(tree_keys "$wt")
+EOF_K
   done <<EOF_WT
 $PR_TREES
 EOF_WT
-  if [ -n "$PICK" ] && [ "$PICK" != "$HERE" ] && cd "$PICK" 2>/dev/null; then
-    PR_SRC="$PR_SRC; judged the worktree at that commit"
-    GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null)
-    LEGACY_MARKER="$GITDIR/ohmybug/last-review"
-  fi
 fi
 MARKER=$(ohmybug_marker_path) || exit 0
 # Cannot tell what this diff is => cannot claim it went unhunted. A gate that
@@ -541,7 +556,8 @@ done
 # review whose findings have not arrived. Merging now is merging ahead of them.
 if ohmybug_pending_has "$CURRENT" ||
    { [ -n "$HEAD_SHA" ] && ohmybug_pending_has "ref:$HEAD_SHA"; } ||
-   { [ -n "$PR_HEAD" ] && ohmybug_pending_has "ref:$PR_HEAD"; }; then
+   { [ -n "$PR_HEAD" ] && ohmybug_pending_has "ref:$PR_HEAD"; } ||
+   [ -n "$PR_PENDING" ]; then
   echo "OhMyBug: a hunt is RUNNING for this diff and has not returned yet. Poll get_findings until it says done, then merge." >&2
   echo "OhMyBug (operator): if that review died or was abandoned, the record ages out on its own; to merge before then, run the merge yourself with SKIP_BUGHUNT=1 in front of it." >&2
   exit 2
@@ -570,6 +586,8 @@ elif [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] &&
 # stands in, and the two branches above never see it from a dirty primary.
 elif [ -n "$PR_HEAD" ] && ohmybug_attempted "ref:$PR_HEAD"; then
   ATTEMPT="ref:$PR_HEAD"
+elif [ -n "$PR_ATTEMPT" ]; then
+  ATTEMPT=$PR_ATTEMPT
 fi
 # ...and only where the hunt could not have run anyway.
 #
@@ -608,5 +626,5 @@ WHERE=$(ohmybug_hunt_dir 2>/dev/null || echo '(no repo key)')
 # `~`, not the absolute path: the home directory usually carries the operator's
 # name, and this line goes into a transcript.
 WHERE=${WHERE/#$HOME/\~}
-echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown} (the tree at ${PWD/#$HOME/\~})${PR_SRC:+, PR head ${PR_HEAD:-unknown} ($PR_SRC)}, looked in $WHERE." >&2
+echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown} (the tree at ${PWD/#$HOME/\~})${PR_SRC:+, PR head ${PR_HEAD:-unknown} ($PR_SRC${PR_TREES:+; also judged the local trees at that commit})}, looked in $WHERE." >&2
 exit 2
