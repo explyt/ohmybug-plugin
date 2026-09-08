@@ -184,6 +184,16 @@ assert ROUTER_WAKE_RULE in router_text, "ROUTING must carry the whole wake rule,
 # alone can never fire there and only the 180-minute cap is left.
 assert "3 consecutive wakes that could not read\n  a status at all" in codex_bullet, "the skill must retire on wakes that read nothing, not on failed wait_review calls"
 assert "3 consecutive wakes that could not read a status at all" in router_text, "ROUTING must carry the same retirement counter"
+# ...and the age cap beside it: a cap shorter than the deep budget drops a live
+# hunt, and the counter alone lets a heartbeat nothing can satisfy run forever.
+assert "Retire a heartbeat older than 180 minutes" in router_text, "ROUTING must carry the 180-minute age cap"
+# The deep wake reads status_url, so the agent must be told to copy the URL into
+# the heartbeat and to poll it once per wake — or the rule names a read it was
+# never handed, on the longest hunt there is.
+assert "status_url, interval_s, wake_on, stop_on, and wake_rule" in router_text
+assert "each of its wakes polling status_url once and reporting that" in router_text
+assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
+assert "each of its wakes polls `status_url` once and\n  reports that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
 assert "status_url read, whichever that wake uses" in router_text
 for text in (skill, router_text):

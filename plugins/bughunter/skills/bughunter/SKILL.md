@@ -51,8 +51,8 @@ This is a required client action, not a reminder to do later:
 
 - **Codex:** immediately read the submit response's `monitor` object, then call
   `automation_update` with `destination=thread` (not `targetThreadId`; destination
-  binds the current thread), using that exact `review_id`, `interval_s`, `wake_on`,
-  `stop_on` and `wake_rule` — copy `wake_rule` into the prompt word for word,
+  binds the current thread), using that exact `review_id`, `status_url`, `interval_s`,
+  `wake_on`, `stop_on` and `wake_rule` — copy `wake_rule` into the prompt word for word,
   because it is the sentence that makes a wake a reading rather than a
   recollection: every wake reports the status it just read — from `wait_review`
   or `get_findings` on a fast hunt, from the `status_url` read on a deep one —
@@ -75,7 +75,8 @@ This is a required client action, not a reminder to do later:
   rule below. Loop instead, and stop the loop the moment the answer is `done`,
   `failed` or `needs_files`. That loop is for a FAST hunt: a deep hunt runs about
   an hour, so call `wait_review` once, read its `next_step`, and let the
-  heartbeat carry the waiting. If `wait_review` is
+  heartbeat carry the waiting — each of its wakes polls `status_url` once and
+  reports that, which is the read `wake_rule` names for a deep hunt. If `wait_review` is
   unavailable, loop `get_findings` every 45 seconds for at most
   180 seconds inside this wake — the same three iterations, the same 60 s left —
   then let the next heartbeat take over.
