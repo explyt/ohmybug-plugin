@@ -245,6 +245,14 @@ looks_merge = "1" if re.search(r"\b(?:pr|mr)[ \t]+merge\b", bare) else "0"
 # hand the model the operator hatch.
 opts_out = "1" if re.search(r"(?:\A|[;&|]\s*)SKIP_BUGHUNT=1[ \t]", code_only(cmd)) else "0"
 verdict = "none"
+# WHICH pull request the command merges, when it says: `gh pr merge 59`, a URL,
+# or a branch. The gate used to judge the tree at the session cwd, and in a
+# worktree flow that cwd is often the primary checkout on main while the branch
+# being merged lives next door — five false blocks in 48 hours on one repo, each
+# read as "no hunt" while the hunt sat on the PR head. Flags that take a value
+# are skipped so `--subject foo` does not read as PR "foo".
+VALUE_FLAGS = {"-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"}
+pr_sel, pr_repo = "", ""
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
         verdict = "unparsed"
@@ -256,6 +264,23 @@ for seg in segments(cmd):
         # a variable someone happened to set.
         verdict = "skip" if skip else "merge"
         if verdict == "merge":
+            if words[0] == "gh":
+                rest = words[3:]
+                i = 0
+                while i < len(rest):
+                    w = rest[i]
+                    if w in VALUE_FLAGS:
+                        if w in ("-R", "--repo") and i + 1 < len(rest):
+                            pr_repo = rest[i + 1]
+                        i += 2
+                        continue
+                    if w.startswith("-"):
+                        if "=" in w and w.split("=", 1)[0] in ("-R", "--repo"):
+                            pr_repo = w.split("=", 1)[1]
+                        i += 1
+                        continue
+                    pr_sel = w
+                    break
             break
 # One field per line, same convention as the recorder. Not \x01-separated: the
 # bash that ships with macOS is 3.2 and does not split IFS on that byte, so the
@@ -265,7 +290,8 @@ for seg in segments(cmd):
 # verdict into a field nobody reads — the gate then stands down in silence. The
 # recorder learned this in the same change; this protocol is the same shape.
 cwd_line = (data.get("cwd") or "").replace("\n", " ").replace("\r", " ")
-print(cwd_line, verdict, looks_merge, opts_out, sep="\n")
+one = lambda v: v.replace("\n", " ").replace("\r", " ")
+print(cwd_line, verdict, looks_merge, opts_out, one(pr_sel), one(pr_repo), sep="\n")
 ' 2>/dev/null)
 
 if [ -z "$DECIDE" ]; then
@@ -288,6 +314,8 @@ SESSION_CWD=$(printf '%s' "$DECIDE" | sed -n 1p)
 VERDICT=$(printf '%s' "$DECIDE" | sed -n 2p)
 LOOKS_MERGE=$(printf '%s' "$DECIDE" | sed -n 3p)
 OPTS_OUT=$(printf '%s' "$DECIDE" | sed -n 4p)
+PR_SEL=$(printf '%s' "$DECIDE" | sed -n 5p)
+PR_REPO=$(printf '%s' "$DECIDE" | sed -n 6p)
 
 case "$VERDICT" in
   merge) ;;
@@ -309,6 +337,36 @@ esac
 [ -n "$SESSION_CWD" ] && [ -d "$SESSION_CWD" ] && cd "$SESSION_CWD" 2>/dev/null
 
 GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+
+# ...and judge the PULL REQUEST the command names, not whatever tree the session
+# happens to stand in. `gh pr merge 59` from the primary checkout on main merges
+# a branch that lives in a sibling worktree; judging main's tree there is how a
+# hunted PR read as unhunted (five times in 48 hours on one worktree-disciplined
+# repository). Ask GitHub for the head once; if a local worktree stands at that
+# commit, every check below runs against IT. Without one, the commit itself is
+# still an identity a no-payload hunt recorded (`ref:<sha>`, checked below).
+# A failed lookup (offline, no gh, not a GitHub remote) changes nothing except
+# the refusal text, which then says the head could not be resolved.
+PR_HEAD="" PR_SRC=""
+if [ -n "$PR_SEL" ]; then
+  PR_SRC="gh pr view $PR_SEL"
+  if [ -n "$PR_REPO" ]; then
+    PR_HEAD=$(GH_PROMPT_DISABLED=1 perl -e 'alarm 15; exec @ARGV' gh pr view "$PR_SEL" -R "$PR_REPO" --json headRefOid -q .headRefOid 2>/dev/null)
+  else
+    PR_HEAD=$(GH_PROMPT_DISABLED=1 perl -e 'alarm 15; exec @ARGV' gh pr view "$PR_SEL" --json headRefOid -q .headRefOid 2>/dev/null)
+  fi
+  case "$PR_HEAD" in
+    *[!0-9a-f]*|"") PR_HEAD="" PR_SRC="$PR_SRC: head not resolved" ;;
+  esac
+  if [ -n "$PR_HEAD" ]; then
+    PR_WT=$(git worktree list --porcelain 2>/dev/null | awk -v h="HEAD $PR_HEAD" '
+      /^worktree /{wt=substr($0,10)} $0==h{print wt; exit}')
+    if [ -n "$PR_WT" ] && [ -d "$PR_WT" ] && [ "$PR_WT" != "$(pwd -P)" ]; then
+      cd "$PR_WT" 2>/dev/null && PR_SRC="$PR_SRC; judged the worktree at that commit" \
+        && GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    fi
+  fi
+fi
 LEGACY_MARKER="$GITDIR/ohmybug/last-review"
 
 # Is the thing that RECORDS hunts even installed? Markers are written by a
@@ -407,6 +465,13 @@ HEAD_SHA=$(git rev-parse HEAD 2>/dev/null)
 if [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && ohmybug_hunted "ref:$HEAD_SHA"; then
   exit 0
 fi
+# The PR head is the reviewed commit whatever tree this process stands in: a
+# no-payload hunt of repo@<head> recorded exactly that key, and the tree here
+# is not the one being merged, so its cleanliness is beside the point.
+if [ -n "$PR_HEAD" ] && ohmybug_hunted "ref:$PR_HEAD"; then
+  echo "OhMyBug: PR head $PR_HEAD ($PR_SRC) was hunted. Allowing the merge." >&2
+  exit 0
+fi
 
 for M in "$MARKER" "$LEGACY_MARKER"; do
   if [ -f "$M" ] && [ "$(cat "$M")" = "$CURRENT" ]; then
@@ -417,7 +482,8 @@ done
 # A submit that WAS allowed and is still running is not a refusal — it is a
 # review whose findings have not arrived. Merging now is merging ahead of them.
 if ohmybug_pending_has "$CURRENT" ||
-   { [ -n "$HEAD_SHA" ] && ohmybug_pending_has "ref:$HEAD_SHA"; }; then
+   { [ -n "$HEAD_SHA" ] && ohmybug_pending_has "ref:$HEAD_SHA"; } ||
+   { [ -n "$PR_HEAD" ] && ohmybug_pending_has "ref:$PR_HEAD"; }; then
   echo "OhMyBug: a hunt is RUNNING for this diff and has not returned yet. Poll get_findings until it says done, then merge." >&2
   echo "OhMyBug (operator): if that review died or was abandoned, the record ages out on its own; to merge before then, run the merge yourself with SKIP_BUGHUNT=1 in front of it." >&2
   exit 2
@@ -479,5 +545,5 @@ WHERE=$(ohmybug_hunt_dir 2>/dev/null || echo '(no repo key)')
 # `~`, not the absolute path: the home directory usually carries the operator's
 # name, and this line goes into a transcript.
 WHERE=${WHERE/#$HOME/\~}
-echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $WHERE." >&2
+echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown} (the tree at ${PWD/#$HOME/\~})${PR_SRC:+, PR head ${PR_HEAD:-unknown} ($PR_SRC)}, looked in $WHERE." >&2
 exit 2

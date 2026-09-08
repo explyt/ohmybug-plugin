@@ -40,6 +40,15 @@ trap 'cleanup_scratch' EXIT
 # a tracked file back with `git checkout --`, which is data loss for anyone with
 # uncommitted work in it, and CI never noticed because CI's tree is always clean.
 TREE_BEFORE=$(git status --porcelain | grep -v "$SCRATCH" || true)
+
+# `gh` is shimmed for the whole file: the gate asks it for the merged PR's head
+# (`gh pr view <N> --json headRefOid`), and a test that reached the network
+# would be slow offline and green for the wrong reason online. The shim answers
+# with OHMYBUG_TEST_GH_HEAD when set and fails like an unreachable gh otherwise.
+mkdir -p "$HOME/ghshim"
+printf '#!/bin/sh\n[ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1\nprintf "%%s\\n" "$OHMYBUG_TEST_GH_HEAD"\n' > "$HOME/ghshim/gh"
+chmod +x "$HOME/ghshim/gh"
+export PATH="$HOME/ghshim:$PATH"
 printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
 git add -N "$SCRATCH" 2>/dev/null || true
 
@@ -1271,7 +1280,52 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   ppost get_findings done "$WREPO" "" rev_wtref "$WTSHA"
   rc=$(mk "$V" "$WREPO.wt" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 0 ] || { printf 'FAIL a no-payload hunt recorded from the main checkout is invisible to the worktree merge (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+
+  # --- the merged PR, not the session's tree ----------------------------------
+  # Five false blocks in 48 hours on one worktree-disciplined repository: the
+  # session stands in the primary checkout (main, with its own uncommitted
+  # edits), the branch being merged lives in a sibling worktree, and the gate
+  # judged main's tree — no hunt there, so "not hunted", while the hunt sat on
+  # the PR head. The gate now asks gh for that head and judges the worktree
+  # standing at it. Main is made dirty first: clean, the gate stands down on
+  # "no changes" and this row would pass for the wrong reason.
+  BASESHA=$(git -C "$WREPO" rev-parse HEAD)
+  printf 'unhunted edit in the primary checkout\n' >> "$WREPO/b.ts"
+  rc=$(mk "$V" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL dirty primary checkout with no PR head must still block (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  rc=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL merging a hunted PR from a dirty primary checkout was blocked (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # An unhunted PR head names itself and its source in the refusal — a block
+  # that reads as "no hunt" without saying which commit it looked for is what
+  # sent operators to SKIP_BUGHUNT five times.
+  out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$BASESHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"PR head $BASESHA (gh pr view 5)"*"rc=2") ;;
+    *) printf 'FAIL refusal must name the PR head and where it came from: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  out=$(mk "$V" "$WREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"gh pr view 5: head not resolved"*"rc=2") ;;
+    *) printf 'FAIL refusal must say when the PR head could not be resolved: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # A running hunt on the PR head, with no local tree at that commit, is
+  # "RUNNING", not "never hunted".
+  printf 'more work\n' >> "$WREPO.wt/a.ts"
+  git -C "$WREPO.wt" add a.ts 2>/dev/null
+  git -C "$WREPO.wt" -c user.email=t@t -c user.name=t commit -qm more 2>/dev/null
+  WTSHA2=$(git -C "$WREPO.wt" rev-parse HEAD)
+  ppost submit_review running "$WREPO" "" rev_wtref2 "$WTSHA2"
   git -C "$WREPO" worktree remove --force "$WREPO.wt" 2>/dev/null
+  out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA2 bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL a running hunt on the PR head must read as RUNNING: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # ...and a finished no-payload hunt of the PR head vouches for it even when
+  # no local worktree stands at that commit any more (the record IS repo@sha).
+  rc=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL a hunted PR head with no local worktree was blocked (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git -C "$WREPO" checkout -q -- b.ts 2>/dev/null
 else
   printf 'FAIL could not create a worktree for the cross-checkout ref row\n'; fails=$((fails + 1))
 fi
@@ -1506,6 +1560,16 @@ if git worktree add -q --detach "$WT" HEAD 2>/dev/null; then
   rc=$(mk "$V" "$WT" | perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   if [ "$rc" != 0 ]; then
     printf 'FAIL worktree: hunt recorded from the main checkout is invisible in the worktree (rc=%s)\n' "$rc"
+    fails=$((fails + 1))
+  fi
+
+  # ...and from the PRIMARY checkout, dirty with this file's scratch, naming the
+  # PR whose head is the worktree's commit: a payload hunt records the diff id,
+  # never the sha, so only judging the worktree that stands at that head can
+  # find it. Before the fix: 2, "not hunted", with the hunt sitting next door.
+  rc=$(mk "$V" "$PWD" | OHMYBUG_TEST_GH_HEAD=$(git -C "$WT" rev-parse HEAD) perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  if [ "$rc" != 0 ]; then
+    printf 'FAIL worktree: a payload-hunted PR merged from the primary checkout was blocked (rc=%s)\n' "$rc"
     fails=$((fails + 1))
   fi
 
