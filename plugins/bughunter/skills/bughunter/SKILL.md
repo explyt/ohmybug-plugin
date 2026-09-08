@@ -55,7 +55,9 @@ This is a required client action, not a reminder to do later:
   and `stop_on`. Update an existing heartbeat for the same review instead of
   creating a duplicate, and retire/replace any heartbeat pointing at an older
   review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a
-  loop, up to 5 times inside one wake (5 x 45 s covers the four-minute cadence).
+  loop, up to 4 times inside one wake: 4 x 45 s of holds leaves 60 s of the
+  240 s cadence for the round trips, the status line and the cleanup — the same
+  allowance the Claude loop below makes for a poll (45 s sleep + up to 15 s).
   The server holds a wait for at most `WAIT_REVIEW_MAX_S` (45 s) however long a
   `timeout_s` you ask for, and answers the ordinary body plus `timed_out: true`
   and a `next_step` when the hold expires — so a bigger `timeout_s` buys no
@@ -72,9 +74,9 @@ This is a required client action, not a reminder to do later:
   it is older than 180 minutes or after 3 consecutive wakes in which
   `wait_review` could not reach the server: print `bughunt · <mode> ·
   watch-retired`, then delete it – a heartbeat nothing can satisfy must not
-  wake the thread forever. The 15-second gap before
-  the next four-minute wake is deliberate handover slack; finish the status line
-  and cleanup before the next heartbeat. Keep each wake-up to
+  wake the thread forever. That 60-second remainder is
+  deliberate handover slack, not spare waiting: finish the status line and the
+  cleanup inside it, or the next heartbeat fires while this wake still loops. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
   `bughunt · fast · needs-files`, `bughunt · fast · done`,
   `bughunt · fast · failed`, `bughunt · fast · poll-failed`, or
