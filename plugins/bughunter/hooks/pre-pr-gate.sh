@@ -451,10 +451,20 @@ if [ -n "$PR_SKIP" ]; then
   PR_SRC="${PR_SEL:+gh pr view $PR_SEL: }head not resolved ($PR_SKIP)"
 elif [ -n "$PR_SEL" ]; then
   PR_SRC="gh pr view $PR_SEL"
+  # Bounded by a watchdog that KILLS the child, not by `alarm; exec`: gh is a Go
+  # binary and the Go runtime swallows SIGALRM, so an alarm delivered to the
+  # exec-ed gh changed nothing and a host that accepts the socket and never
+  # answers held the hook for gh's own timeout (measured: 10 s of TLS handshake
+  # against a silent listener, with the alarm set to 3).
+  bounded() {
+    perl -e '$p = fork; if (!$p) { exec @ARGV or exit 127 }
+             $SIG{ALRM} = sub { kill "TERM", $p; select(undef, undef, undef, 0.5); kill "KILL", $p; exit 124 };
+             alarm 15; waitpid $p, 0; exit $? >> 8' "$@"
+  }
   if [ -n "$PR_REPO" ]; then
-    PR_HEAD=$(GH_PROMPT_DISABLED=1 perl -e 'alarm 15; exec @ARGV' gh pr view "$PR_SEL" -R "$PR_REPO" --json headRefOid -q .headRefOid 2>/dev/null)
+    PR_HEAD=$(GH_PROMPT_DISABLED=1 bounded gh pr view "$PR_SEL" -R "$PR_REPO" --json headRefOid -q .headRefOid 2>/dev/null)
   else
-    PR_HEAD=$(GH_PROMPT_DISABLED=1 perl -e 'alarm 15; exec @ARGV' gh pr view "$PR_SEL" --json headRefOid -q .headRefOid 2>/dev/null)
+    PR_HEAD=$(GH_PROMPT_DISABLED=1 bounded gh pr view "$PR_SEL" --json headRefOid -q .headRefOid 2>/dev/null)
   fi
   case "$PR_HEAD" in
     *[!0-9a-f]*|"") PR_HEAD="" PR_SRC="$PR_SRC: head not resolved" ;;

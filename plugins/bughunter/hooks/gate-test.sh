@@ -52,8 +52,9 @@ mkdir -p "$HOME/ghshim"
 cat > "$HOME/ghshim/gh" <<'GHSHIM'
 #!/bin/sh
 printf '%s\n' "$*" > "$HOME/ghshim/last-args"
-# A hanging gh is one process holding the pipe, as the real binary would be.
-[ -n "${OHMYBUG_TEST_GH_SLEEP:-}" ] && exec sleep "$OHMYBUG_TEST_GH_SLEEP"
+# A hanging gh is one process holding the pipe, and like the real binary (Go
+# swallows SIGALRM) it does not die of an alarm: only a kill ends it.
+if [ -n "${OHMYBUG_TEST_GH_SLEEP:-}" ]; then trap "" ALRM; exec sleep "$OHMYBUG_TEST_GH_SLEEP"; fi
 [ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1
 case " $* " in
   " pr view "*" --json headRefOid -q .headRefOid ") printf '%s\n' "$OHMYBUG_TEST_GH_HEAD" ;;
