@@ -54,18 +54,32 @@ This is a required client action, not a reminder to do later:
   binds the current thread), using that exact `review_id`, `interval_s`, `wake_on`,
   and `stop_on`. Update an existing heartbeat for the same review instead of
   creating a duplicate, and retire/replace any heartbeat pointing at an older
-  review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=225)`. The server-side
-  wait checks every 30 seconds and returns immediately on `needs_files`; if
-  `wait_review` is unavailable, loop `get_findings` every 45 seconds for at most
-  225 seconds inside this wake, then let the next heartbeat take over.
+  review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a
+  loop, up to 3 times inside one wake. Budget an iteration the way the Claude
+  loop below does — 45 s of holding plus up to 15 s of round trip — so 3 x 60 s
+  = 180 s of the 240 s cadence, and the remaining 60 s is the status line and
+  the cleanup. That is this file's rule everywhere: 180 + 60 at or under
+  `interval_s`.
+  The server holds a wait for at most `WAIT_REVIEW_MAX_S` (45 s) however long a
+  `timeout_s` you ask for, and answers the ordinary body plus `timed_out: true`
+  and a `next_step` when the hold expires — so a bigger `timeout_s` buys no
+  extra waiting, only the same answer at 45 s. A `timed_out: true` answer is a
+  healthy server, not an unreachable one: never count it towards the retirement
+  rule below. Loop instead, and stop the loop the moment the answer is `done`,
+  `failed` or `needs_files`. That loop is for a FAST hunt: a deep hunt runs about
+  an hour, so call `wait_review` once, read its `next_step`, and let the
+  heartbeat carry the waiting. If `wait_review` is
+  unavailable, loop `get_findings` every 45 seconds for at most
+  180 seconds inside this wake — the same three iterations, the same 60 s left —
+  then let the next heartbeat take over.
   On `needs_files`, send files first; on `done` or
   `failed`, process the result and delete the heartbeat. Retire it too when
   it is older than 180 minutes or after 3 consecutive wakes in which
   `wait_review` could not reach the server: print `bughunt · <mode> ·
   watch-retired`, then delete it – a heartbeat nothing can satisfy must not
-  wake the thread forever. The 15-second gap before
-  the next four-minute wake is deliberate handover slack; finish the status line
-  and cleanup before the next heartbeat. Keep each wake-up to
+  wake the thread forever. Those 60 seconds are
+  deliberate handover slack, not spare waiting: finish the status line and the
+  cleanup inside them, or the next heartbeat fires while this wake still loops. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
   `bughunt · fast · needs-files`, `bughunt · fast · done`,
   `bughunt · fast · failed`, `bughunt · fast · poll-failed`, or
@@ -101,8 +115,16 @@ This is a required client action, not a reminder to do later:
   as the last resort keep a `run_in_background` until-loop – and say so:
   "monitoring armed without heartbeat – the cache will cool".
 
-If the runtime cannot create its monitor, use `wait_review` in the current turn
-or state that monitoring is unavailable; never claim that a monitor is armed.
+If the runtime cannot create its monitor, wait in the current turn:
+`wait_review(review_id, poll_after_s=30, timeout_s=45)` in a loop until the
+answer is `done`, `failed` or `needs_files` — the same three the heartbeat loop
+stops on, because `needs_files` is not terminal and the request behind it is
+held open for minutes only (§3a): send the files, then keep looping. A longer
+`timeout_s` is clamped to the same 45 s, so looping is the only way to wait. Here the loop is for a deep hunt TOO: with no
+heartbeat there is nothing to hand the waiting to, and a deep hunt is the one
+that runs about an hour, so a single call would end the turn on a review nobody
+reads — the failure §3b records. If you cannot keep waiting, say the hunt is
+running and unwatched; never claim that a monitor is armed.
 
 If the MCP server is missing, refused, or unauthenticated, report the hunt as
 blocked and stop. Do not replace it with a local review and do not call that
