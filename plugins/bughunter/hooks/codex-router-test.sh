@@ -229,8 +229,10 @@ assert "`awaiting_client_files`/`files_requested`, not off its\n  status word" i
 assert "needs-files` and serves the files first" in codex_bullet
 assert "before it counts as a wake that read nothing" in codex_bullet
 assert "before it counts as a wake that read nothing" in router_text
-assert "call `get_findings` once: if the review is\n  still running, tell the user and arm a fresh heartbeat" in codex_bullet
-assert "then call get_findings once and arm a fresh heartbeat if the review is still running" in router_text
+# Every surface re-arms on the same predicate: needs_files is not terminal, so a
+# watch retired while the reviewers wait for files must come back.
+assert "call `get_findings` once: if the review is\n  still running or waiting for files, tell the user and arm a fresh heartbeat" in codex_bullet
+assert "then call get_findings once and arm a fresh heartbeat if the review is still running or waiting for files" in router_text
 assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
 assert "each of its wakes polls `status_url` once and\n  reports that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet

@@ -91,7 +91,7 @@ This is a required client action, not a reminder to do later:
   a status at all — a failed `wait_review`, `get_findings` or `status_url` read,
   whichever that wake uses: print `bughunt · <mode> ·
   watch-retired`, then delete it, then call `get_findings` once: if the review is
-  still running, tell the user and arm a fresh heartbeat – a heartbeat nothing
+  still running or waiting for files, tell the user and arm a fresh heartbeat – a heartbeat nothing
   can satisfy must not wake the thread forever, and a live hunt must not lose
   its watch. Those 60 seconds are
   deliberate handover slack, not spare waiting: finish the status line and the
