@@ -118,6 +118,20 @@ for body, want in (('{"status":"done"}', "done"), ('{"status":"failed"}', "faile
         open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
         r = subprocess.run([zsh, "-c", loop_src.replace("<status_url>", "http://x/")], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
     assert r.returncode == 0 and r.stdout == f"bughunt · fast · {want}\n", (want, r.returncode, r.stdout, r.stderr)
+# The failed-poll path, executed: a dead endpoint. The curl shim honours `-f`
+# (exit 22 on an HTTP error, else a 404 page with exit 0 – what dropping `-f`
+# or piping curl's output would see) and `date` advances 60 s per call, so the
+# clock-gated poll-failed lines land and the 12-failure retirement fires. A
+# loop that treats the failure as "running" prints `running` and is red.
+with tempfile.TemporaryDirectory() as d:
+    open(f"{d}/curl", "w").write('#!/bin/sh\ncase " $* " in *" -f"*) exit 22 ;; esac\nprintf \'<html>404</html>\'\n'); os.chmod(f"{d}/curl", 0o755)
+    open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
+    open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
+    r = subprocess.run([zsh, "-c", loop_src.replace("<status_url>", "http://x/")], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
+lines = r.stdout.splitlines()
+assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
+assert "bughunt · fast · poll-failed" in lines and "bughunt · fast · running" not in lines, r.stdout
+assert 1 <= lines.count("bughunt · fast · poll-failed") <= 6, lines  # 12 failed polls, one line per 180 s of shim clock
 # The properties list is normative for any rewrite of the loop: property 4
 # must describe the shipped loop (clock-gated poll-failed, retirement after 12
 # failures), not the pre-retirement one that printed per failure and never ended.
@@ -131,7 +145,7 @@ for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: tru
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
-for phrase in ("poll_after_s=30", "timeout_s=225", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap"):
+for phrase in ("poll_after_s=30", "timeout_s=225", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
     assert phrase in codex_bullet, phrase
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})

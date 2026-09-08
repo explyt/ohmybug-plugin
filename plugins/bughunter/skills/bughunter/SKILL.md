@@ -59,7 +59,11 @@ This is a required client action, not a reminder to do later:
   `wait_review` is unavailable, loop `get_findings` every 45 seconds for at most
   225 seconds inside this wake, then let the next heartbeat take over.
   On `needs_files`, send files first; on `done` or
-  `failed`, process the result and delete the heartbeat. The 15-second gap before
+  `failed`, process the result and delete the heartbeat. Retire it too when
+  it is older than 180 minutes or after 3 consecutive wakes in which
+  `wait_review` could not reach the server: print `bughunt · <mode> ·
+  watch-retired`, then delete it – a heartbeat nothing can satisfy must not
+  wake the thread forever. The 15-second gap before
   the next four-minute wake is deliberate handover slack; finish the status line
   and cleanup before the next heartbeat. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
