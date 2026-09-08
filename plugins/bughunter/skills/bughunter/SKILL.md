@@ -54,9 +54,10 @@ This is a required client action, not a reminder to do later:
   binds the current thread), using that exact `review_id`, `interval_s`, `wake_on`,
   `stop_on` and `wake_rule` — copy `wake_rule` into the prompt word for word,
   because it is the sentence that makes a wake a reading rather than a
-  recollection: every wake MUST call `wait_review` (or `get_findings`) and print
-  the `status` field of THAT response; a wake with no tool response prints
-  `bughunt · <mode> · poll-failed`, never the previous status. A heartbeat that
+  recollection: every wake reports the status it just read — from `wait_review`
+  or `get_findings` on a fast hunt, from the `status_url` read on a deep one —
+  and a wake with no answer prints `bughunt · <mode> · poll-failed`, never the
+  previous status. A heartbeat that
   answers from memory reported `running` for fourteen minutes after the hunt was
   done, and the merge waited on it. Update an existing heartbeat for the same review instead of
   creating a duplicate, and retire/replace any heartbeat pointing at an older

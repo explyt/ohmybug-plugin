@@ -153,7 +153,7 @@ codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[
 # nothing said what a wake IS. The server ships that sentence as `wake_rule`;
 # the bullet must carry it verbatim, or the prompt the agent writes into
 # automation_update is free to omit it.
-WAKE_RULE = ("every wake MUST call `wait_review` (or `get_findings`) and print\n  the `status` field of THAT response; a wake with no tool response prints\n  `bughunt · <mode> · poll-failed`, never the previous status")
+WAKE_RULE = ("every wake reports the status it just read — from `wait_review`\n  or `get_findings` on a fast hunt, from the `status_url` read on a deep one —\n  and a wake with no answer prints `bughunt · <mode> · poll-failed`, never the\n  previous status")
 assert WAKE_RULE in codex_bullet, "the heartbeat prompt must carry the server's wake_rule word for word"
 assert "`wake_rule` — copy `wake_rule` into the prompt word for word" in codex_bullet
 # ...and the hand-wait path prints on the same terms: it is the path with no
@@ -172,6 +172,12 @@ for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times 
 # in its own words — the bare token `timed_out` also matches the clause above it,
 # so deleting the rule used to ship green.
 router_text = open(router, encoding="utf-8").read()
+# The ROUTING text is the other Codex surface and restates the whole heartbeat
+# contract on its own, so a rule stated only in the skill still ships an agent
+# that arms a heartbeat allowed to answer from memory.
+assert "wake_rule" in router_text, "ROUTING must name wake_rule among the fields to copy"
+assert "reports the status it just read" in router_text, "ROUTING must define a wake as a reading, not a recollection"
+assert "poll-failed, never the previous status" in router_text, "ROUTING must say what a wake with no answer prints"
 for text in (skill, router_text):
     assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"
     assert "client MCP timeout" not in text and "client-side timeout" not in text, "the clamp answers; it does not kill the socket"
