@@ -116,6 +116,11 @@ def segments(cmd, depth=0, quiet=False):
     """Yield token lists, one per command position, recursing into `sh -c`."""
     if depth > 3:
         return
+    # A backslash-newline is one line to the shell. Left in, the escaped
+    # newline is a token that splits the merge from its own flags, the whole
+    # command counts as spanning, and the per-line re-read fails on the
+    # dangling backslash: the selector of every wrapped merge was lost.
+    cmd = cmd.replace("\\\n", " ")
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
     # shlex eats a newline as whitespace, so the direct pass over a multi-line
@@ -295,6 +300,12 @@ for seg, spanning in segments(cmd):
                 sel_at = -1
                 while i < len(rest):
                     w = rest[i]
+                    # An empty argument (`gh pr merge 5 ""`) is a word with no
+                    # first character; indexing it killed the whole decider,
+                    # and a dead decider reads below as "no python3": allow.
+                    if not w:
+                        i += 1
+                        continue
                     # A redirection and its operand belong to the shell, not to
                     # gh: `2>&1` arrives as `2`, `>&`, `1`, and without this the
                     # `2` is a pull request. A 0, 1 or 2 right before `>` or `<`
@@ -433,10 +444,11 @@ GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
 # gh, not a GitHub remote) changes nothing except the refusal text, which then
 # says the head could not be resolved.
 PR_HEAD="" PR_SRC="" PR_TREES=""
-if [ -n "$PR_SEL" ] && [ -n "$PR_SKIP" ]; then
-  # A pull request was named and deliberately not looked up: say which and why,
-  # so the refusal never reads as "no hunt" on a command the gate half-judged.
-  PR_SRC="gh pr view $PR_SEL: head not resolved ($PR_SKIP)"
+if [ -n "$PR_SKIP" ]; then
+  # A pull request was named (or several were) and deliberately not looked up:
+  # say which and why, so the refusal never reads as "no hunt" on a command the
+  # gate half-judged. With no selector there is no `gh pr view` to name.
+  PR_SRC="${PR_SEL:+gh pr view $PR_SEL: }head not resolved ($PR_SKIP)"
 elif [ -n "$PR_SEL" ]; then
   PR_SRC="gh pr view $PR_SEL"
   if [ -n "$PR_REPO" ]; then

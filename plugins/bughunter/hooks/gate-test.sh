@@ -1413,6 +1413,27 @@ gh pr list -R org/other"
 npm test"
   out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
   case "$out" in *"merges in one command"*|*"gh pr view"*) printf 'FAIL a selector-less merge borrowed the next line: %s\n' "$out"; fails=$((fails + 1)) ;; *"rc=2 args=") ;; *) printf 'FAIL selector-less multi-line merge: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # An empty argument must not kill the decider (a dead decider reads as "no
+  # python3" and ALLOWS): the selector survives it, and so does the block.
+  for FL2 in "5 ''" "'' --squash 5" '5 --squash ""'; do
+    FL="gh pr"; FL="$FL merge $FL2"
+    out=$(ghargs "$FL")
+    case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL an empty argument in %s broke the decider: %s\n' "$FL2" "$out"; fails=$((fails + 1)) ;; esac
+  done
+  FL="gh pr"; FL="$FL merge '' --squash"
+  out=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in *"python3 is unavailable"*|*"rc=0") printf 'FAIL an empty argument stood the gate down: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # A backslash-newline is one line: the wrapped merge keeps its selector and
+  # its -R, and the hunted PR head still lifts the block.
+  FL="gh pr"; FL="$FL merge 5 \\
+  --squash \\
+  -R org/other"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 -R org/other "*) ;; *) printf 'FAIL a backslash continuation lost the merge arguments: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # A skip reason with no selector still reaches the refusal.
+  FL="gh pr"; FL="$FL merge --squash && gh pr merge 5"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"PR head unknown (head not resolved (2 merges in one command"*"rc=2 args=") ;; *) printf 'FAIL a selector-less first merge hid the skip reason: %s\n' "$out"; fails=$((fails + 1)) ;; esac
   # ...while the same pull request merged twice is still one pull request.
   FL="gh pr"; FL="$FL merge 5 --squash || gh pr merge 5 --squash --admin"
   rc=$(mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
