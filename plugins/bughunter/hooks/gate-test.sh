@@ -40,6 +40,29 @@ trap 'cleanup_scratch' EXIT
 # a tracked file back with `git checkout --`, which is data loss for anyone with
 # uncommitted work in it, and CI never noticed because CI's tree is always clean.
 TREE_BEFORE=$(git status --porcelain | grep -v "$SCRATCH" || true)
+
+# `gh` is shimmed for the whole file: the gate asks it for the merged PR's head
+# (`gh pr view <N> --json headRefOid`), and a test that reached the network
+# would be slow offline and green for the wrong reason online. The shim answers
+# with OHMYBUG_TEST_GH_HEAD when set and fails like an unreachable gh otherwise.
+mkdir -p "$HOME/ghshim"
+# It answers only the exact query the gate is meant to send – anything else is
+# gh being asked the wrong question, and a real gh would answer a branch name
+# or a JSON object that the gate then rejects as "head not resolved".
+cat > "$HOME/ghshim/gh" <<'GHSHIM'
+#!/bin/sh
+printf '%s\n' "$*" > "$HOME/ghshim/last-args"
+# A hanging gh is one process holding the pipe, and like the real binary (Go
+# swallows SIGALRM) it does not die of an alarm: only a kill ends it.
+if [ -n "${OHMYBUG_TEST_GH_SLEEP:-}" ]; then trap "" ALRM; exec sleep "$OHMYBUG_TEST_GH_SLEEP"; fi
+[ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1
+case " $* " in
+  " pr view "*" --json headRefOid -q .headRefOid ") printf '%s\n' "$OHMYBUG_TEST_GH_HEAD" ;;
+  *) exit 1 ;;
+esac
+GHSHIM
+chmod +x "$HOME/ghshim/gh"
+export PATH="$HOME/ghshim:$PATH"
 printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
 git add -N "$SCRATCH" 2>/dev/null || true
 
@@ -1271,7 +1294,185 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   ppost get_findings done "$WREPO" "" rev_wtref "$WTSHA"
   rc=$(mk "$V" "$WREPO.wt" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 0 ] || { printf 'FAIL a no-payload hunt recorded from the main checkout is invisible to the worktree merge (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+
+  # --- the merged PR, not the session's tree ----------------------------------
+  # Five false blocks in 48 hours on one worktree-disciplined repository: the
+  # session stands in the primary checkout (main, with its own uncommitted
+  # edits), the branch being merged lives in a sibling worktree, and the gate
+  # judged main's tree — no hunt there, so "not hunted", while the hunt sat on
+  # the PR head. The gate now asks gh for that head and lets the worktree
+  # standing at it vouch for the merge. Main is made dirty first: clean, the gate stands down on
+  # "no changes" and this row would pass for the wrong reason.
+  BASESHA=$(git -C "$WREPO" rev-parse HEAD)
+  printf 'unhunted edit in the primary checkout\n' >> "$WREPO/b.ts"
+  rc=$(mk "$V" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL dirty primary checkout with no PR head must still block (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  rc=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL merging a hunted PR from a dirty primary checkout was blocked (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # An unhunted PR head names itself and its source in the refusal — a block
+  # that reads as "no hunt" without saying which commit it looked for is what
+  # sent operators to SKIP_BUGHUNT five times.
+  out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$BASESHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"PR head $BASESHA (gh pr view 5"*"rc=2") ;;
+    *) printf 'FAIL refusal must name the PR head and where it came from: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  out=$(mk "$V" "$WREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"gh pr view 5: head not resolved"*"rc=2") ;;
+    *) printf 'FAIL refusal must say when the PR head could not be resolved: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # ...and an answer that is not a sha (a branch name, a JSON object) is no
+  # head either: it must not reach the record lookup or the refusal as one.
+  for BAD in "feature/x" '{"headRefOid":"abc"}'; do
+    out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$BAD bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+    case "$out" in
+      *"$BAD"*) printf 'FAIL a non-sha gh answer was taken as the PR head: %s\n' "$out"; fails=$((fails + 1)) ;;
+      *"gh pr view 5: head not resolved"*"rc=2") ;;
+      *) printf 'FAIL a non-sha gh answer must read as unresolved: %s\n' "$out"; fails=$((fails + 1)) ;;
+    esac
+  done
+  # A gh that hangs (blackholed proxy, unreachable host) must not hang the
+  # hook: the lookup is bounded and the gate still answers. The row's own cap
+  # is longer than the lookup bound and shorter than the shim's sleep.
+  out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$BASESHA OHMYBUG_TEST_GH_SLEEP=40 perl -e 'alarm 25; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"gh pr view 5: head not resolved"*"rc=2") ;;
+    *) printf 'FAIL a hanging gh must be cut off by the lookup bound: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # A running hunt on the PR head, with no local tree at that commit, is
+  # "RUNNING", not "never hunted".
+  printf 'more work\n' >> "$WREPO.wt/a.ts"
+  git -C "$WREPO.wt" add a.ts 2>/dev/null
+  git -C "$WREPO.wt" -c user.email=t@t -c user.name=t commit -qm more 2>/dev/null
+  WTSHA2=$(git -C "$WREPO.wt" rev-parse HEAD)
+  ppost submit_review running "$WREPO" "" rev_wtref2 "$WTSHA2"
   git -C "$WREPO" worktree remove --force "$WREPO.wt" 2>/dev/null
+  out=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA2 bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL a running hunt on the PR head must read as RUNNING: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # ...and a finished no-payload hunt of the PR head vouches for it even when
+  # no local worktree stands at that commit any more (the record IS repo@sha).
+  rc=$(mk "$V" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL a hunted PR head with no local worktree was blocked (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # The selector is found behind flags – gh accepts them anywhere – and a
+  # value-taking flag's value is not the selector: `-t subj` must not ask gh
+  # about PR "subj". Both rows would fall back to judging the dirty primary.
+  # Each argv row clears the shim's record first: a lookup that never ran must
+  # not pass on the previous row's line.
+  ghargs() { rm -f "$HOME/ghshim/last-args"; mk "$1" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)"; }
+  FL="gh pr"; FL="$FL merge --squash -t subj --body-file /dev/null 5"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL flags before the selector hid the PR head: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # pflag shorthand: an attached value and a cluster ending in a value flag.
+  FL="gh pr"; FL="$FL merge -st subj 5"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL a clustered short flag swallowed the selector: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  FL="gh pr"; FL="$FL merge 5 -Rorg/other"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL an attached -R value was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # ...and -R after the selector still reaches the lookup: without it gh
+  # resolves the same-numbered PR of the LOCAL repository, a head nobody asked
+  # about, which can allow a foreign merge through a worktree that happens to
+  # stand at it.
+  FL="gh pr"; FL="$FL merge 5 -R org/other --squash"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL -R after the selector was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  FL="gh pr"; FL="$FL merge --repo=org/other 5"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL --repo=value was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # gh reads GH_REPO too, and the command's own prefix is where it would be set;
+  # a lookup that ignored it would ask about the LOCAL repository's PR 5 while
+  # gh merges another one. An explicit -R still wins, as in gh.
+  FL="GH_REPO=org/other gh pr"; FL="$FL merge 5"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/other "*) ;; *) printf 'FAIL a GH_REPO= prefix was dropped from the lookup: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  FL="GH_REPO=org/other gh pr"; FL="$FL merge 5 -R org/third"
+  out=$(ghargs "$FL")
+  case "$out" in "rc="*"args=pr view 5 -R org/third "*) ;; *) printf 'FAIL -R must win over GH_REPO: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # ...and GH_HOST names another GitHub the lookup cannot follow: resolve
+  # nothing (and say so) rather than the wrong PR.
+  FL="GH_HOST=ghe.example gh pr"; FL="$FL merge 5"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"gh pr view 5: head not resolved (GH_HOST=ghe.example"*"rc=2 args=") ;; *) printf 'FAIL a GH_HOST prefix must resolve no head and say so: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # Every value-taking flag, before the selector: a flag missing from the
+  # list makes its value the pull request, and the lookup fails silently into
+  # the session-tree judgement this change exists to remove.
+  for FLAGS in "-b msg" "--body msg" "--subject subj" "-A me@x.io" "--author-email me@x.io" "--match-head-commit deadbeef" "-F /dev/null"; do
+    FL="gh pr"; FL="$FL merge $FLAGS 5"
+    out=$(ghargs "$FL")
+    case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL value flag %s before the selector hid the PR head: %s\n' "$FLAGS" "$out"; fails=$((fails + 1)) ;; esac
+  done
+  # Two merges in one command: the hook answers once for the whole line, so a
+  # hunt of the first pull request must not carry the second one through. The
+  # gate then judges the session tree only, and says why.
+  FL="gh pr"; FL="$FL merge 5 --squash && gh pr merge 6 --squash"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"head not resolved (2 merges in one command"*"rc=2 args=") ;; *) printf 'FAIL a second merge rode through on the first PR head: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # A redirection is the shell's, not gh's: `2>&1` on a selector-less merge
+  # must not make pull request 2 the one the gate asks about (a hunted head of
+  # an old PR #2 would then vouch for whatever branch is being merged), and a
+  # redirection must not hide a real selector before or after it.
+  FL="gh pr"; FL="$FL merge --squash 2>&1"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=2 args=") ;; *) printf 'FAIL a redirection became the pull request selector: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  for FL2 in "5 --squash 2>&1" "1>&2 5" "5 >out 2>&1" "2>/dev/null 5"; do
+    FL="gh pr"; FL="$FL merge $FL2"
+    out=$(ghargs "$FL")
+    case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL a redirection hid the selector in %s: %s\n' "$FL2" "$out"; fails=$((fails + 1)) ;; esac
+  done
+  # A multi-line command: the merge on line 1 must not harvest line 2's -R
+  # (that read as two different pull requests and lost the lookup), and a
+  # selector-less merge on line 1 must not take line 2's first word as one.
+  FL="gh pr"; FL="$FL merge 5 --squash
+gh pr list -R org/other"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 --json"*) ;; *) printf 'FAIL the next line leaked into the merge arguments: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  FL="gh pr"; FL="$FL merge --squash
+npm test"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"merges in one command"*|*"gh pr view"*) printf 'FAIL a selector-less merge borrowed the next line: %s\n' "$out"; fails=$((fails + 1)) ;; *"rc=2 args=") ;; *) printf 'FAIL selector-less multi-line merge: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # An empty argument must not kill the decider (a dead decider reads as "no
+  # python3" and ALLOWS): the selector survives it, and so does the block.
+  for FL2 in "5 ''" "'' --squash 5" '5 --squash ""'; do
+    FL="gh pr"; FL="$FL merge $FL2"
+    out=$(ghargs "$FL")
+    case "$out" in "rc=0 args=pr view 5 "*) ;; *) printf 'FAIL an empty argument in %s broke the decider: %s\n' "$FL2" "$out"; fails=$((fails + 1)) ;; esac
+  done
+  FL="gh pr"; FL="$FL merge '' --squash"
+  out=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in *"python3 is unavailable"*|*"rc=0") printf 'FAIL an empty argument stood the gate down: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # A backslash-newline is one line: the wrapped merge keeps its selector and
+  # its -R, and the hunted PR head still lifts the block.
+  FL="gh pr"; FL="$FL merge 5 \\
+  --squash \\
+  -R org/other"
+  out=$(ghargs "$FL")
+  case "$out" in "rc=0 args=pr view 5 -R org/other "*) ;; *) printf 'FAIL a backslash continuation lost the merge arguments: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # A skip reason with no selector still reaches the refusal.
+  FL="gh pr"; FL="$FL merge --squash && gh pr merge 5"
+  out=$(rm -f "$HOME/ghshim/last-args"; mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$? args=$(cat "$HOME/ghshim/last-args" 2>/dev/null)")
+  case "$out" in *"PR head unknown (head not resolved (2 merges in one command"*"rc=2 args=") ;; *) printf 'FAIL a selector-less first merge hid the skip reason: %s\n' "$out"; fails=$((fails + 1)) ;; esac
+  # ...while the same pull request merged twice is still one pull request.
+  FL="gh pr"; FL="$FL merge 5 --squash || gh pr merge 5 --squash --admin"
+  rc=$(mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL the same PR merged twice in one command was refused (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...nor does an unparsable segment after the merge (a nested payload with
+  # an odd apostrophe) downgrade a recognised merge to the regex fallback,
+  # which honours an opt-out on an unrelated segment.
+  FL="gh pr"; FL="$FL merge 5 && bash -c \"echo it's fine\""
+  rc=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL an unparsable segment after the merge disarmed the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  FL="SKIP_BUGHUNT=1 npm test && gh pr"; FL="$FL merge 5 && bash -c \"echo it's fine\""
+  rc=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL an opt-out on another segment plus an unparsable tail disarmed the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and an opted-out merge later in the line does not downgrade the first.
+  FL="gh pr"; FL="$FL merge 6 --squash; SKIP_BUGHUNT=1 gh pr merge 5 --squash"
+  rc=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL a later opted-out merge disarmed the gate for the first (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git -C "$WREPO" checkout -q -- b.ts 2>/dev/null
 else
   printf 'FAIL could not create a worktree for the cross-checkout ref row\n'; fails=$((fails + 1))
 fi
@@ -1299,6 +1500,18 @@ out=$(mk "$V" "$VREPO" | bash "$G/pre-pr-gate.sh" 2>/dev/null)
 case "$out" in
   *"no findings came back"*) ;;
   *) printf 'FAIL the ref-keyed warn-through said nothing on stdout: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+# ...and through the PR head: the same refused offer, judged from a dirty
+# primary checkout with no local tree at that commit. The two ref branches above
+# see only this tree's HEAD; the PR head is the third spelling of the identity,
+# and without it the dead end comes back as a hard block.
+VSHA=$(git -C "$VREPO" rev-parse HEAD)
+git -C "$VREPO" checkout -q --detach HEAD~1 2>/dev/null
+printf 'unrelated edits\n' >> "$VREPO/b.ts"
+out=$(mk "$V" "$VREPO" | OHMYBUG_TEST_GH_HEAD=$VSHA bash "$G/pre-pr-gate.sh" 2>/dev/null; echo "rc=$?")
+case "$out" in
+  *"no findings came back"*"rc=0") ;;
+  *) printf 'FAIL a refused offer of the PR head did not warn the merge through from a dirty primary: %s\n' "$out"; fails=$((fails + 1)) ;;
 esac
 rm -rf "$(dirname "$VREPO")"
 
@@ -1393,7 +1606,7 @@ case "$out" in
   *) printf 'FAIL the promote miss named neither the review nor the directory: %s\n' "$out"
      fails=$((fails + 1)) ;;
 esac
-# ...and it must NOT conclude anything about the gate. The gate has four keys and
+# ...and it must NOT conclude anything about the gate. The gate has five keys and
 # this branch knows about none of them; three client sessions read the old
 # sentence as a verdict on the gate and reported their hunts uncounted while
 # `ref:<sha>` records for those hunts sat on disk, and one was about to ask for
@@ -1405,7 +1618,7 @@ case "$out" in
     fails=$((fails + 1)) ;;
 esac
 case "$out" in
-  *"four keys"*) ;;
+  *"five keys"*"pull request the merge command names"*) ;;
   *) printf 'FAIL the promote miss does not say what the gate actually reads: %s\n' "$out"
      fails=$((fails + 1)) ;;
 esac
@@ -1509,6 +1722,16 @@ if git worktree add -q --detach "$WT" HEAD 2>/dev/null; then
     fails=$((fails + 1))
   fi
 
+  # ...and from the PRIMARY checkout, dirty with this file's scratch, naming the
+  # PR whose head is the worktree's commit: a payload hunt records the diff id,
+  # never the sha, so only judging the worktree that stands at that head can
+  # find it. Before the fix: 2, "not hunted", with the hunt sitting next door.
+  rc=$(mk "$V" "$PWD" | OHMYBUG_TEST_GH_HEAD=$(git -C "$WT" rev-parse HEAD) perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  if [ "$rc" != 0 ]; then
+    printf 'FAIL worktree: a payload-hunted PR merged from the primary checkout was blocked (rc=%s)\n' "$rc"
+    fails=$((fails + 1))
+  fi
+
   # And an edit made in the worktree AFTER that hunt must block again.
   printf 'unhunted %s\n' "$$" >> "$WT/.ohmybug-wt-scratch"
   rc=$(mk "$V" "$WT" | perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
@@ -1523,6 +1746,124 @@ else
   echo "worktree rows skipped: could not create a worktree here" >&2
   fails=$((fails + 1))
 fi
+
+# Two trees at the PR head. git lists the primary checkout first, and a primary
+# parked at that commit with unrelated uncommitted edits is the wrong tree to
+# judge when a clean branch worktree at the same commit carries the (payload,
+# diff-id keyed) hunt. First-match picked the primary, found no hunt for its
+# edits, and refused the hunted PR.
+R2=$(mktemp -d)/repo
+mkrepo "$R2"
+if git -C "$R2" worktree add -q -b feature "$R2.wt" HEAD 2>/dev/null; then
+  printf 'work\n' >> "$R2.wt/a.ts"
+  git -C "$R2.wt" add a.ts 2>/dev/null
+  git -C "$R2.wt" -c user.email=t@t -c user.name=t commit -qm work 2>/dev/null
+  SHA2=$(git -C "$R2.wt" rev-parse HEAD)
+  DIFF2=$(git -C "$R2.wt" diff origin/main)
+  rm -rf "$(cd "$R2" && ohmybug_hunt_dir)"
+  wpost submit_review 0 "$R2.wt" "$DIFF2" >/dev/null 2>&1
+  wpost get_findings 1 "$R2.wt" "$DIFF2" >/dev/null 2>&1
+  git -C "$R2" checkout -q --detach "$SHA2" 2>/dev/null
+  printf 'parked edits\n' >> "$R2/b.ts"
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL two trees at the PR head: the dirty primary was judged instead of the clean worktree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # A doc edit in the hunted worktree after its hunt moves its diff id but not
+  # its signature; the sig: key of a tree at the PR head is what keeps a typo
+  # fix from costing a paid re-hunt when the merge runs from the dirty primary.
+  printf 'typo fixed\n' >> "$R2.wt/README.md"
+  git -C "$R2.wt" add -N README.md 2>/dev/null  # untracked files are invisible to git diff
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL a doc edit in the hunted worktree at the PR head demanded a re-hunt from the primary (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  git -C "$R2.wt" reset -q -- README.md 2>/dev/null; rm -f "$R2.wt/README.md"
+  # The mirror image: the session stands in the DIRTY tree, and that dirty
+  # diff – commits plus uncommitted edits – is what was hunted, while the clean
+  # sibling at the same head was never hunted. "Prefer a clean tree" alone
+  # walked past the hunted one and refused a merge the gate allowed before.
+  # (the tombstone too: wpost reuses one review id, and a promoted id is read
+  # as already read – #58 – so the second pair would record nothing)
+  H2=$(cd "$R2" && ohmybug_hunt_dir); rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  DIRTY2=$(git -C "$R2" diff origin/main)
+  wpost submit_review 0 "$R2" "$DIRTY2" >/dev/null 2>&1
+  wpost get_findings 1 "$R2" "$DIRTY2" >/dev/null 2>&1
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL two trees at the PR head: the hunted dirty session tree was passed over for a clean sibling (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and when the ONLY tree at the PR head is a dirty worktree whose diff was
+  # hunted, merged from a checkout that is not at that head: nothing clean to
+  # prefer, and the fallback to "any tree" is what finds the hunt.
+  git -C "$R2" checkout -q -- b.ts 2>/dev/null
+  git -C "$R2" checkout -q main 2>/dev/null
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  printf 'edits under review\n' >> "$R2.wt/c.ts"
+  WTDIRTY=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTDIRTY" >/dev/null 2>&1
+  wpost get_findings 1 "$R2.wt" "$WTDIRTY" >/dev/null 2>&1
+  printf 'unrelated\n' >> "$R2/b.ts"
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL the only tree at the PR head is dirty and hunted, and was not judged (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # A hunt still RUNNING on that worktree's diff is reported as running, not as
+  # "never hunted": the pending record is keyed on the worktree's diff id, so
+  # only judging that tree can see it.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  printf 'more edits under review\n' >> "$R2.wt/c.ts"  # a new diff: the old one is in the legacy marker
+  WTDIRTY=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTDIRTY" >/dev/null 2>&1
+  out=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL a running hunt on the worktree at the PR head must read as RUNNING from the primary: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # The session tree keeps its own evidence when it is NOT at the PR head: the
+  # worktree carries one more, unpushed commit on top of the PR head, the
+  # primary is parked at the head with unrelated edits, and the PR head itself
+  # was hunted nowhere. Judging the primary INSTEAD of the session tree lost a
+  # hunted diff, a running review and a refused offer – each came back as a
+  # hard block.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  git -C "$R2.wt" add c.ts 2>/dev/null
+  git -C "$R2.wt" -c user.email=t@t -c user.name=t commit -qm 'unpushed' 2>/dev/null
+  git -C "$R2" checkout -q --detach "$SHA2" 2>/dev/null
+  printf 'parked again\n' >> "$R2/b.ts"
+  printf 'and one more edit\n' >> "$R2.wt/a.ts"
+  WTPAST=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTPAST" >/dev/null 2>&1
+  out=$(mk "$V" "$R2.wt" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL the session tree past the PR head lost its running review: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  wpost get_findings 1 "$R2.wt" "$WTPAST" >/dev/null 2>&1
+  rc=$(mk "$V" "$R2.wt" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL the session tree past the PR head lost its own hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # Two trees at the PR head, neither hunted, the session in the second one
+  # with a running review of its diff: RUNNING, from the tree the session is in.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  git -C "$R2.wt" checkout -q -- a.ts 2>/dev/null
+  git -C "$R2.wt" reset -q --hard "$SHA2" 2>/dev/null
+  printf 'in review\n' >> "$R2.wt/c.ts"
+  WTAT=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTAT" >/dev/null 2>&1
+  out=$(mk "$V" "$R2.wt" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL with two trees at the PR head the session tree must still report its own running review: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  # A refused offer of the worktree's diff (the environment would not run the
+  # hunt tools) is a dead end from the primary too: warn through, not block.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  python3 -c "import json,sys;print(json.dumps({
+    'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review',
+    'tool_input':{'diff':sys.argv[1]},
+    'cwd':sys.argv[2]}))" "$WTAT" "$R2.wt" | bash "$G/stamp-hunt.sh"
+  out=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>/dev/null; echo "rc=$?")
+  case "$out" in
+    *"no findings came back"*"rc=0") ;;
+    *) printf 'FAIL a refused offer of the worktree diff did not warn the merge through from the primary: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
+  git -C "$R2" worktree remove --force "$R2.wt" 2>/dev/null
+else
+  printf 'FAIL could not create a worktree for the two-trees row\n'; fails=$((fails + 1))
+fi
+rm -rf "$(dirname "$R2")"
 
 # --- the no-payload path -----------------------------------------------------
 # The DEFAULT submit sends no diff at all — the server fetches it for repo@ref —

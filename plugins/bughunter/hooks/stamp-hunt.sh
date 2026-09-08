@@ -455,10 +455,11 @@ case "$TOOL" in
       # told (`say`; the call has already run, so nothing is blocked).
       # WHAT WAS NOT FOUND, and no conclusion about the gate. The old sentence
       # ended "the merge gate will not see this hunt", which does not follow from
-      # its own premise: the gate has four ways to recognise a hunted diff — the
+      # its own premise: the gate has five ways to recognise a hunted diff — the
       # diff id, `sig:<id>` (prose-only changes since the hunt), `ref:<sha>` on a
-      # clean tree, and a live pending record — and the absence of a rev-id record
-      # in THIS cwd rules out none of them.
+      # clean tree, `ref:<sha>` of the pull request the merge command names, and
+      # a live pending record — and the absence of a rev-id record in THIS cwd
+      # rules out none of them.
       #
       # The cost of that inference was measured on a client wave: three sessions
       # read it as a statement about the gate and reported their hunts uncounted
@@ -466,7 +467,7 @@ case "$TOOL" in
       # to ask the owner for SKIP_BUGHUNT. A true fact with a false conclusion
       # attached pushes an operator to disarm the control, and it is worse than a
       # plain error because there is nothing in the message to disprove.
-      say "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of four keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), ref:<sha> on a clean tree, or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this."
+      say "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of five keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), ref:<sha> on a clean tree, ref:<sha> of the pull request the merge command names (0.85), or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this."
     fi
     ;;
 esac

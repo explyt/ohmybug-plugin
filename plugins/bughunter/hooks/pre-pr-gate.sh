@@ -116,8 +116,19 @@ def segments(cmd, depth=0, quiet=False):
     """Yield token lists, one per command position, recursing into `sh -c`."""
     if depth > 3:
         return
+    # A backslash-newline is one line to the shell. Left in, the escaped
+    # newline is a token that splits the merge from its own flags, the whole
+    # command counts as spanning, and the per-line re-read fails on the
+    # dangling backslash: the selector of every wrapped merge was lost.
+    cmd = cmd.replace("\\\n", " ")
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
+    # shlex eats a newline as whitespace, so the direct pass over a multi-line
+    # command yields segments that SPAN lines: `gh pr merge 5<newline>gh pr list
+    # -R org/other` is one segment here, and a walk over its words harvests the
+    # next line. Those segments still decide the verdict; the per-line re-read
+    # below is where the arguments of a merge are read from. The flag says which.
+    spanning = "\n" in cmd
     try:
         tokens = list(lex)
     except ValueError:
@@ -125,18 +136,18 @@ def segments(cmd, depth=0, quiet=False):
         # Only the top-level parse gets to say that; a per-line retry that fails
         # is just a line we could not read, not a verdict about the command.
         if not quiet:
-            yield ["\x00unparsed"]
+            yield ["\x00unparsed"], False
         return
     cur = []
     for t in tokens:
         if t in SEPS:
             if cur:
-                yield cur
+                yield cur, spanning
             cur = []
         else:
             cur.append(t)
     if cur:
-        yield cur
+        yield cur, spanning
     # A newline ends a command as surely as `;` does, but shlex eats it as
     # whitespace, so `npm test<newline>gh pr merge 5` arrives here as ONE
     # segment whose head is ("npm", "test", "gh") and walks straight through.
@@ -194,6 +205,11 @@ def strip_env(seg):
                 break
             if name == "SKIP_BUGHUNT" and word.split("=", 1)[1] == "1":
                 skip = True
+            # gh reads these too: `GH_REPO=org/other gh pr merge 5` merges another
+            # PR of another repository, and a head lookup that ignored the prefix would ask
+            # about the local one. Kept on the segment for the walker below.
+            if name in ("GH_REPO", "GH_HOST"):
+                gh_env[name] = word.split("=", 1)[1]
             i += 1
             continue
         if word.split("/")[-1] in WRAPPERS:
@@ -245,18 +261,119 @@ looks_merge = "1" if re.search(r"\b(?:pr|mr)[ \t]+merge\b", bare) else "0"
 # hand the model the operator hatch.
 opts_out = "1" if re.search(r"(?:\A|[;&|]\s*)SKIP_BUGHUNT=1[ \t]", code_only(cmd)) else "0"
 verdict = "none"
-for seg in segments(cmd):
+# WHICH pull request the command merges, when it says: `gh pr merge 59`, a URL,
+# or a branch. The gate used to judge the tree at the session cwd, and in a
+# worktree flow that cwd is often the primary checkout on main while the branch
+# being merged lives next door — five false blocks in 48 hours on one repo, each
+# read as "no hunt" while the hunt sat on the PR head. Flags that take a value
+# are skipped so `--subject foo` does not read as PR "foo".
+VALUE_FLAGS = {"-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"}
+SHORT_VALUE = "bFtAR"  # the one-letter spellings of the value-taking flags above
+pr_sel, pr_repo, pr_skip = "", "", ""
+merges = []  # (selector, repo) per merge segment – the hook answers once for the whole command
+gh_env = {}
+for seg, spanning in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
-        verdict = "unparsed"
+        # A merge the tokenizer already recognised stays recognised: since the
+        # loop no longer breaks at the first merge, an unparsable segment AFTER
+        # it (a nested `bash -c` payload with an odd apostrophe) would otherwise
+        # drop the verdict onto the weaker regex-and-opt-out fallback.
+        if verdict != "merge":
+            verdict = "unparsed"
         continue
+    gh_env = {}
     words, skip = strip_env(seg)
     head = tuple(words[:3])
     if any(head[: len(m)] == m for m in MERGERS):
         # The opt-out counts only on the merge itself. Anywhere else it is just
         # a variable someone happened to set.
-        verdict = "skip" if skip else "merge"
-        if verdict == "merge":
-            break
+        # A merge WITHOUT the opt-out anywhere in the command is what the gate
+        # judges; a later opted-out merge must not downgrade an earlier one.
+        this = "skip" if skip else "merge"
+        if verdict != "merge":
+            verdict = this
+        if this == "merge":
+            seg_sel, seg_repo = "", ""
+            if words[0] == "gh":
+                rest = words[3:]
+                i = 0
+                sel_at = -1
+                while i < len(rest):
+                    w = rest[i]
+                    # An empty argument (`gh pr merge 5 ""`) is a word with no
+                    # first character; indexing it killed the whole decider,
+                    # and a dead decider reads below as "no python3": allow.
+                    if not w:
+                        i += 1
+                        continue
+                    # A redirection and its operand belong to the shell, not to
+                    # gh: `2>&1` arrives as `2`, `>&`, `1`, and without this the
+                    # `2` is a pull request. A 0, 1 or 2 right before `>` or `<`
+                    # was its file descriptor, so a selector read from there is
+                    # unread (`gh pr merge 2 >log` loses its selector too, and
+                    # falls back to the session tree: strictly the older rule).
+                    if w[0] in "<>" or w.startswith("&>"):
+                        if sel_at == i - 1 and w[0] in "<>" and seg_sel in ("0", "1", "2"):
+                            seg_sel = ""
+                        i += 2
+                        continue
+                    # pflag shorthand: `-Rorg/other`, `-R=org/other` and clusters
+                    # such as `-st subj` (`-s`, then `-t` taking `subj`). Unfold
+                    # them into the separated spelling the two branches below read,
+                    # or `-Rorg/other` is a boolean nobody asked about and `subj`
+                    # becomes the pull request.
+                    if len(w) > 2 and w[0] == "-" and w[1] != "-":
+                        letters = w[1:]
+                        for k, ch in enumerate(letters):
+                            if ch in SHORT_VALUE:
+                                val = letters[k + 1:].lstrip("=")
+                                w = "-" + ch
+                                if val:
+                                    rest = rest[:i] + [w, val] + rest[i + 1:]
+                                else:
+                                    rest = rest[:i] + [w] + rest[i + 1:]
+                                break
+                        else:
+                            i += 1  # a cluster of booleans
+                            continue
+                    if w in VALUE_FLAGS:
+                        if w in ("-R", "--repo") and i + 1 < len(rest):
+                            seg_repo = rest[i + 1]
+                        i += 2
+                        continue
+                    if w.startswith("-"):
+                        if "=" in w and w.split("=", 1)[0] in ("-R", "--repo"):
+                            seg_repo = w.split("=", 1)[1]
+                        i += 1
+                        continue
+                    # The first positional is the selector; keep walking, because
+                    # gh accepts flags after it and `gh pr merge 7 -R org/other`
+                    # names a repository the lookup must not lose.
+                    if not seg_sel:
+                        seg_sel = w
+                        sel_at = i
+                    i += 1
+                # An explicit -R wins over the environment, as it does in gh. A
+                # GH_HOST prefix names another GitHub instance the lookup cannot
+                # follow from here: keep the selector for the refusal text, but
+                # resolve nothing rather than the wrong PR.
+                if not seg_repo and gh_env.get("GH_REPO"):
+                    seg_repo = gh_env["GH_REPO"]
+                if gh_env.get("GH_HOST"):
+                    pr_skip = "GH_HOST=" + gh_env["GH_HOST"] + " names a host this gate cannot ask"
+            # A segment that spans lines still decides the verdict, but its
+            # arguments may belong to the next line: the per-line re-read
+            # supplies the accurate ones. A merge only the spanning pass saw
+            # keeps the older rule, the session tree.
+            if not spanning:
+                merges.append((seg_sel, seg_repo))
+            # No break: the hook answers ONCE for the whole command, so a second
+            # merge in the same line (`gh pr merge 61 && gh pr merge 62`) would ride
+            # through on the hunt of the first pull request. Every merge is collected.
+if merges:
+    pr_sel, pr_repo = merges[0]
+    if len(set(merges)) > 1:
+        pr_skip = "%d merges in one command name different pull requests; judged the session tree only" % len(set(merges))
 # One field per line, same convention as the recorder. Not \x01-separated: the
 # bash that ships with macOS is 3.2 and does not split IFS on that byte, so the
 # whole answer arrived as field one and every verdict read as "not a merge" —
@@ -265,7 +382,8 @@ for seg in segments(cmd):
 # verdict into a field nobody reads — the gate then stands down in silence. The
 # recorder learned this in the same change; this protocol is the same shape.
 cwd_line = (data.get("cwd") or "").replace("\n", " ").replace("\r", " ")
-print(cwd_line, verdict, looks_merge, opts_out, sep="\n")
+one = lambda v: v.replace("\n", " ").replace("\r", " ")
+print(cwd_line, verdict, looks_merge, opts_out, one(pr_sel), one(pr_repo), one(pr_skip), sep="\n")
 ' 2>/dev/null)
 
 if [ -z "$DECIDE" ]; then
@@ -288,6 +406,9 @@ SESSION_CWD=$(printf '%s' "$DECIDE" | sed -n 1p)
 VERDICT=$(printf '%s' "$DECIDE" | sed -n 2p)
 LOOKS_MERGE=$(printf '%s' "$DECIDE" | sed -n 3p)
 OPTS_OUT=$(printf '%s' "$DECIDE" | sed -n 4p)
+PR_SEL=$(printf '%s' "$DECIDE" | sed -n 5p)
+PR_REPO=$(printf '%s' "$DECIDE" | sed -n 6p)
+PR_SKIP=$(printf '%s' "$DECIDE" | sed -n 7p)
 
 case "$VERDICT" in
   merge) ;;
@@ -309,6 +430,49 @@ esac
 [ -n "$SESSION_CWD" ] && [ -d "$SESSION_CWD" ] && cd "$SESSION_CWD" 2>/dev/null
 
 GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+
+# ...and ALSO judge the PULL REQUEST the command names. `gh pr merge 59` from the
+# primary checkout on main merges a branch that lives in a sibling worktree;
+# judging only main's tree there is how a hunted PR read as unhunted (five
+# times in 48 hours on one worktree-disciplined repository). Ask GitHub for the
+# head once; every local tree standing at that commit then ADDS what it knows
+# (its hunt allows, its running review or refused offer is carried into the
+# branches below), and the commit itself is an identity a no-payload hunt
+# recorded (`ref:<sha>`). The session's own tree is still judged exactly as
+# before – never replaced: the revision that swapped trees lost the session's
+# hunt, its running review and its refused offer. A failed lookup (offline, no
+# gh, not a GitHub remote) changes nothing except the refusal text, which then
+# says the head could not be resolved.
+PR_HEAD="" PR_SRC="" PR_TREES=""
+if [ -n "$PR_SKIP" ]; then
+  # A pull request was named (or several were) and deliberately not looked up:
+  # say which and why, so the refusal never reads as "no hunt" on a command the
+  # gate half-judged. With no selector there is no `gh pr view` to name.
+  PR_SRC="${PR_SEL:+gh pr view $PR_SEL: }head not resolved ($PR_SKIP)"
+elif [ -n "$PR_SEL" ]; then
+  PR_SRC="gh pr view $PR_SEL"
+  # Bounded by a watchdog that KILLS the child, not by `alarm; exec`: gh is a Go
+  # binary and the Go runtime swallows SIGALRM, so an alarm delivered to the
+  # exec-ed gh changed nothing and a host that accepts the socket and never
+  # answers held the hook for gh's own timeout (measured: 10 s of TLS handshake
+  # against a silent listener, with the alarm set to 3).
+  bounded() {
+    perl -e '$p = fork; if (!$p) { exec @ARGV or exit 127 }
+             $SIG{ALRM} = sub { kill "TERM", $p; select(undef, undef, undef, 0.5); kill "KILL", $p; exit 124 };
+             alarm 15; waitpid $p, 0; exit $? >> 8' "$@"
+  }
+  if [ -n "$PR_REPO" ]; then
+    PR_HEAD=$(GH_PROMPT_DISABLED=1 bounded gh pr view "$PR_SEL" -R "$PR_REPO" --json headRefOid -q .headRefOid 2>/dev/null)
+  else
+    PR_HEAD=$(GH_PROMPT_DISABLED=1 bounded gh pr view "$PR_SEL" --json headRefOid -q .headRefOid 2>/dev/null)
+  fi
+  case "$PR_HEAD" in
+    *[!0-9a-f]*|"") PR_HEAD="" PR_SRC="$PR_SRC: head not resolved" ;;
+  esac
+  # Every local tree standing at that commit, primary first as git lists them;
+  # which of them to judge is decided once the hunt helpers are loaded below.
+  [ -n "$PR_HEAD" ] && PR_TREES=$(git worktree list --porcelain 2>/dev/null | awk -v h="HEAD $PR_HEAD" '/^worktree /{wt=substr($0,10)} $0==h{print wt}')
+fi
 LEGACY_MARKER="$GITDIR/ohmybug/last-review"
 
 # Is the thing that RECORDS hunts even installed? Markers are written by a
@@ -333,6 +497,46 @@ fi
 # Shared with the skill's stamp step: one definition, so a hunted diff can
 # never fail to match its own marker.
 . "$(dirname "$0")/diff-id.sh"
+
+# Several trees can stand at the PR head: the branch worktree, the primary parked
+# there, a scratch checkout. Any ONE of them carrying the hunt vouches for the
+# merge – a payload hunt is keyed on the diff of the tree it was sent from, so a
+# dirty session tree whose edits were hunted counts as much as a clean sibling,
+# and a clean sibling as much as a dirty primary with unrelated edits (each was
+# a false block on its own). The session's own tree is judged below exactly as
+# before – never swapped for a sibling, because that swap dropped its hunt, its
+# running review and its refused offer on the floor – and the trees at the PR
+# head only ADD what they know: a hunt allows here, a running review or a
+# refused offer is carried into the pending and attempt branches below.
+tree_keys() ( # dir -> this tree's hunt keys, one per line (diff id, sig:, ref: when clean)
+  cd "$1" 2>/dev/null || return 1
+  local c sg h
+  c=$(ohmybug_diff_id 2>/dev/null) || return 1
+  [ -n "$c" ] && printf '%s\n' "$c"
+  sg=$(ohmybug_sig_id 2>/dev/null) && [ -n "$sg" ] && printf 'sig:%s\n' "$sg"
+  h=$(git rev-parse HEAD 2>/dev/null)
+  [ -n "$h" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && printf 'ref:%s\n' "$h"
+  return 0
+)
+PR_PENDING="" PR_ATTEMPT=""
+if [ -n "$PR_TREES" ]; then
+  while IFS= read -r wt; do
+    [ -n "$wt" ] || continue
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      if ohmybug_hunted "$k"; then
+        echo "OhMyBug: PR head $PR_HEAD ($PR_SRC) was hunted in the tree at ${wt/#$HOME/\~}. Allowing the merge." >&2
+        exit 0
+      fi
+      [ -n "$PR_PENDING" ] || ! ohmybug_pending_has "$k" || PR_PENDING=$k
+      [ -n "$PR_ATTEMPT" ] || ! ohmybug_attempted "$k" || PR_ATTEMPT=$k
+    done <<EOF_K
+$(tree_keys "$wt")
+EOF_K
+  done <<EOF_WT
+$PR_TREES
+EOF_WT
+fi
 MARKER=$(ohmybug_marker_path) || exit 0
 # Cannot tell what this diff is => cannot claim it went unhunted. A gate that
 # fails closed on its own inability to measure just teaches people to pass
@@ -407,6 +611,13 @@ HEAD_SHA=$(git rev-parse HEAD 2>/dev/null)
 if [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && ohmybug_hunted "ref:$HEAD_SHA"; then
   exit 0
 fi
+# The PR head is the reviewed commit whatever tree this process stands in: a
+# no-payload hunt of repo@<head> recorded exactly that key, and the tree here
+# is not the one being merged, so its cleanliness is beside the point.
+if [ -n "$PR_HEAD" ] && ohmybug_hunted "ref:$PR_HEAD"; then
+  echo "OhMyBug: PR head $PR_HEAD ($PR_SRC) was hunted. Allowing the merge." >&2
+  exit 0
+fi
 
 for M in "$MARKER" "$LEGACY_MARKER"; do
   if [ -f "$M" ] && [ "$(cat "$M")" = "$CURRENT" ]; then
@@ -417,7 +628,9 @@ done
 # A submit that WAS allowed and is still running is not a refusal — it is a
 # review whose findings have not arrived. Merging now is merging ahead of them.
 if ohmybug_pending_has "$CURRENT" ||
-   { [ -n "$HEAD_SHA" ] && ohmybug_pending_has "ref:$HEAD_SHA"; }; then
+   { [ -n "$HEAD_SHA" ] && ohmybug_pending_has "ref:$HEAD_SHA"; } ||
+   { [ -n "$PR_HEAD" ] && ohmybug_pending_has "ref:$PR_HEAD"; } ||
+   [ -n "$PR_PENDING" ]; then
   echo "OhMyBug: a hunt is RUNNING for this diff and has not returned yet. Poll get_findings until it says done, then merge." >&2
   echo "OhMyBug (operator): if that review died or was abandoned, the record ages out on its own; to merge before then, run the merge yourself with SKIP_BUGHUNT=1 in front of it." >&2
   exit 2
@@ -441,6 +654,13 @@ if ohmybug_attempted "$CURRENT"; then
 elif [ -n "$HEAD_SHA" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] &&
      ohmybug_attempted "ref:$HEAD_SHA"; then
   ATTEMPT="ref:$HEAD_SHA"
+# The PR head is the third spelling of the same identity: an offer of that
+# commit the environment refused is a dead end whatever tree this process
+# stands in, and the two branches above never see it from a dirty primary.
+elif [ -n "$PR_HEAD" ] && ohmybug_attempted "ref:$PR_HEAD"; then
+  ATTEMPT="ref:$PR_HEAD"
+elif [ -n "$PR_ATTEMPT" ]; then
+  ATTEMPT=$PR_ATTEMPT
 fi
 # ...and only where the hunt could not have run anyway.
 #
@@ -479,5 +699,5 @@ WHERE=$(ohmybug_hunt_dir 2>/dev/null || echo '(no repo key)')
 # `~`, not the absolute path: the home directory usually carries the operator's
 # name, and this line goes into a transcript.
 WHERE=${WHERE/#$HOME/\~}
-echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown}, looked in $WHERE." >&2
+echo "OhMyBug: diff id $CURRENT, HEAD ${HEAD_SHA:-unknown} (the tree at ${PWD/#$HOME/\~})${PR_SRC:+, PR head ${PR_HEAD:-unknown} ($PR_SRC${PR_TREES:+; also judged the local trees at that commit})}, looked in $WHERE." >&2
 exit 2
