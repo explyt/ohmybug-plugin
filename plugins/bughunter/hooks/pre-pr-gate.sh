@@ -263,7 +263,12 @@ merges = []  # (selector, repo) per merge segment – the hook answers once for 
 gh_env = {}
 for seg in segments(cmd):
     if seg and seg[0] == "\x00unparsed":
-        verdict = "unparsed"
+        # A merge the tokenizer already recognised stays recognised: since the
+        # loop no longer breaks at the first merge, an unparsable segment AFTER
+        # it (a nested `bash -c` payload with an odd apostrophe) would otherwise
+        # drop the verdict onto the weaker regex-and-opt-out fallback.
+        if verdict != "merge":
+            verdict = "unparsed"
         continue
     gh_env = {}
     words, skip = strip_env(seg)

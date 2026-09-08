@@ -1394,6 +1394,15 @@ if git -C "$WREPO" worktree add -q -b feature "$WREPO.wt" HEAD 2>/dev/null; then
   FL="gh pr"; FL="$FL merge 5 --squash || gh pr merge 5 --squash --admin"
   rc=$(mk "$FL" "$WREPO" | OHMYBUG_TEST_GH_HEAD=$WTSHA bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 0 ] || { printf 'FAIL the same PR merged twice in one command was refused (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...nor does an unparsable segment after the merge (a nested payload with
+  # an odd apostrophe) downgrade a recognised merge to the regex fallback,
+  # which honours an opt-out on an unrelated segment.
+  FL="gh pr"; FL="$FL merge 5 && bash -c \"echo it's fine\""
+  rc=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL an unparsable segment after the merge disarmed the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  FL="SKIP_BUGHUNT=1 npm test && gh pr"; FL="$FL merge 5 && bash -c \"echo it's fine\""
+  rc=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 2 ] || { printf 'FAIL an opt-out on another segment plus an unparsable tail disarmed the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
   # ...and an opted-out merge later in the line does not downgrade the first.
   FL="gh pr"; FL="$FL merge 6 --squash; SKIP_BUGHUNT=1 gh pr merge 5 --squash"
   rc=$(mk "$FL" "$WREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
