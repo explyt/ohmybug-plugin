@@ -46,7 +46,18 @@ TREE_BEFORE=$(git status --porcelain | grep -v "$SCRATCH" || true)
 # would be slow offline and green for the wrong reason online. The shim answers
 # with OHMYBUG_TEST_GH_HEAD when set and fails like an unreachable gh otherwise.
 mkdir -p "$HOME/ghshim"
-printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "$HOME/ghshim/last-args"\n[ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1\nprintf "%%s\\n" "$OHMYBUG_TEST_GH_HEAD"\n' > "$HOME/ghshim/gh"
+# It answers only the exact query the gate is meant to send – anything else is
+# gh being asked the wrong question, and a real gh would answer a branch name
+# or a JSON object that the gate then rejects as "head not resolved".
+cat > "$HOME/ghshim/gh" <<'GHSHIM'
+#!/bin/sh
+printf '%s\n' "$*" > "$HOME/ghshim/last-args"
+[ -n "${OHMYBUG_TEST_GH_HEAD:-}" ] || exit 1
+case " $* " in
+  " pr view "*" --json headRefOid -q .headRefOid ") printf '%s\n' "$OHMYBUG_TEST_GH_HEAD" ;;
+  *) exit 1 ;;
+esac
+GHSHIM
 chmod +x "$HOME/ghshim/gh"
 export PATH="$HOME/ghshim:$PATH"
 printf 'gate-test scratch %s\n' "$$" > "$SCRATCH"
@@ -1485,7 +1496,7 @@ case "$out" in
   *) printf 'FAIL the promote miss named neither the review nor the directory: %s\n' "$out"
      fails=$((fails + 1)) ;;
 esac
-# ...and it must NOT conclude anything about the gate. The gate has four keys and
+# ...and it must NOT conclude anything about the gate. The gate has five keys and
 # this branch knows about none of them; three client sessions read the old
 # sentence as a verdict on the gate and reported their hunts uncounted while
 # `ref:<sha>` records for those hunts sat on disk, and one was about to ask for
@@ -1497,7 +1508,7 @@ case "$out" in
     fails=$((fails + 1)) ;;
 esac
 case "$out" in
-  *"four keys"*) ;;
+  *"five keys"*"pull request the merge command names"*) ;;
   *) printf 'FAIL the promote miss does not say what the gate actually reads: %s\n' "$out"
      fails=$((fails + 1)) ;;
 esac
@@ -1646,6 +1657,43 @@ if git -C "$R2" worktree add -q -b feature "$R2.wt" HEAD 2>/dev/null; then
   printf 'parked edits\n' >> "$R2/b.ts"
   rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
   [ "$rc" = 0 ] || { printf 'FAIL two trees at the PR head: the dirty primary was judged instead of the clean worktree (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # The mirror image: the session stands in the DIRTY tree, and that dirty
+  # diff – commits plus uncommitted edits – is what was hunted, while the clean
+  # sibling at the same head was never hunted. "Prefer a clean tree" alone
+  # walked past the hunted one and refused a merge the gate allowed before.
+  # (the tombstone too: wpost reuses one review id, and a promoted id is read
+  # as already read – #58 – so the second pair would record nothing)
+  H2=$(cd "$R2" && ohmybug_hunt_dir); rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  DIRTY2=$(git -C "$R2" diff origin/main)
+  wpost submit_review 0 "$R2" "$DIRTY2" >/dev/null 2>&1
+  wpost get_findings 1 "$R2" "$DIRTY2" >/dev/null 2>&1
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL two trees at the PR head: the hunted dirty session tree was passed over for a clean sibling (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # ...and when the ONLY tree at the PR head is a dirty worktree whose diff was
+  # hunted, merged from a checkout that is not at that head: nothing clean to
+  # prefer, and the fallback to "any tree" is what finds the hunt.
+  git -C "$R2" checkout -q -- b.ts 2>/dev/null
+  git -C "$R2" checkout -q main 2>/dev/null
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  printf 'edits under review\n' >> "$R2.wt/c.ts"
+  WTDIRTY=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTDIRTY" >/dev/null 2>&1
+  wpost get_findings 1 "$R2.wt" "$WTDIRTY" >/dev/null 2>&1
+  printf 'unrelated\n' >> "$R2/b.ts"
+  rc=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+  [ "$rc" = 0 ] || { printf 'FAIL the only tree at the PR head is dirty and hunted, and was not judged (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+  # A hunt still RUNNING on that worktree's diff is reported as running, not as
+  # "never hunted": the pending record is keyed on the worktree's diff id, so
+  # only judging that tree can see it.
+  rm -rf "$H2" "$H2.pending" "$H2.promoted"
+  printf 'more edits under review\n' >> "$R2.wt/c.ts"  # a new diff: the old one is in the legacy marker
+  WTDIRTY=$(git -C "$R2.wt" diff origin/main)
+  wpost submit_review 0 "$R2.wt" "$WTDIRTY" >/dev/null 2>&1
+  out=$(mk "$V" "$R2" | OHMYBUG_TEST_GH_HEAD=$SHA2 perl -e 'alarm 10; exec @ARGV' bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+  case "$out" in
+    *"RUNNING"*"rc=2") ;;
+    *) printf 'FAIL a running hunt on the worktree at the PR head must read as RUNNING from the primary: %s\n' "$out"; fails=$((fails + 1)) ;;
+  esac
   git -C "$R2" worktree remove --force "$R2.wt" 2>/dev/null
 else
   printf 'FAIL could not create a worktree for the two-trees row\n'; fails=$((fails + 1))

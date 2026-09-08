@@ -371,7 +371,7 @@ GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
 # still an identity a no-payload hunt recorded (`ref:<sha>`, checked below).
 # A failed lookup (offline, no gh, not a GitHub remote) changes nothing except
 # the refusal text, which then says the head could not be resolved.
-PR_HEAD="" PR_SRC=""
+PR_HEAD="" PR_SRC="" PR_TREES=""
 if [ -n "$PR_SEL" ]; then
   PR_SRC="gh pr view $PR_SEL"
   if [ -n "$PR_REPO" ]; then
@@ -382,25 +382,9 @@ if [ -n "$PR_SEL" ]; then
   case "$PR_HEAD" in
     *[!0-9a-f]*|"") PR_HEAD="" PR_SRC="$PR_SRC: head not resolved" ;;
   esac
-  if [ -n "$PR_HEAD" ]; then
-    # Every local tree at that commit; git lists the primary checkout first,
-    # and a primary parked at the PR head with unrelated edits is the wrong tree
-    # to judge when a clean branch worktree stands at the same commit. Prefer a
-    # clean one, then the first.
-    PR_WT=""; PR_WT_ANY=""
-    while IFS= read -r wt; do
-      [ -n "$wt" ] && [ -d "$wt" ] || continue
-      [ -n "$PR_WT_ANY" ] || PR_WT_ANY=$wt
-      if [ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then PR_WT=$wt; break; fi
-    done <<EOF_WT
-$(git worktree list --porcelain 2>/dev/null | awk -v h="HEAD $PR_HEAD" '/^worktree /{wt=substr($0,10)} $0==h{print wt}')
-EOF_WT
-    [ -n "$PR_WT" ] || PR_WT=$PR_WT_ANY
-    if [ -n "$PR_WT" ] && [ "$PR_WT" != "$(pwd -P)" ]; then
-      cd "$PR_WT" 2>/dev/null && PR_SRC="$PR_SRC; judged the worktree at that commit" \
-        && GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null)
-    fi
-  fi
+  # Every local tree standing at that commit, primary first as git lists them;
+  # which of them to judge is decided once the hunt helpers are loaded below.
+  [ -n "$PR_HEAD" ] && PR_TREES=$(git worktree list --porcelain 2>/dev/null | awk -v h="HEAD $PR_HEAD" '/^worktree /{wt=substr($0,10)} $0==h{print wt}')
 fi
 LEGACY_MARKER="$GITDIR/ohmybug/last-review"
 
@@ -426,6 +410,45 @@ fi
 # Shared with the skill's stamp step: one definition, so a hunted diff can
 # never fail to match its own marker.
 . "$(dirname "$0")/diff-id.sh"
+
+# Several trees can stand at the PR head: the branch worktree, the primary parked
+# there, a scratch checkout. Any ONE of them carrying the hunt vouches for the
+# merge – a payload hunt is keyed on the diff of the tree it was sent from, so a
+# dirty session tree whose edits were hunted counts as much as a clean sibling,
+# and a clean sibling as much as a dirty primary with unrelated edits (each was
+# a false block on its own). When none is hunted the gate still needs one tree
+# to speak about – its pending offer, its refused attempt, the refusal text –
+# and that is the tree the session stands in when it is at the head, else the
+# first git lists.
+tree_hunted() ( # dir -> 0 when that tree's own keys say hunted
+  cd "$1" 2>/dev/null || return 1
+  local c sg h
+  c=$(ohmybug_diff_id 2>/dev/null) || return 1
+  [ -n "$c" ] && ohmybug_hunted "$c" && return 0
+  sg=$(ohmybug_sig_id 2>/dev/null) && [ -n "$sg" ] && ohmybug_hunted "sig:$sg" && return 0
+  h=$(git rev-parse HEAD 2>/dev/null)
+  [ -n "$h" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && ohmybug_hunted "ref:$h" && return 0
+  return 1
+)
+if [ -n "$PR_TREES" ]; then
+  HERE=$(pwd -P); PICK=""
+  while IFS= read -r wt; do
+    [ -n "$wt" ] || continue
+    if tree_hunted "$wt"; then
+      echo "OhMyBug: PR head $PR_HEAD ($PR_SRC) was hunted in the tree at ${wt/#$HOME/\~}. Allowing the merge." >&2
+      exit 0
+    fi
+    [ "$wt" = "$HERE" ] && PICK=$HERE
+    [ -n "$PICK" ] || PICK=$wt
+  done <<EOF_WT
+$PR_TREES
+EOF_WT
+  if [ -n "$PICK" ] && [ "$PICK" != "$HERE" ] && cd "$PICK" 2>/dev/null; then
+    PR_SRC="$PR_SRC; judged the worktree at that commit"
+    GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    LEGACY_MARKER="$GITDIR/ohmybug/last-review"
+  fi
+fi
 MARKER=$(ohmybug_marker_path) || exit 0
 # Cannot tell what this diff is => cannot claim it went unhunted. A gate that
 # fails closed on its own inability to measure just teaches people to pass

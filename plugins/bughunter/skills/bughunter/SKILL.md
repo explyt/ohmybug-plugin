@@ -283,7 +283,8 @@ curl -sf -X POST -H 'content-type: application/json' --data-binary @/tmp/omb-pay
 
 An uploaded payload never passes through the local recorder, so the merge
 gate cannot credit this working tree with the hunt: the record is `meta.ref`
-only, honoured only on a clean checkout standing at that commit. When the
+only, honoured on a clean checkout standing at that commit or when that sha
+is the head of the pull request `gh pr merge <N>` names. When the
 work is unpushed AND the diff is too big to send inline, commit and push it
 first and use rung 1 (`ref` = the pushed head sha) – otherwise the merge gate
 will still block after the review, and the submit says so at submit time.
