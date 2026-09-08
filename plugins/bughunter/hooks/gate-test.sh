@@ -402,10 +402,11 @@ print(json.dumps({
   rc=$(postx get_findings rev_x '{"status":"done","review_of_record":false,"gate_note":"cut short"}')
   s "done + review_of_record:false promotes nothing" ""; pend "refused run is over" 0
   [ "$rc" = 0 ] || { echo "FAIL stamp: a refused run must not block or replace the result (rc 0), got $rc"; fails=$((fails + 1)); }
-  # The tombstone must be EMPTY: the gate's live-pending lookup greps every
-  # file in that directory, and a tombstone carrying the record's lines would
-  # block the merge with "a hunt is RUNNING" for the whole pending TTL — on a
-  # review the server refused, with an instruction nobody can satisfy.
+  # The tombstone must be EMPTY. Nothing parses it any more – it lives in
+  # `.promoted/`, which no reader walks (#58) – so emptiness is a shape
+  # guarantee: a tombstone that ever carried the record's lines would be one
+  # move away from re-blocking the merge with "a hunt is RUNNING" on a review
+  # the server refused, as it did when it sat inside `.pending`.
   [ -e "$(ohmybug_hunt_dir).promoted/rev_x" ] && [ ! -s "$(ohmybug_hunt_dir).promoted/rev_x" ] \
     || { echo "FAIL stamp: the refusal tombstone is missing or not empty"; fails=$((fails + 1)); }
   out=$(mk "$V" "$PWD" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null)
@@ -1648,6 +1649,14 @@ n 'a read hunt is silent'                      0 0
 # the record of one that was read. Counted, every finished hunt nagged forever.
 [ -e "$(ohmybug_hunt_dir).promoted/rev_nudge" ] || { echo "FAIL nudge: promotion left no tombstone"; fails=$((fails + 1)); }
 n 'a promotion tombstone is silent'            0 0
+# ...and so is the tombstone a 0.68–0.83 stamp left INSIDE `.pending`: sessions
+# keep the hooks they started with, so on one machine an old stamp still writes
+# `<rev>.promoted` beside the record while this nudge reads the directory. The
+# `! -name '*.promoted'` filter is what keeps that file from reading as an
+# unread hunt; this row is its only test – delete the filter and it reddens.
+: > "$(ohmybug_hunt_dir).pending/rev_legacy.promoted"
+n 'a legacy in-place tombstone is silent'      0 0
+rm -f "$(ohmybug_hunt_dir).pending/rev_legacy.promoted"
 # ...and silent for a session still running the hooks it started with. Sessions
 # keep their plugin version until restart; the nudge at 9de61cb (the 0.67–0.69
 # line, three sessions on one machine on 2026-09-07) globs every file in
