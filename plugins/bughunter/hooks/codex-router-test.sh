@@ -29,7 +29,10 @@ def run(event, payload=None):
 session = run("session")
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
-for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "poll_after_s=30", "timeout_s=225", "every 45s for 225s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
+# The hold cap is the server's, not ours: a longer timeout_s comes back at the
+# same 45 s with timed_out:true, so the heartbeat loops short waits instead —
+# and only for a fast hunt, since a deep one outlives any loop (#988).
+for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "timeout_s=45 up to 3 times", "timed_out:true", "deep hunt call wait_review once", "every 45s for 180s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
 assert "set targetThreadId" not in session_text
@@ -145,8 +148,49 @@ for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: tru
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
-for phrase in ("poll_after_s=30", "timeout_s=225", "`get_findings` every 45 seconds", "for at most\n  225 seconds", "needs_files", "15-second gap", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
+for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  180 seconds", "needs_files", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
+
     assert phrase in codex_bullet, phrase
+# The 225 s hold is gone from BOTH surfaces (the comment used to promise that
+# while the assert read one): the server caps a hold at 45 s, so asking for more
+# returns the same timed_out answer at 45 s and waits no longer.
+# The reason must not survive as the pre-clamp one: a client told to expect a
+# dead socket books ordinary timed_out answers as unreachable-server wakes and
+# retires a healthy watch after three of them. And that consequence is the whole
+# point of this change, so the rule that forbids it is asserted on both surfaces
+# in its own words — the bare token `timed_out` also matches the clause above it,
+# so deleting the rule used to ship green.
+router_text = open(router, encoding="utf-8").read()
+for text in (skill, router_text):
+    assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"
+    assert "client MCP timeout" not in text and "client-side timeout" not in text, "the clamp answers; it does not kill the socket"
+assert "never count it towards the retirement" in skill
+assert "never a wake to count towards retirement" in router_text
+# The stop-early rule, in its own words on each surface: every bare needs_files
+# token in the tuples above is satisfied by a neighbouring sentence, so deleting
+# this clause used to ship green — and a wake that keeps waiting through a
+# needs_files answer burns a file request that is held open for minutes.
+assert "stop the loop the moment the answer is `done`,\n  `failed` or `needs_files`" in skill
+assert "stopping early on done, failed or needs_files" in router_text
+# The wake budget must leave room for the round trips: holds alone filling the
+# cadence is how two wakes end up looping over the same review.
+# Both branches of the wake spend the same budget, or the one left behind
+# overruns the cadence the other was cut to fit: an iteration is 45 s of waiting
+# plus up to 15 s of round trip, three of them, 60 s left for the status line
+# and the cleanup. A count or a budget that drifts on either surface is a wake
+# still looping when the next heartbeat fires.
+for text in (skill, router_text):
+    assert "up to 3 times" in text, "an iteration costs 45 + 15 s: more than three overruns the 240 s wake"
+    assert "225s" not in text and "225 seconds" not in text, "225 s of polling leaves no handover slack either"
+assert "3 x 60 s\n  = 180 s" in skill and "3 x 60 s = 180 s" in router_text
+assert "15-second gap" not in skill
+# The no-monitor fallback is the one place with no heartbeat to hand the wait
+# to, so it must loop for a DEEP hunt as well: one call there ends the turn on
+# an hour-long review nobody reads.
+fallback = skill.split("If the runtime cannot create its monitor,", 1)[1].split("\n\nIf the MCP server is missing", 1)[0]
+for phrase in ("`done`, `failed` or `needs_files`", "held open for minutes only", "the loop is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed"):
+    assert phrase in fallback, phrase
+assert "one call for a deep one" not in fallback
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})
 review_text = review["hookSpecificOutput"]["additionalContext"]
