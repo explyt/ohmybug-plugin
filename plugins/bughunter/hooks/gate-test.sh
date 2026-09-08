@@ -1669,6 +1669,18 @@ case $said in
   *) printf 'FAIL nudge names the wrong hunts: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
+# The remedy it names, per client (#57): the heartbeat monitor, not a
+# background shell that wakes the session once, at exit. Reverting the sentence
+# to `run_in_background` kept every check green.
+case $said in
+  *'Monitor tool'*'automation_update'*) ;;
+  *) printf 'FAIL nudge no longer names the heartbeat monitor per client: %s\n' "$said"
+     fails=$((fails + 1)) ;;
+esac
+case $said in
+  *run_in_background*) printf 'FAIL nudge points at run_in_background again: %s\n' "$said"
+     fails=$((fails + 1)) ;;
+esac
 
 # --- whose hunt is it -------------------------------------------------------
 # Ten foreign runs woke non-owners in one shift, one of them seven times, and a
