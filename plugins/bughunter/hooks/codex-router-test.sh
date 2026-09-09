@@ -147,10 +147,13 @@ claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtim
 for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
+# The deep bullet must not tell the agent nothing will prod it mid-run: the deep
+# wake is exactly what catches a file request now.
+assert "rarely needs files from you, so little prods you mid-run — the heartbeat's\n  `status_url` poll is what catches a request when it does" in skill
 # The fourth statement of the same rule lives after the watch loop, outside the
 # claude_bullet slice — the surface that owns the loop must re-arm on the same
 # predicate as the three that do not.
-assert "call `get_findings` once; if the review is still running or\nwaiting for files, tell the user and arm a fresh monitor" in skill
+assert "call `get_findings` once; if the review is still running or\nwaiting for files, tell the user, and arm a fresh monitor unless the watch\nretired on age" in skill
 # The bullet is what an agent condenses when it rewrites the loop, so its exit
 # condition must be the one the loop actually breaks on: the flags, not a status
 # word that body never carries. And the cron job, the surface with no Monitor
@@ -167,7 +170,7 @@ assert "call `get_findings`\n  once and print what that answered, and only if TH
 # get_findings puts it IN the word — and the wake that falls back to the tool
 # is exactly the one that would otherwise match neither branch.
 assert "or `needs_files`\n  from the `get_findings` fallback (which flags it exactly there) call\n  `get_findings`, serve the files and KEEP this job" in claude_bullet
-assert "review is still running or waiting for files" in claude_bullet
+assert "review is still running or waiting for files AND the retirement came from poll\n  failures, not from the age cap" in claude_bullet
 # The cron fallback curls the same status body as the deep wake, so it reads the
 # request off the flags too: keyed to the status word it sits through the window.
 assert "on `awaiting_client_files`/`files_requested` in the status\n  body (which flags a request there, not in its status word)" in claude_bullet
@@ -235,8 +238,14 @@ assert "before it counts as a wake that read nothing" in codex_bullet
 assert "before it counts as a wake that read nothing" in router_text
 # Every surface re-arms on the same predicate: needs_files is not terminal, so a
 # watch retired while the reviewers wait for files must come back.
-assert "call `get_findings` once: if the review is\n  still running or waiting for files, tell the user and arm a fresh heartbeat" in codex_bullet
-assert "then call get_findings once and arm a fresh heartbeat if the review is still running or waiting for files" in router_text
+assert "call `get_findings` once: if the review is\n  still running or waiting for files, tell the user and — if the retirement came\n  from unreadable wakes, not from the age cap — arm a fresh heartbeat" in codex_bullet
+# The age cap is the one retirement nothing re-arms: it is the only bound on a
+# heartbeat whose review never reaches a terminal state.
+assert "the age cap is the one that ends it for good" in codex_bullet
+assert "then call get_findings once and arm a fresh heartbeat if the review is still running or waiting for files and the retirement came from unreadable wakes rather than the age cap" in router_text
+# ...and the routing text names the flags itself: the consequent alone leaves a
+# dangling "either flag" if the names are deleted.
+assert "that body flags a file request as awaiting_client_files/files_requested rather than in its status word" in router_text
 assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
 assert "each of its wakes polls `status_url` once and\n  reports that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet

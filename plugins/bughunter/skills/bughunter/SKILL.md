@@ -91,9 +91,10 @@ This is a required client action, not a reminder to do later:
   a status at all — a failed `wait_review`, `get_findings` or `status_url` read,
   whichever that wake uses: print `bughunt · <mode> ·
   watch-retired`, then delete it, then call `get_findings` once: if the review is
-  still running or waiting for files, tell the user and arm a fresh heartbeat – a heartbeat nothing
-  can satisfy must not wake the thread forever, and a live hunt must not lose
-  its watch. Those 60 seconds are
+  still running or waiting for files, tell the user and — if the retirement came
+  from unreadable wakes, not from the age cap — arm a fresh heartbeat: a live
+  hunt must not lose its watch, and a heartbeat nothing can satisfy must not
+  wake the thread forever, so the age cap is the one that ends it for good. Those 60 seconds are
   deliberate handover slack, not spare waiting: finish the status line and the
   cleanup inside them, or the next heartbeat fires while this wake still loops. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
@@ -133,7 +134,8 @@ This is a required client action, not a reminder to do later:
   150 min budget plus queue time – the job's age starts at submit, the
   budget at claim) print `bughunt · <mode> · watch-retired` and only then
   `CronDelete` it, then call `get_findings` once and create a fresh job if the
-  review is still running or waiting for files – a job nothing can satisfy is how a control gets
+  review is still running or waiting for files AND the retirement came from poll
+  failures, not from the age cap – a job nothing can satisfy is how a control gets
   disarmed, and a job that vanishes in silence reads as 'still running'".
   One job per review: `CronDelete` any earlier bughunt job before creating
   the next – never leave one pointing at an older review id. Only
@@ -467,7 +469,8 @@ with that one line and do nothing else – no `get_findings`, no reading files.
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
 nothing to stop. `watch-retired` → the URL has been dead for 9–12 min or the
 watch is 3 h old: call `get_findings` once; if the review is still running or
-waiting for files, tell the user and arm a fresh monitor. `poll-failed` lands on the heartbeat clock, never per poll: a
+waiting for files, tell the user, and arm a fresh monitor unless the watch
+retired on age — that cap ends the watching, and the user takes it from there. `poll-failed` lands on the heartbeat clock, never per poll: a
 dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
 an hour, and a flood stops the watch. The first good poll after it prints
 `running` once (recovery), then the clock takes over again.
@@ -594,7 +597,8 @@ back empty.
   it carries `install_url`, the App install is the missing step first.
 - **Arm the monitor for the deep hunt too, and give the user the
   `review_id`.** The hour is exactly how long it takes to forget: the deep run
-  needs no files from you, so nothing prods you mid-run, and an agent that
+  rarely needs files from you, so little prods you mid-run — the heartbeat's
+  `status_url` poll is what catches a request when it does — and an agent that
   armed a monitor for every 15-minute fast pass will skip it on the one run
   that waits four times as long. Then the user paid an hour of attention for a
   result nobody read. Tell them in chat that it is running and name the
