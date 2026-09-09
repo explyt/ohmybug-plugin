@@ -147,8 +147,49 @@ claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtim
 for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
+# The deep bullet must not tell the agent nothing will prod it mid-run: the deep
+# wake is exactly what catches a file request now.
+assert "rarely needs files from you, so little prods you mid-run — the heartbeat's\n  `status_url` poll is what catches a request when it does" in skill
+# The fourth statement of the same rule lives after the watch loop, outside the
+# claude_bullet slice — the surface that owns the loop must re-arm on the same
+# predicate as the three that do not.
+assert "call `get_findings` once; if the review is still running or\nwaiting for files, tell the user, and arm a fresh monitor unless the watch\nretired on age" in skill
+# The bullet is what an agent condenses when it rewrites the loop, so its exit
+# condition must be the one the loop actually breaks on: the flags, not a status
+# word that body never carries. And the cron job, the surface with no Monitor
+# behind it, retires with the same remedy as the other two: read once, re-arm.
+assert "exits on `done` / `failed` or on the\n  `awaiting_client_files`/`files_requested` flags" in claude_bullet
+assert "never in its status word" in claude_bullet
+assert "call `get_findings` once and create a fresh job if the\n  review is still running" in claude_bullet
+assert "fourteen minutes" not in skill
+# The cron prompt is the whole instruction its wake sees, so it carries the wake
+# rule itself: without it, failures one and two have no line but the remembered
+# one, which is the incident.
+assert "call `get_findings`\n  once and print what that answered, and only if THAT fails too print `bughunt ·\n  <mode> · poll-failed` and count the wake as a poll failure — never the\n  previous status" in claude_bullet
+# Either shape means a file request: the status body flags it beside the word,
+# get_findings puts it IN the word — and the wake that falls back to the tool
+# is exactly the one that would otherwise match neither branch.
+assert "or `needs_files`\n  from the `get_findings` fallback (which flags it exactly there) call\n  `get_findings`, serve the files and KEEP this job" in claude_bullet
+assert "review is still running or waiting for files AND the retirement came from poll\n  failures, not from the age cap" in claude_bullet
+# The cron fallback curls the same status body as the deep wake, so it reads the
+# request off the flags too: keyed to the status word it sits through the window.
+assert "on `awaiting_client_files`/`files_requested` in the status\n  body (which flags a request there, not in its status word)" in claude_bullet
 codex_bullet = skill.split("- **Codex:**", 1)[1].split("- **Claude Code:**", 1)[0]
-for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  180 seconds", "needs_files", "older than 180 minutes", "3 consecutive wakes", "watch-retired`, then delete it"):
+# #1003: a heartbeat printed `running` on three wakes after the hunt was done,
+# with no tool call in the thread — the cadence fields say when to wake, and
+# nothing said what a wake IS. The server ships that sentence as `wake_rule`;
+# the bullet must carry it verbatim, or the prompt the agent writes into
+# automation_update is free to omit it.
+WAKE_RULE = ("every wake reports the status it just read — from `wait_review`\n  or `get_findings` on a fast hunt, from the `status_url` read on a deep one —\n  and a wake with no answer prints `bughunt · <mode> · poll-failed`, never the\n  previous status")
+assert WAKE_RULE in codex_bullet, "the heartbeat prompt must carry the server's wake_rule word for word"
+# The war story that justifies the rule carries the magnitude the record supports:
+# three wakes at the four-minute cadence is twelve minutes, not more.
+assert "on three wakes — twelve minutes — after" in codex_bullet
+assert "`wake_rule` — copy `wake_rule` into the prompt word for word" in codex_bullet
+# ...and the hand-wait path prints on the same terms: it is the path with no
+# heartbeat, i.e. the one where nothing else would catch a remembered status.
+assert "a status you\nprint is a status a tool just answered" in skill
+for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  180 seconds", "needs_files", "older than 180 minutes", "watch-retired`, then delete it"):
 
     assert phrase in codex_bullet, phrase
 # The 225 s hold is gone from BOTH surfaces (the comment used to promise that
@@ -160,7 +201,55 @@ for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times 
 # point of this change, so the rule that forbids it is asserted on both surfaces
 # in its own words — the bare token `timed_out` also matches the clause above it,
 # so deleting the rule used to ship green.
-router_text = open(router, encoding="utf-8").read()
+# The routing rules are asserted against the context the router EMITS, not its
+# source: a clause parked in the file but dropped from the emitted array would
+# otherwise ship green, and every Codex session would be routed without it.
+router_text = session_text
+# The ROUTING text is the other Codex surface and restates the whole heartbeat
+# contract on its own, so a rule stated only in the skill still ships an agent
+# that arms a heartbeat allowed to answer from memory.
+ROUTER_WAKE_RULE = ("wake_rule — copy wake_rule into the prompt word for word: every wake reports the status it just read "
+                    "(from wait_review or get_findings on a fast hunt, from the status_url read on a deep one), "
+                    "and a wake with no answer prints bughunt · <mode> · poll-failed, never the previous status")
+assert ROUTER_WAKE_RULE in router_text, "ROUTING must carry the whole wake rule, not a fragment of it"
+# ...and the retirement counter must count wakes that read nothing, whatever the
+# wake reads: a deep wake reads status_url, so a counter keyed to wait_review
+# alone can never fire there and only the 180-minute cap is left.
+assert "3 consecutive wakes that could not read\n  a status at all" in codex_bullet, "the skill must retire on wakes that read nothing, not on failed wait_review calls"
+assert "3 consecutive wakes that could not read a status at all" in router_text, "ROUTING must carry the same retirement counter"
+# ...and the age cap beside it: a cap shorter than the deep budget drops a live
+# hunt, and the counter alone lets a heartbeat nothing can satisfy run forever.
+assert "Retire a heartbeat older than 180 minutes" in router_text, "ROUTING must carry the 180-minute age cap"
+# The deep wake reads status_url, so the agent must be told to copy the URL into
+# the heartbeat and to poll it once per wake — or the rule names a read it was
+# never handed, on the longest hunt there is.
+assert "status_url, interval_s, wake_on, stop_on, and wake_rule" in router_text
+assert "each of its wakes polling status_url once and reporting that" in router_text
+# ...and that poll sees a file request only in the body's flags, never in the
+# status word, so the deep wake is told to read them; a failed poll falls back to
+# one get_findings before it counts against retirement, and a retired watch calls
+# once and re-arms — a deep wake is a single plain-HTTPS poll, so three blocked
+# ones would otherwise drop the watch of a hunt budgeted at 150 min at minute 12.
+assert "so a wake seeing either flag prints bughunt · <mode> · needs-files and serves the files first" in router_text
+assert "on retiring, print bughunt · <mode> · watch-retired, then call get_findings once" in router_text
+assert "`awaiting_client_files`/`files_requested`, not off its\n  status word" in codex_bullet
+assert "needs-files` and serves the files first" in codex_bullet
+assert "before it counts as a wake that read nothing" in codex_bullet
+assert "before it counts as a wake that read nothing" in router_text
+# Every surface re-arms on the same predicate: needs_files is not terminal, so a
+# watch retired while the reviewers wait for files must come back.
+assert "call `get_findings` once: if the review is\n  still running or waiting for files, tell the user and — if the retirement came\n  from unreadable wakes, not from the age cap — arm a fresh heartbeat" in codex_bullet
+# The age cap is the one retirement nothing re-arms: it is the only bound on a
+# heartbeat whose review never reaches a terminal state.
+assert "the age cap is the one that ends it for good" in codex_bullet
+assert "then call get_findings once and arm a fresh heartbeat if the review is still running or waiting for files and the retirement came from unreadable wakes rather than the age cap" in router_text
+# ...and the routing text names the flags itself: the consequent alone leaves a
+# dangling "either flag" if the names are deleted.
+assert "that body flags a file request as awaiting_client_files/files_requested rather than in its status word" in router_text
+assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
+assert "each of its wakes polls `status_url` once and\n  reports that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
+assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
+assert "status_url read, whichever that wake uses" in router_text
 for text in (skill, router_text):
     assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"
     assert "client MCP timeout" not in text and "client-side timeout" not in text, "the clamp answers; it does not kill the socket"

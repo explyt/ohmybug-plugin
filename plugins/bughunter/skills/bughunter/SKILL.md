@@ -51,8 +51,15 @@ This is a required client action, not a reminder to do later:
 
 - **Codex:** immediately read the submit response's `monitor` object, then call
   `automation_update` with `destination=thread` (not `targetThreadId`; destination
-  binds the current thread), using that exact `review_id`, `interval_s`, `wake_on`,
-  and `stop_on`. Update an existing heartbeat for the same review instead of
+  binds the current thread), using that exact `review_id`, `status_url`, `interval_s`,
+  `wake_on`, `stop_on` and `wake_rule` — copy `wake_rule` into the prompt word for word,
+  because it is the sentence that makes a wake a reading rather than a
+  recollection: every wake reports the status it just read — from `wait_review`
+  or `get_findings` on a fast hunt, from the `status_url` read on a deep one —
+  and a wake with no answer prints `bughunt · <mode> · poll-failed`, never the
+  previous status. A heartbeat that
+  answers from memory reported `running` on three wakes — twelve minutes — after
+  the hunt was done, and the merge waited on it. Update an existing heartbeat for the same review instead of
   creating a duplicate, and retire/replace any heartbeat pointing at an older
   review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a
   loop, up to 3 times inside one wake. Budget an iteration the way the Claude
@@ -68,16 +75,26 @@ This is a required client action, not a reminder to do later:
   rule below. Loop instead, and stop the loop the moment the answer is `done`,
   `failed` or `needs_files`. That loop is for a FAST hunt: a deep hunt runs about
   an hour, so call `wait_review` once, read its `next_step`, and let the
-  heartbeat carry the waiting. If `wait_review` is
+  heartbeat carry the waiting — each of its wakes polls `status_url` once and
+  reports that, which is the read `wake_rule` names for a deep hunt. That body
+  keys a file request off `awaiting_client_files`/`files_requested`, not off its
+  status word, so a wake that sees either flag prints `bughunt · <mode> ·
+  needs-files` and serves the files first. If the poll itself fails, the wake
+  falls back to one `get_findings` before it counts as a wake that read nothing.
+  If `wait_review` is
   unavailable, loop `get_findings` every 45 seconds for at most
   180 seconds inside this wake — the same three iterations, the same 60 s left —
   then let the next heartbeat take over.
   On `needs_files`, send files first; on `done` or
   `failed`, process the result and delete the heartbeat. Retire it too when
-  it is older than 180 minutes or after 3 consecutive wakes in which
-  `wait_review` could not reach the server: print `bughunt · <mode> ·
-  watch-retired`, then delete it – a heartbeat nothing can satisfy must not
-  wake the thread forever. Those 60 seconds are
+  it is older than 180 minutes or after 3 consecutive wakes that could not read
+  a status at all — a failed `wait_review`, `get_findings` or `status_url` read,
+  whichever that wake uses: print `bughunt · <mode> ·
+  watch-retired`, then delete it, then call `get_findings` once: if the review is
+  still running or waiting for files, tell the user and — if the retirement came
+  from unreadable wakes, not from the age cap — arm a fresh heartbeat: a live
+  hunt must not lose its watch, and a heartbeat nothing can satisfy must not
+  wake the thread forever, so the age cap is the one that ends it for good. Those 60 seconds are
   deliberate handover slack, not spare waiting: finish the status line and the
   cleanup inside them, or the next heartbeat fires while this wake still loops. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
@@ -93,7 +110,9 @@ This is a required client action, not a reminder to do later:
   the compact line at least every 240 seconds even when nothing changed (that
   line is the heartbeat: a 180 s budget checked once per poll, so at most the
   240 s `interval_s` and well under the 300 s cache TTL), prints immediately on
-  every review status change and exits on `needs_files` / `done` / `failed`. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
+  every review status change and exits on `done` / `failed` or on the
+  `awaiting_client_files`/`files_requested` flags — that body carries a file
+  request in those flags, never in its status word. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
   **A heartbeat wake is answered with that one line and nothing else** –
@@ -103,17 +122,28 @@ This is a required client action, not a reminder to do later:
   No `Monitor` tool in this harness? Fall back to `CronCreate` every 4 minutes
   off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
   heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
-  line; on needs_files call `get_findings`, serve the files and KEEP this job;
+  line for what THAT read answered; if it answered nothing, call `get_findings`
+  once and print what that answered, and only if THAT fails too print `bughunt ·
+  <mode> · poll-failed` and count the wake as a poll failure — never the
+  previous status; on `awaiting_client_files`/`files_requested` in the status
+  body (which flags a request there, not in its status word) or `needs_files`
+  from the `get_findings` fallback (which flags it exactly there) call
+  `get_findings`, serve the files and KEEP this job;
   on done/failed call `get_findings` and `CronDelete` this job; after 3
   consecutive poll failures or once it is older than 180 minutes (the hunt's
   150 min budget plus queue time – the job's age starts at submit, the
   budget at claim) print `bughunt · <mode> · watch-retired` and only then
-  `CronDelete` it – a job nothing can satisfy is how a control gets
+  `CronDelete` it, then call `get_findings` once and create a fresh job if the
+  review is still running or waiting for files AND the retirement came from poll
+  failures, not from the age cap – a job nothing can satisfy is how a control gets
   disarmed, and a job that vanishes in silence reads as 'still running'".
   One job per review: `CronDelete` any earlier bughunt job before creating
   the next – never leave one pointing at an older review id. Only
   as the last resort keep a `run_in_background` until-loop – and say so:
   "monitoring armed without heartbeat – the cache will cool".
+
+The same rule holds when you wait by hand instead of by heartbeat: a status you
+print is a status a tool just answered.
 
 If the runtime cannot create its monitor, wait in the current turn:
 `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a loop until the
@@ -438,8 +468,9 @@ with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
 nothing to stop. `watch-retired` → the URL has been dead for 9–12 min or the
-watch is 3 h old: call `get_findings` once; if the review is still running,
-tell the user and arm a fresh monitor. `poll-failed` lands on the heartbeat clock, never per poll: a
+watch is 3 h old: call `get_findings` once; if the review is still running or
+waiting for files, tell the user, and arm a fresh monitor unless the watch
+retired on age — that cap ends the watching, and the user takes it from there. `poll-failed` lands on the heartbeat clock, never per poll: a
 dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
 an hour, and a flood stops the watch. The first good poll after it prints
 `running` once (recovery), then the clock takes over again.
@@ -566,7 +597,8 @@ back empty.
   it carries `install_url`, the App install is the missing step first.
 - **Arm the monitor for the deep hunt too, and give the user the
   `review_id`.** The hour is exactly how long it takes to forget: the deep run
-  needs no files from you, so nothing prods you mid-run, and an agent that
+  rarely needs files from you, so little prods you mid-run — the heartbeat's
+  `status_url` poll is what catches a request when it does — and an agent that
   armed a monitor for every 15-minute fast pass will skip it on the one run
   that waits four times as long. Then the user paid an hour of attention for a
   result nobody read. Tell them in chat that it is running and name the
