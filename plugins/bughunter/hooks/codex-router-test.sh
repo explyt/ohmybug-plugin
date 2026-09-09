@@ -249,6 +249,30 @@ assert "that body flags a file request as awaiting_client_files/files_requested 
 assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
 assert "each of its wakes polls `status_url` once and\n  reports that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
+# A prompt rule did not hold (a heartbeat carrying wake_rule word for word still
+# answered `running` from memory for forty minutes after done): the prompt must
+# carry FACTS — an ISO retire_at the model compares to the clock — and the stop
+# must be mechanical: same turn as the read, and on the server's own
+# "first read after done" next_step. Dropping any one of the four leaves a
+# heartbeat that can outlive its hunt again.
+for phrase in (
+    "`retire_at` = now + 180 min", "ISO\n    timestamp", "terminal by construction",
+    "deleted at wake regardless of what the wake believes",
+    "`findings=N` read from that wake's tool result", "never a bare word",
+    "the only\n    line allowed is `bughunt · <mode> · poll-failed`",
+    "deletes this heartbeat in the turn that read the\n    status",
+    "delete it first, then report",
+    "begins \"this is the first read after done\"", "delete it in that same turn",
+):
+    assert phrase in codex_bullet, phrase
+for phrase in (
+    "retire_at = now + 180 min", "ISO timestamp", "terminal by construction", "whatever the wake believes",
+    "status and findings=N from that wake's result", "never a bare word",
+    "the only line allowed is bughunt · <mode> · poll-failed",
+    "delete the heartbeat in the same turn as the read", "delete it first, then report",
+    'next_step begins "this is the first read after done"', "delete it in that same turn",
+):
+    assert phrase in router_text, phrase
 assert "status_url read, whichever that wake uses" in router_text
 for text in (skill, router_text):
     assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"

@@ -101,6 +101,29 @@ This is a required client action, not a reminder to do later:
   `bughunt · fast · needs-files`, `bughunt · fast · done`,
   `bughunt · fast · failed`, `bughunt · fast · poll-failed`, or
   `bughunt · fast · watch-retired`).
+  A rule in the prompt did not hold: a heartbeat whose prompt carried the
+  wake_rule word for word still answered `running` from memory for forty
+  minutes after the hunt was done. So the prompt carries FACTS the model can
+  check, and the stop is mechanical, not a judgement:
+  - **The age cap is an instant, not a duration.** At arm time compute
+    `retire_at` = now + 180 min and write it into the prompt as an ISO
+    timestamp: "If the current time is past `<retire_at>` this review is
+    terminal by construction: call `get_findings` now, print what it answered,
+    and delete this automation." A clock the model compares beats an
+    instruction it can skip; any heartbeat older than its `retire_at` is
+    deleted at wake regardless of what the wake believes.
+  - **The compact line quotes the answer it came from.** Print `status` and
+    `findings=N` read from that wake's tool result (`bughunt · fast · done ·
+    findings=3`), never a bare word. No tool result in this wake → the only
+    line allowed is `bughunt · <mode> · poll-failed`.
+  - **Stop in the same turn as the read.** On `done` or `failed`,
+    `automation_update` deletes this heartbeat in the turn that read the
+    status. If the automation still exists at the next wake after a terminal
+    read, delete it first, then report.
+  - **The server names an overrun.** When a `get_findings` answer's
+    `next_step` begins "this is the first read after done", this heartbeat
+    outlived the hunt: delete it in that same turn and say so — that sentence
+    is the server's record of the wake this rule exists to prevent.
 - **Claude Code:** immediately start the monitor described below with the
   **`Monitor` tool** – not `Bash run_in_background`. Claude Code wakes a session
   on a background command only when it EXITS, so a `run_in_background` loop
