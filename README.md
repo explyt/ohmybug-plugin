@@ -1,4 +1,8 @@
+<img src="assets/logo.svg" alt="" width="96" height="96" align="left">
+
 # OhMyBug plugin — bughunter
+
+<br clear="left">
 
 We find the bugs your Claude Code missed. You pay only when your own Claude
 confirms real bugs: $10 flat per bug-finding review (however many bugs it
