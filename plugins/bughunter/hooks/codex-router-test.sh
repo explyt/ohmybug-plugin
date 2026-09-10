@@ -528,7 +528,7 @@ assert "local review agents" in review_text
 # carries the words, and a plain review request never reads as a deep ask.
 DEEP_MARK = "submit_review with deep: true is the first and only review – no fast stage first, no second question"
 assert DEEP_MARK in review_text
-for phrase in ("unless the user asked for the deep hunt in their own words (deep, deep hunt, full-repo, --deep, in any language)",
+for phrase in ("unless the user asked for the deep hunt in their own words (deep hunt, deep review, full-repo, --deep, in any language – the adjective alone, as in deep-dive review or a deep look, asks for a thorough fast review)",
                "one submit_review with deep: true and meta.repo + meta.ref (the pushed head sha) + meta.base_branch, no payload, is the first and only review",
                "On your own initiative start deep only after the server returns deep_offer",
                "A refusal of a deep-first request (repo_required, repo_too_big, commit_required, fast_running, deep_at_capacity) is shown to the user verbatim",
@@ -537,10 +537,18 @@ for phrase in ("unless the user asked for the deep hunt in their own words (deep
     assert phrase in session_text, phrase
 assert "Only start deep after the server returns deep_offer" not in session_text
 assert DEEP_MARK not in session_text
-for prompt in ("run a deep hunt on this", "full-repo review of the branch please", "/bughunter:review --deep"):
+# The full-repo alternative is pinned by a prompt with no other trigger word
+# (a mutation that drops it left every row green: the only full-repo prompt
+# also said "review").
+for prompt in ("run a deep hunt on this", "full-repo review of the branch please", "do a full-repo hunt of this codebase", "/bughunter:review --deep"):
     text = run("prompt", {"prompt": prompt})["hookSpecificOutput"]["additionalContext"]
     assert "Route this request now" in text and DEEP_MARK in text, prompt
-for prompt in ("review this PR before merge", "hunt bugs in the diff", "review this PR, the deeply nested loop in the deeper module worries me"):
+# The adjective alone is not the ask: a hyphen is a word boundary, so a
+# \bdeep\b test took "deep-dive review" for the paid hour-long hunt with the
+# confirming question waived. Every negative here is a ROUTED prompt, so the
+# marker's absence is the regex's doing, not the review filter's.
+for prompt in ("review this PR before merge", "hunt bugs in the diff", "review this PR, the deeply nested loop in the deeper module worries me",
+               "Please do a deep-dive review before merge", "review this PR, the deep copy in cache.js worries me", "review the deep-linking refactor", "take a deep look at this PR"):
     out = run("prompt", {"prompt": prompt})
     text = out.get("hookSpecificOutput", {}).get("additionalContext", "")
     assert DEEP_MARK not in text, prompt
@@ -550,7 +558,10 @@ assert "Route this request now" in run("prompt", {"prompt": "review this PR befo
 # sentence is gone, deep first is the user's word, a refusal is shown verbatim
 # with the fast hunt offered, and the watcher is the deep one.
 assert "never as a first review" not in skill and "Every review starts fast" not in skill
+assert "always fast" not in skill  # the third spelling, on the rung-1 path a deep-first submit takes
 for phrase in ("**Deep first, only on the user's word.**",
+               "The adjective alone is not the\n  ask",
+               "The mode is `fast` – stage one – unless this submit\n  carried `deep: true` on the user's word (§3b): then it is `deep`",
                "`--deep` on `/bughunter:review`",
                "no fast stage first, and no",
                "second \"are you sure\" – they already said yes",

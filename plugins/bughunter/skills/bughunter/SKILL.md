@@ -354,8 +354,9 @@ This works in two cases, checked server-side in this order:
    pushed.
 
 - No error and a `review_id` → it worked; skip context packing entirely, go
-  to the monitor step. The mode is `fast` – that is stage one and it is
-  always fast (see 3b); readable repo access means the reviewers fetch the
+  to the monitor step. The mode is `fast` – stage one – unless this submit
+  carried `deep: true` on the user's word (§3b): then it is `deep`, and the
+  watcher is the deep one. Readable repo access means the reviewers fetch the
   files they need themselves instead of asking you.
 - Error `diff_required` (private repo without the App) → this is rung 2 above:
   offer the one-click App install FIRST and retry, because it removes the payload
@@ -711,9 +712,11 @@ repository into a throwaway VM, takes about an hour and costs the deep price,
 so as YOUR idea it only makes sense once the cheap pass has come back empty.
 
 - **Deep first, only on the user's word.** The user asked for the deep hunt
-  when their request says so, in any language – "deep", "deep hunt",
+  when their request names it, in any language – "deep hunt", "deep review",
   "full-repo", `--deep` on `/bughunter:review`, or a standing "yes, deep" they
-  gave for this branch earlier in the session. Then call `submit_review` ONCE
+  gave for this branch earlier in the session. The adjective alone is not the
+  ask: a "deep-dive review" or "a deep look at the diff" is a thorough FAST
+  review, and when in doubt that is the one question worth asking. Then call `submit_review` ONCE
   with `deep: true` and rung 1's `meta` (`repo` + `ref` = the pushed head sha +
   `base_branch`, empty `diff`, no `upload`): no fast stage first, and no
   second "are you sure" – they already said yes. Never read the ask into the
