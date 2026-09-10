@@ -162,6 +162,64 @@ ohmybug_sig_consistent() {
   return 1
 }
 
+# The COMMENT-BLIND diff: the significant diff with whole-line comments taken
+# out of the code files too. `sig:` answers "did only docs change since the
+# hunt"; this answers "did only comments change" — the KDoc sentence a review
+# asked to delete, the `//` line that named a phrase the hunt objected to. Both
+# are prose the reviewers were never shown, and re-hunting either costs a
+# quarter of an hour and, when the first pass's finding is re-found, $10.
+#
+# Not a hash of the diff text: a removed comment shifts every hunk header
+# below it. Each changed file is stripped on BOTH sides (base blob, working
+# file) by hooks/strip-comments.py — the one definition of "a line that cannot
+# change behaviour", per language, doubt = code — and the diff of the stripped
+# pair is what gets hashed. A comment edit leaves both stripped sides as they
+# were; a code edit does not.
+#
+# exit 0 + a hash -> this is the diff with comments taken out
+# exit 0 + nothing -> the stripped diff is empty. NOT a free pass: unlike
+#                     ohmybug_sig_id's empty answer this authorises nothing —
+#                     the caller treats it as "no key". A comment-only branch
+#                     nobody hunted still needs its hunt (doubt = code).
+# exit 1           -> could not tell (no base, no python3, git or diff failed)
+# `--no-renames`: a rename is a deletion plus an addition here, so the old
+# path's stripped content is compared too, whatever git's rename heuristics say.
+ohmybug_cmt_id() {
+  local base root files f a b out='' d rc strip
+  [ "${OHMYBUG_HUNT_ALL:-0}" = "1" ] && { ohmybug_diff_id; return $?; }
+  command -v python3 >/dev/null 2>&1 || return 1
+  strip="$(dirname "${BASH_SOURCE[0]}")/strip-comments.py"
+  [ -f "$strip" ] || return 1
+  base=$(ohmybug_base) || return 1
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
+  # shellcheck disable=SC2086
+  files=$(git -C "$root" diff --no-renames --name-only "$base" -- $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
+  [ -n "$files" ] || return 0
+  a=$(mktemp) && b=$(mktemp) || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if git -C "$root" cat-file -e "$base:$f" 2>/dev/null; then
+      git -C "$root" show "$base:$f" 2>/dev/null | python3 "$strip" "$f" > "$a" || { rm -f "$a" "$b"; return 1; }
+    else
+      : > "$a"
+    fi
+    if [ -f "$root/$f" ]; then
+      python3 "$strip" "$f" < "$root/$f" > "$b" || { rm -f "$a" "$b"; return 1; }
+    else
+      : > "$b"
+    fi
+    d=$(diff -u -L "a/$f" -L "b/$f" "$a" "$b"); rc=$?
+    [ "$rc" -le 1 ] || { rm -f "$a" "$b"; return 1; }
+    [ -n "$d" ] && out="$out$d
+"
+  done <<EOF_F
+$files
+EOF_F
+  rm -f "$a" "$b"
+  [ -n "$out" ] || return 0
+  printf '%s' "$out" | shasum -a 256 | cut -d' ' -f1
+}
+
 # Is `$1` the id of a payload that IS this working tree, in either of the two
 # spellings a client sends it in? `ohmybug_diff_id` hashes the diff with its
 # trailing newline stripped (command substitution eats it), while a client

@@ -316,6 +316,10 @@ case "$TOOL" in
         # prose after the hunt does not read as unhunted code. Tests are NOT
         # taken out any more: they are the protection the hunt checked.
         SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
+        # ...and with whole-line comments inside the code files taken out too
+        # (0.91): a KDoc sentence deleted after the hunt is prose the reviewers
+        # never saw, same as a README line. Absent on an old hook: no key.
+        CMT=$(ohmybug_cmt_id 2>/dev/null) && [ -n "$CMT" ] && printf 'cmt:%s\n' "$CMT"
       fi
       # A ref is the CALL's identity only when the call carried no bytes: on
       # the no-payload path the server's review IS of repo@ref. With a payload
@@ -339,6 +343,7 @@ case "$TOOL" in
              [ -z "$(git status --porcelain 2>/dev/null)" ]; then
             ID=$(ohmybug_diff_id 2>/dev/null) && [ -n "$ID" ] && printf '%s\n' "$ID"
             SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
+            CMT=$(ohmybug_cmt_id 2>/dev/null) && [ -n "$CMT" ] && printf 'cmt:%s\n' "$CMT"
             TREEOK=1
           fi
         fi
@@ -455,11 +460,12 @@ case "$TOOL" in
       # told (`say`; the call has already run, so nothing is blocked).
       # WHAT WAS NOT FOUND, and no conclusion about the gate. The old sentence
       # ended "the merge gate will not see this hunt", which does not follow from
-      # its own premise: the gate has five ways to recognise a hunted diff — the
-      # diff id, `sig:<id>` (prose-only changes since the hunt), `ref:<sha>` on a
-      # clean tree, `ref:<sha>` of the pull request the merge command names, and
-      # a live pending record — and the absence of a rev-id record in THIS cwd
-      # rules out none of them.
+      # its own premise: the gate has six ways to recognise a hunted diff — the
+      # diff id, `sig:<id>` (docs-only changes since the hunt), `cmt:<id>`
+      # (comment-only changes since the hunt), `ref:<sha>` on a clean tree,
+      # `ref:<sha>` of the pull request the merge command names, and a live
+      # pending record — and the absence of a rev-id record in THIS cwd rules
+      # out none of them.
       #
       # The cost of that inference was measured on a client wave: three sessions
       # read it as a statement about the gate and reported their hunts uncounted
@@ -467,7 +473,7 @@ case "$TOOL" in
       # to ask the owner for SKIP_BUGHUNT. A true fact with a false conclusion
       # attached pushes an operator to disarm the control, and it is worse than a
       # plain error because there is nothing in the message to disprove.
-      say "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of five keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), ref:<sha> on a clean tree, ref:<sha> of the pull request the merge command names (0.85), or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this."
+      say "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of six keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), cmt:<id> (when it is docs/skills or comment lines in code, 0.91), ref:<sha> on a clean tree, ref:<sha> of the pull request the merge command names (0.85), or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this."
     fi
     ;;
 esac

@@ -508,12 +508,13 @@ fi
 # running review and its refused offer on the floor – and the trees at the PR
 # head only ADD what they know: a hunt allows here, a running review or a
 # refused offer is carried into the pending and attempt branches below.
-tree_keys() ( # dir -> this tree's hunt keys, one per line (diff id, sig:, ref: when clean)
+tree_keys() ( # dir -> this tree's hunt keys, one per line (diff id, sig:, cmt:, ref: when clean)
   cd "$1" 2>/dev/null || return 1
-  local c sg h
+  local c sg cm h
   c=$(ohmybug_diff_id 2>/dev/null) || return 1
   [ -n "$c" ] && printf '%s\n' "$c"
   sg=$(ohmybug_sig_id 2>/dev/null) && [ -n "$sg" ] && printf 'sig:%s\n' "$sg"
+  cm=$(ohmybug_cmt_id 2>/dev/null) && [ -n "$cm" ] && printf 'cmt:%s\n' "$cm"
   h=$(git rev-parse HEAD 2>/dev/null)
   [ -n "$h" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && printf 'ref:%s\n' "$h"
   return 0
@@ -597,6 +598,15 @@ fi
 rm -f "$SIG_ERR"
 if [ -n "$SIG" ] && ohmybug_hunted "sig:$SIG"; then
   echo "OhMyBug: this diff was hunted; everything changed since then is documentation or skills, which a hunt does not speak about. Allowing the merge." >&2
+  exit 0
+fi
+# The same question one step further in: docs, skills AND whole-line comments
+# inside the code files taken out (ohmybug_cmt_id, 0.91). A KDoc sentence the
+# review asked to delete is the #1 delta after a clean round, and re-hunting it
+# is a paid review of prose. A failure to compute is no key, not a refusal: the
+# sig arm above is the ruler, this one only ADDS a way to say yes.
+if CMT=$(ohmybug_cmt_id 2>/dev/null) && [ -n "$CMT" ] && ohmybug_hunted "cmt:$CMT"; then
+  echo "OhMyBug: this diff was hunted; everything changed since then is documentation, skills or comment lines, which a hunt does not speak about. Allowing the merge." >&2
   exit 0
 fi
 if [ -z "$SIG" ] && [ "${OHMYBUG_HUNT_ALL:-0}" != "1" ]; then
