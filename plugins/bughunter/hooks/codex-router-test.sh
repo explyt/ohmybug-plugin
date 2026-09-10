@@ -202,7 +202,7 @@ assert "- **Writes `~/.ohmybug/watch/<review_id>` on every poll, failed ones too
 assert "`next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in props
 assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "`next_poll_after_s`", "at least every `monitor.heartbeat_s`", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`interval_s` cadence", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
+for phrase in ("`Monitor` tool", "`next_poll_after_s`", "at least every `monitor.heartbeat_s`", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 # No cadence literal in the bullet either (#67): the 240 in the cron example is
@@ -268,11 +268,27 @@ for literal in ("up to 3 times", "3 x 60 s", "180 + 60", "poll_after_s=30", "tim
 # next wake fired, with nothing left for the line or the file answer (found in
 # review). heartbeat_s is the contract's own "the line must land by then", so
 # the handover before interval_s is derived, not typed.
-for phrase in ("a PAYLOAD submit\n  (§2, rung 3) while a file request can still arrive", "call `wait_review` back to back", "start another hold only if\n  it and its round trip would end inside `heartbeat_s` from this wake's start", "a bound that subtracts the hold alone lets the last one return exactly\n  as the next wake fires", "A repo or deep submit never needs this"):
+# ...and the handover is priced in round trips, not left to the
+# heartbeat_s–interval_s gap: at a 10 s round trip that gap-derived handover
+# was 20 s for calls that are themselves round trips (found in review).
+for phrase in ("a PAYLOAD submit\n  (§2, rung 3) while a file request can still arrive", "call `wait_review` back to back", "start another hold only if\n  it, its round trip, and one more round trip for the handover's own calls\n  would end inside `heartbeat_s` from this wake's start", "a bound that subtracts the hold alone lets the last one return\n  exactly as the next wake fires", "shrinks it on exactly the slow links whose\n  calls need it", "A repo or deep submit never needs this"):
     assert phrase in codex_bullet, phrase
 assert "less one hold" not in skill and "less one hold" not in session_text
-for phrase in ("the one exception is a payload submit", "inside that wake call wait_review back to back", "start another hold only if it and its round trip would end inside heartbeat_s from this wake's start", "a bound that subtracts the hold alone lets the last one return as the next wake fires", "a repo or deep submit never needs this"):
+assert "it and its round trip would end inside" not in skill and "it and its round trip would end inside" not in session_text
+for phrase in ("the one exception is a payload submit", "inside that wake call wait_review back to back", "start another hold only if it, its round trip, and one more round trip for the handover's own calls would end inside heartbeat_s from this wake's start", "a bound that subtracts the hold alone lets the last one return as the next wake fires", "shrinks it on the slow links that need it", "a repo or deep submit never needs this"):
     assert phrase in session_text, phrase
+# The Monitor surface reads on a failed poll like the other two (found in
+# review): a fresh poll-failed file keeps the Stop hook quiet for twelve polls,
+# so without this read a review sat done and unread behind that silence.
+assert "on `poll-failed` → one\n  `get_findings`, print what it answered" in claude_bullet
+after_loop = skill.split("Every printed line wakes you.", 1)[1].split("The loop above keeps", 1)[0]
+assert "**A `poll-failed`\nwake is a wake with no answer, and the wake rule applies: call `get_findings`\nonce" in after_loop
+assert "this surface must not be the one that only prints" in after_loop
+# The cron fallback follows the body's cadence too (found in review): a payload
+# submit's next_poll_after_s is under a minute and its file request is held open
+# for minutes, so the job runs every minute there and at interval_s otherwise.
+for phrase in ("`next_poll_after_s` under a minute", "every minute, the\n  tightest cron allows (`* * * * *`)", "otherwise `interval_s`", "one job at one cadence for the whole hunt"):
+    assert phrase in claude_bullet, phrase
 # No literal hold or cadence on either surface: the server caps the hold and
 # names the cadence, and a number written here is the one an agent obeys when
 # the two disagree (measured: the tool's 45 beat the field's 240).

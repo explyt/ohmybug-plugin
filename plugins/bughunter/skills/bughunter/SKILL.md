@@ -79,12 +79,15 @@ This is a required client action, not a reminder to do later:
   call `wait_review` back to back (each answer is a reading; it returns the
   moment `needs_files` shows) and stop when the answer is `done`, `failed` or
   `needs_files` — or before the next wake is due: start another hold only if
-  it and its round trip would end inside `heartbeat_s` from this wake's start.
-  The line must land by then, and what is left before `interval_s` is the
-  handover — the status line, the file answer, the delete — so the next wake
-  finds the thread free. A hold costs the server's cap plus the call's round
-  trip; a bound that subtracts the hold alone lets the last one return exactly
-  as the next wake fires. A repo or deep submit never needs this. A
+  it, its round trip, and one more round trip for the handover's own calls
+  would end inside `heartbeat_s` from this wake's start. The line must land by
+  then, and what is left before `interval_s` is the handover — the status line,
+  the delete — so the next wake finds the thread free. A hold costs the
+  server's cap plus the call's round trip, and the handover's calls are round
+  trips too: a bound that subtracts the hold alone lets the last one return
+  exactly as the next wake fires, and one that leaves the handover to the
+  `heartbeat_s`–`interval_s` gap shrinks it on exactly the slow links whose
+  calls need it. A repo or deep submit never needs this. A
   deep hunt runs about an hour: its wake polls `status_url` once and reports
   that, which is the read `wake_rule` names for a deep hunt. That body
   keys a file request off `awaiting_client_files`/`files_requested`, not off its
@@ -163,12 +166,18 @@ This is a required client action, not a reminder to do later:
   **A heartbeat wake is answered with that one line and nothing else** –
   `bughunt · fast · running` – no `get_findings`, no file reads, no summary. On
   `needs-files` → files first (§3a); on `done`/`failed` → `get_findings`, then
-  `TaskStop` the monitor if it did not exit. Between wakes the loop is the
+  `TaskStop` the monitor if it did not exit; on `poll-failed` → one
+  `get_findings`, print what it answered (the status URL failed, the review did
+  not stop). Between wakes the loop is the
   watch: the Stop hook sees the file it writes (`~/.ohmybug/watch/<review_id>`)
   and stays quiet while it is fresh, so a turn may end on a running hunt — do
   not add a foreground `get_findings` beside an armed monitor.
-  No `Monitor` tool in this harness? Fall back to `CronCreate` at the
-  `interval_s` cadence, off the :00/:30 marks (240 s → `3-59/4 * * * *`) with the prompt "bughunt
+  No `Monitor` tool in this harness? Fall back to `CronCreate` at the cadence
+  the status body names: `next_poll_after_s` under a minute — a payload submit,
+  whose file request is held open for minutes — means every minute, the
+  tightest cron allows (`* * * * *`); otherwise `interval_s`, off the :00/:30
+  marks (240 s → `3-59/4 * * * *`). The server fixes `next_poll_after_s` per
+  submit, so one job at one cadence for the whole hunt. Prompt: "bughunt
   heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
   line for what THAT read answered; if it answered nothing, call `get_findings`
   once and print what that answered, and only if THAT fails too print `bughunt ·
@@ -547,7 +556,15 @@ waiting for files, tell the user, and arm a fresh monitor unless the watch
 retired on age — that cap ends the watching, and the user takes it from there. `poll-failed` lands on the heartbeat clock, never per poll: a
 dead endpoint shows up as `poll-failed` within one heartbeat instead of once per
 poll, and a flood stops the watch. The first good poll after it prints
-`running` once (recovery), then the clock takes over again.
+`running` once (recovery), then the clock takes over again. **A `poll-failed`
+wake is a wake with no answer, and the wake rule applies: call `get_findings`
+once — the MCP transport is a different path from the status URL — and print
+what THAT answered.** `done` there is `done`: read the findings, `TaskStop` the
+monitor. The loop keeps writing the watch file through an outage because the
+watcher is alive, so the Stop hook stays quiet for as long as the loop tolerates
+failures (12 polls); this read is what keeps a review from sitting `done` and
+unread behind that silence — the Codex wake and the cron job already read on a
+failed poll, and this surface must not be the one that only prints.
 
 The loop above keeps the five properties below, and each line of it is
 there for one of them – read it before you shorten it. What has failed in
