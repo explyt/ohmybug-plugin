@@ -2057,6 +2057,14 @@ case $said in
   *) printf 'FAIL nudge: the watch-file sentence is not scoped per client: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
+# And it does not read every nag as a dead watcher (#1029 f1): the loop's last
+# write on done/failed/needs-files IS that exit word, so a nag beside a fresh
+# file is as often "read this now" as "re-arm" — the order is read first.
+case $said in
+  *'dead OR it exited on a state to read now'*'read first; re-arm only if the review is still running or waiting for files'*) ;;
+  *) printf 'FAIL nudge: a nag beside an exited watcher still reads as "it has died: re-arm": %s\n' "$said"
+     fails=$((fails + 1)) ;;
+esac
 
 # --- whose hunt is it -------------------------------------------------------
 # Ten foreign runs woke non-owners in one shift, one of them seven times, and a

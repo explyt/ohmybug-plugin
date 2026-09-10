@@ -51,8 +51,12 @@ assert "while :" in monitor_code
 import re
 assert monitor_code.count('sleep "$every"') == 2 and not re.search(r"sleep\s+\d", monitor_code)
 assert "seq " not in monitor_code
-assert "\nevery=<interval_s> #" in monitor_code and "\nbeat=$every " in monitor_code
-assert 'n=$(num next_poll_after_s); [ -n "$n" ] && every=$n' in monitor_code
+# Seeded from the submit response's own watcher cadence (#1029 f2): the seed
+# used to be interval_s, so a first poll that failed slept 240 s on a payload
+# row whose watcher is 45 s. And the body's number takes over only when it is
+# a positive one (#1029 f3): `every` is the loop's only throttle.
+assert "\nevery=<next_poll_after_s> #" in monitor_code and "\nbeat=<heartbeat_s> " in monitor_code
+assert 'n=$(num next_poll_after_s); [ -n "$n" ] && [ "$n" -gt 0 ] && every=$n' in monitor_code
 assert 'n=$(num heartbeat_s); [ -n "$n" ] && beat=$n' in monitor_code
 assert not re.search(r"\b(45|90|100|180|225|240)\b", re.sub(r"#.*", "", monitor_code).replace("10800", "")), "a cadence literal in the loop"
 assert "--max-time 15 " in monitor_code
@@ -150,10 +154,16 @@ assert zsh, "zsh is required: the loop must be executed under the shell Claude C
 # `needs-files`.
 loop_src = monitor_code.split("\n", 1)[1]
 assert not loop_src.startswith("bash"), "fence info string leaked into the executed loop"
-# The three placeholders the agent substitutes, and only those: a fourth is a
+# The four placeholders the agent substitutes, and only those: a fifth is a
 # number the agent types, and the numbers are the server's.
-assert set(re.findall(r"<[a-z_]+>", loop_src)) == {"<status_url>", "<review_id>", "<interval_s>"}, set(re.findall(r"<[a-z_]+>", loop_src))
-def armed(src): return src.replace("<status_url>", "http://x/").replace("<review_id>", "rev_test").replace("<interval_s>", "240")
+assert set(re.findall(r"<[a-z_]+>", loop_src)) == {"<status_url>", "<review_id>", "<next_poll_after_s>", "<heartbeat_s>"}, set(re.findall(r"<[a-z_]+>", loop_src))
+# ...and the sentence under the fence that tells the agent what to substitute
+# names the same four (#1029 f1 of PR 74): it still said three, with
+# `<interval_s>`, so a literal follower left `every=<next_poll_after_s>` in place
+# and the loop died on a parse error, the hunt unwatched.
+assert "Substitute the four placeholders from the submit response — `<status_url>`,\n`<review_id>`, `<next_poll_after_s>` (its `monitor.interval_s` on an older\nserver that has none) and `<heartbeat_s>` from its `monitor` — and nothing else" in skill
+assert "the submit response's `next_poll_after_s` seeds the\n  first sleep" in skill and "`monitor.interval_s` seeds the\n  first sleep" not in skill
+def armed(src): return src.replace("<status_url>", "http://x/").replace("<review_id>", "rev_test").replace("<next_poll_after_s>", "240").replace("<heartbeat_s>", "225")
 def shims(d, curl_body):
     # The shim notes whether the watch file already existed when it was called:
     # the file must be there before the first poll, not one poll later.
@@ -188,6 +198,19 @@ assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 assert slept == ["45"] * 5, slept
 assert watch == "done 240\n", watch
 assert r.stdout.splitlines() == ["bughunt · fast · running"] * 3 + ["bughunt · fast · done"], r.stdout
+# A body whose next_poll_after_s is 0 must not become the cadence (#1029 f3):
+# `every` is the only throttle, and a zero there is a flood against the status
+# door. The seed stays — 240 here — and the watch file says so.
+with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '')
+    open(f"{d}/curl", "w").write(f'#!/bin/sh\nn=$(cat "{d}/polls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "{d}/polls"\n'
+        'if [ "$n" -le 2 ]; then printf \'%s\' \'{"status":"running","monitor":{"interval_s":240,"heartbeat_s":225},"next_poll_after_s":0}\'; else printf \'%s\' \'{"status":"done","next_poll_after_s":0}\'; fi\n'); os.chmod(f"{d}/curl", 0o755)
+    r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env=env)
+    slept = open(f"{d}/slept").read().split()
+    watch = open(f"{d}/.ohmybug/watch/rev_test").read()
+assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+assert slept == ["240"] * 2, slept
+assert watch == "done 240\n", watch
 # The failed-poll path, executed: a dead endpoint. The curl shim honours `-f`
 # (exit 22 on an HTTP error, else a 404 page with exit 0 – what dropping `-f`
 # or piping curl's output would see) and `date` advances 60 s per call, so the
@@ -234,7 +257,7 @@ assert "- **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on e
 assert "`next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in props
 assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "`next_poll_after_s`", "at least every `monitor.heartbeat_s`", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after `<fail_cap>` consecutive poll failures (3 for a job at\n  `interval_s`, 12 for one every minute", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
+for phrase in ("`Monitor` tool", "`next_poll_after_s`", "on the `monitor.heartbeat_s` clock", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after `<fail_cap>` consecutive poll failures (3 for a job at\n  `interval_s`, 12 for one every minute", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 # No cadence literal in the bullet either (#67): the 240 in the cron example is
@@ -319,7 +342,7 @@ assert "this surface must not be the one that only prints" in after_loop
 # The cron fallback follows the body's cadence too (found in review): a payload
 # submit's next_poll_after_s is under a minute and its file request is held open
 # for minutes, so the job runs every minute there and at interval_s otherwise.
-for phrase in ("so curl `status_url` ONCE before creating the job", "`next_poll_after_s` is on the\n  status body only", "Under a minute", "every minute, the tightest cron allows\n  (`* * * * *`)", "otherwise `interval_s`", "one\n  job at one cadence for the whole hunt", "3 consecutive failures at `interval_s`, 12 at every minute"):
+for phrase in ("the submit response names — `next_poll_after_s`", "an older server's submit\n  answer carries only `interval_s`: then curl `status_url` ONCE before creating\n  the job", "Under a minute", "every minute, the tightest cron\n  allows (`* * * * *`)", "otherwise `interval_s`", "one\n  job at one cadence for the whole hunt", "3 consecutive failures at `interval_s`, 12 at every minute"):
     assert phrase in claude_bullet, phrase
 # The placeholders the cron prompt carries: the fail cap is one of them now, so
 # a job created every minute is not retired by a three-minute blip.
@@ -474,7 +497,10 @@ assert "15-second gap" not in skill and "handover slack" not in skill
 # to back only for a payload submit, where the hold is the watcher a file
 # request needs.
 fallback = skill.split("If the runtime cannot create its monitor,", 1)[1].split("\n\nIf the MCP server is missing", 1)[0]
-for phrase in ("`done`, `failed` or `needs_files`", "held open for minutes only", "the waiting is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed", "`retry_after_s`", "sleep <retry_after_s>", "Do not loop `wait_review` back to back to fill the gap", "The one place the hold IS the watcher is a payload submit"):
+# Every read names its sleep (#1029 f5): `retry_after_s` comes only from a
+# timed-out wait_review and `next_poll_after_s` only from the status body, so
+# a get_findings read has to be told where its cadence is.
+for phrase in ("`done`, `failed` or `needs_files`", "held open for minutes only", "the waiting is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed", "`retry_after_s`\nfrom a timed-out `wait_review`, or `next_poll_after_s` from the `status_url` body", "a `get_findings` answer carries neither", "sleep <retry_after_s>", "Do not loop `wait_review` back to back to fill the gap", "The one place the hold IS the watcher is a payload submit"):
     assert phrase in fallback, phrase
 # The hand-wait read of status_url sees a file request in the body's FLAGS, never
 # in its status word — the same rule the Monitor loop and the deep wake carry.
@@ -486,6 +512,9 @@ assert "one call for a deep one" not in fallback
 assert "poll_after_s=30" not in fallback and "timeout_s=45" not in fallback
 # The last-resort paragraph after the loop waits at the same cadence.
 assert "No background tasks in your harness? Then wait at the server's cadence" in skill
+# ...and names the sleep for every read there too (#1029 f5).
+last_resort = skill.split("No background tasks in your harness?", 1)[1].split("\n\n", 1)[0]
+assert "sleep `retry_after_s` from a timed-out `wait_review`\nor `next_poll_after_s` from the `status_url` body (a `get_findings` answer\ncarries neither)" in last_resort, last_resort
 assert "every 45-60\nseconds" not in skill
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})
