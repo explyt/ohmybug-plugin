@@ -108,10 +108,12 @@ This is a required client action, not a reminder to do later:
   - **The age cap is an instant, not a duration.** At the submit compute
     `retire_at` = submit time + 180 min and write it into the prompt as an ISO
     timestamp — the SAME instant into every replacement heartbeat, so the cap
-    bounds the review, not each job in turn: "If the current time is past `<retire_at>`: print `bughunt ·
-    <mode> · watch-retired`, call `get_findings` once, report what it
-    answered — `still running` when it is, so the user knows the watch ended
-    on a live hunt — then delete this automation." That is the age-cap
+    bounds the review, not each job in turn: "If the current time is past
+    `<retire_at>`: print `bughunt · <mode> · watch-retired`, delete this
+    automation, then call `get_findings` once and report what it answered —
+    `still running` when it is, so the user knows the watch ended on a live
+    hunt." Delete BEFORE the read: a delete that waits on a tool call is lost
+    when that call fails, and the next wake fails the same way forever. That is the age-cap
     retirement above with a clock in it, not a verdict: 180 min is the hunt's
     budget plus queue time, so a queued deep hunt can still be live there. A
     clock the model compares beats an instruction it can skip; any heartbeat

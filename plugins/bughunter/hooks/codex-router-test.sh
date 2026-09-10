@@ -261,7 +261,9 @@ for phrase in (
     "`retire_at` = submit time + 180 min", "the SAME instant into every replacement heartbeat",
     # A retirement with a clock in it, not a verdict: 180 min is budget plus
     # queue, so a queued deep hunt can still be live there (the wake must say so).
-    "print `bughunt ·\n    <mode> · watch-retired`, call `get_findings` once, report what it\n    answered — `still running` when it is",
+    # Delete BEFORE the read: a delete behind a tool call is lost when it fails.
+    "watch-retired`, delete this\n    automation, then call `get_findings` once and report what it answered —\n    `still running` when it is",
+    "Delete BEFORE the read",
     "retired at wake regardless of what the wake\n    believes",
     # findings=N on the TERMINAL line only; the enumeration carries that form.
     # Keyed on the wake's READ, not a tool call: a deep wake polls status_url.
@@ -276,7 +278,8 @@ for phrase in (
 assert "terminal by construction" not in skill, "the age cap is a retirement, not a verdict about the review"
 assert "`bughunt · fast · done · findings=N`" in codex_bullet, "the enumerated lines must carry the terminal form"
 for phrase in (
-    "retire_at = submit time + 180 min", "the same instant into every replacement heartbeat", "print bughunt · <mode> · watch-retired, call get_findings once, report what it answered (still running when it is",
+    "retire_at = submit time + 180 min", "the same instant into every replacement heartbeat", "print bughunt · <mode> · watch-retired, delete this automation, then call get_findings once and report what it answered (still running when it is",
+    "delete before the read",
     "whatever the wake believes",
     "on done print findings=N from that wake's read (wait_review, get_findings or the status_url body", "non-terminal wakes keep the enumerated lines",
     "no answer from a wake's read means the only line allowed is bughunt · <mode> · poll-failed", "done for over ten minutes",
