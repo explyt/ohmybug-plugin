@@ -798,8 +798,8 @@ disproving its own report. If a charge looks wrong, quote the receipt.
 Fix the confirmed bugs as part of the normal workflow. Findings include a
 suggested fix; treat it as a hint, not gospel.
 
-**Three hunts in a row that each confirm a major end the loop.** Do not offer a
-fourth on the same change. Two ways forward, and only two: ship it dark – the
+**Three hunts in a row that each confirm a major end the fix-and-re-hunt
+loop.** Two ways forward, and only two: ship it dark – the
 feature behind a flag that defaults to off, the confirmed majors in the dark
 code filed as a debt ticket that names the cause – or split it – merge the part
 that held, and open a ticket for the rest that starts from the cause, not from
