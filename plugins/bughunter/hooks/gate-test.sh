@@ -292,7 +292,7 @@ M=$(ohmybug_marker_path)
 # directory hangs off the HUNT dir, not off the marker path, so the old
 # three-path incantation left live pending records between sections — and a
 # stale one makes the next section read as "a hunt is running here".
-reset_state() { rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)" "$(ohmybug_hunt_dir).pending" "$(ohmybug_hunt_dir).promoted"; }
+reset_state() { rm -rf "$M" "$M.pending" "$(ohmybug_hunt_dir)" "$(ohmybug_hunt_dir).pending" "$(ohmybug_hunt_dir).promoted" "$HOME/.ohmybug/watch"; }
 # What a PostToolUse hook may say to the agent in BOTH clients: JSON on stdout,
 # exit 0, `hookSpecificOutput.additionalContext`. Exit 2 with stderr is read by
 # Codex as "replace the tool result with this", so a diagnostic there would
@@ -2047,6 +2047,16 @@ case $said in
   *run_in_background*) printf 'FAIL nudge points at run_in_background again: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
+# The watch-file sentence is scoped to the client that writes the file. This hook
+# runs on Codex too (hooks.json is in both manifests), where the heartbeat is an
+# automation and nothing writes ~/.ohmybug/watch — so an unscoped "it has died:
+# re-arm it" was false on every Codex turn and named the duplicate heartbeat the
+# skill forbids (found in review).
+case $said in
+  *'On Claude Code the skill'\''s loop writes'*'On Codex the heartbeat leaves no file here'*'do not arm a second one'*) ;;
+  *) printf 'FAIL nudge: the watch-file sentence is not scoped per client: %s\n' "$said"
+     fails=$((fails + 1)) ;;
+esac
 
 # --- whose hunt is it -------------------------------------------------------
 # Ten foreign runs woke non-owners in one shift, one of them seven times, and a
@@ -2125,6 +2135,120 @@ reset_state
 post submit_review 0 rev_nosession content
 rc=$(nsrc 0 D4)
 [ "$rc" = 2 ] || { printf 'FAIL nudge: a record with no owner was dropped instead of shown (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+
+# --- a watched hunt is not an unread one (#67) ----------------------------------
+# The skill's monitor loop writes `<status> <poll_s>` into ~/.ohmybug/watch/<rev>
+# on every poll. Measured before this: the nudge fired at the end of every turn
+# while a watcher was armed, and the agent added a foreground get_findings every
+# 2–5 min on top of it — twice the reads the design allows. A fresh `running`
+# file is the watcher's liveness signal; the nudge stands down on it and speaks
+# only when the file is stale (the watcher died) or names a state that must be
+# read now.
+W="$HOME/.ohmybug/watch"
+reset_state
+sess submit_review 0 rev_watched A1
+mkdir -p "$W"; printf 'running 240\n' > "$W/rev_watched"
+wsaid=$(nsess 0 A1)
+case $wsaid in
+  *'1 watched hunt(s)'*) ;;
+  *) printf 'FAIL nudge: an armed watch was not acknowledged once: %s\n' "$wsaid"; fails=$((fails + 1)) ;;
+esac
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a hunt with a fresh watch still held the turn (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# ...and the line lands once per ten minutes, not once per turn: it is for the
+# user, and a line at the end of every turn is the noise this section removes.
+wsaid=$(nsess 0 A1)
+[ -z "$wsaid" ] || { printf 'FAIL nudge: the armed-watch line repeats every turn: %s\n' "$wsaid"
+                     fails=$((fails + 1)); }
+# The freshness bound is the poll cadence plus a minute, read from the file: a
+# watcher that stopped touching it is dead, and dead reads as unread. Dropping the
+# mtime test keeps a stale file silent forever — this row reddens.
+touch -t 202001010000 "$W/rev_watched"
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: a stale watch file kept the nudge silent (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# ...and the bound has a SIZE, pinned on both sides of it: `running 240` is armed
+# at 3 min and dead at 7 min. Without these two rows the ceil-minutes arithmetic
+# could be off by a factor of sixty (minutes for seconds) and the year-2020 row
+# above would still be red on cue — a hook silent for six hours after its
+# watcher died is the header incident again.
+age() { python3 -c 'import os,sys,time; t=time.time()-int(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
+age "$W/rev_watched" 180
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a 3-minute-old watch at a 240 s cadence was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+age "$W/rev_watched" 420
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: a 7-minute-old watch at a 240 s cadence was read as armed (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# ...and inside the grace band: between writes the file is cadence + the poll's
+# own duration old (up to 15 s of curl), so a 250 s old file on a 240 s cadence
+# is a healthy watcher mid-poll. Without this row `(wiv + 59) / 60` — the bound
+# collapsed to the cadence itself — kept every other row green while the hook
+# read a live watcher as dead for the length of each poll (found in review).
+printf 'running 240\n' > "$W/rev_watched"; age "$W/rev_watched" 250
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a watch mid-poll (250 s old at a 240 s cadence) was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# The cadence in the file moves the bound: at 45 s the same 3-minute-old file is
+# dead. A hook that ignores the field and uses its default alone is red here.
+printf 'running 45\n' > "$W/rev_watched"; age "$W/rev_watched" 180
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: a 3-minute-old watch at a 45 s cadence was read as armed (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# A failed poll is the endpoint's failure, not the watcher's: the loop writes
+# `poll-failed <cadence>` then and keeps going for twelve of them, so a fresh
+# `poll-failed` file is an armed watch too. Read as dead, the hook ordered a
+# second monitor over a live one for the length of a blip (found in review).
+printf 'poll-failed 240\n' > "$W/rev_watched"
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a fresh poll-failed watch was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# The loop writes the server's status word verbatim, so the alive test cannot
+# be a whitelist: `awaiting_upload` (an upload ticket before its payload lands)
+# is a fresh file from a live watcher too, and a two-word whitelist read it as
+# dead and ordered a second monitor (found in review). Dead is stale, or one of
+# the words the loop writes as it EXITS — nothing else.
+printf 'awaiting_upload 240\n' > "$W/rev_watched"
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a fresh watch with an unlisted live word was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# A terminal word in a fresh file is the watcher's last write before it exited:
+# the review is over and nobody has read it — exactly the nag's case. The same
+# for a file request, which the reviewers hold open for minutes only.
+for word in done failed needs-files; do
+  printf '%s 240\n' "$word" > "$W/rev_watched"
+  rc=$(nsrc 0 A1)
+  [ "$rc" = 2 ] || { printf 'FAIL nudge: a watch file reading %s kept the nudge silent (rc=%s)\n' "$word" "$rc"
+                     fails=$((fails + 1)); }
+done
+# A second hunt of mine with no watch file is named while the watched one is not.
+printf 'running 240\n' > "$W/rev_watched"
+sess submit_review 0 rev_bare A1
+msaid=$(nsess 0 A1)
+case $msaid in
+  *'read: rev_bare '*|*'read: rev_bare') ;;
+  *) printf 'FAIL nudge: the unwatched hunt was not the one named: %s\n' "$msaid"; fails=$((fails + 1)) ;;
+esac
+case $msaid in
+  *rev_watched*) printf 'FAIL nudge: the watched hunt was named as unread: %s\n' "$msaid"
+                 fails=$((fails + 1)) ;;
+esac
+# A file whose cadence field is not a number falls back to the default bound
+# rather than making the hook stand down or crash on arithmetic.
+printf 'running soon\n' > "$W/rev_watched"
+rm -f "$(ohmybug_hunt_dir).pending/rev_bare"
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a non-numeric cadence in the watch file broke the stand-down (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# ...and that default has the size of the contract's interval, not more: the
+# same file at 7 min is dead. A default of an hour would keep this row green
+# only by keeping the hook silent an hour after its watcher died.
+age "$W/rev_watched" 420
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: the default cadence bound let a 7-minute-old watch pass as armed (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
 
 # Fail-open is the load-bearing property of a hook that runs at the end of every
