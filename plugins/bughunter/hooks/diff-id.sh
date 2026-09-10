@@ -176,46 +176,62 @@ ohmybug_sig_consistent() {
 # pair is what gets hashed. A comment edit leaves both stripped sides as they
 # were; a code edit does not.
 #
+# What `git diff` carries that a file's text does not is put back by hand,
+# because the two sibling keys hash the diff text and see it while this one
+# rebuilds from contents: the file MODE heads each side (`chmod +x` after a
+# hunt moved diff id and sig: and left this key alone), and the file list is
+# read NUL-separated from `--raw -z` under core.quotePath=false, so a path git
+# would C-quote ("caf\303\251.ts") is a path here and not a string that opens
+# nothing — a file that opens nothing on both sides simply fell out of the key.
+# A side the record says exists but that cannot be read is exit 1, never an
+# empty side: the loop refuses rather than hashes around a file it lost.
+#
 # exit 0 + a hash -> this is the diff with comments taken out
 # exit 0 + nothing -> the stripped diff is empty. NOT a free pass: unlike
 #                     ohmybug_sig_id's empty answer this authorises nothing —
 #                     the caller treats it as "no key". A comment-only branch
 #                     nobody hunted still needs its hunt (doubt = code).
-# exit 1           -> could not tell (no base, no python3, git or diff failed)
+# exit 1           -> could not tell (no base, no python3, git or diff failed,
+#                     a listed side unreadable)
 # `--no-renames`: a rename is a deletion plus an addition here, so the old
 # path's stripped content is compared too, whatever git's rename heuristics say.
 ohmybug_cmt_id() {
-  local base root files f a b out='' d rc strip
+  local base root list meta f oldm newm a b out='' d rc strip
   [ "${OHMYBUG_HUNT_ALL:-0}" = "1" ] && { ohmybug_diff_id; return $?; }
   command -v python3 >/dev/null 2>&1 || return 1
   strip="$(dirname "${BASH_SOURCE[0]}")/strip-comments.py"
   [ -f "$strip" ] || return 1
   base=$(ohmybug_base) || return 1
   root=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
+  list=$(mktemp) && a=$(mktemp) && b=$(mktemp) || { rm -f "${list:-}" "${a:-}"; return 1; }
   # shellcheck disable=SC2086
-  files=$(git -C "$root" diff --no-renames --name-only "$base" -- $OHMYBUG_SKIP_GLOBS 2>/dev/null) || return 1
-  [ -n "$files" ] || return 0
-  a=$(mktemp) && b=$(mktemp) || return 1
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    if git -C "$root" cat-file -e "$base:$f" 2>/dev/null; then
-      git -C "$root" show "$base:$f" 2>/dev/null | python3 "$strip" "$f" > "$a" || { rm -f "$a" "$b"; return 1; }
+  if ! git -C "$root" -c core.quotePath=false diff -z --raw --no-renames "$base" -- $OHMYBUG_SKIP_GLOBS > "$list" 2>/dev/null; then
+    rm -f "$list" "$a" "$b"; return 1
+  fi
+  if [ ! -s "$list" ]; then rm -f "$list" "$a" "$b"; return 0; fi
+  # Records alternate: ":<old mode> <new mode> <old sha> <new sha> <status>" NUL path NUL.
+  while IFS= read -r -d '' meta && IFS= read -r -d '' f; do
+    IFS=' ' read -r oldm newm _ <<<"${meta#:}"
+    if [ "$oldm" != 000000 ]; then
+      # Two steps, not a pipe: a pipe's status is python3's, and a blob git
+      # could not show would strip to an empty side instead of refusing.
+      git -C "$root" show "$base:$f" > "$list.blob" 2>/dev/null || { rm -f "$list" "$list.blob" "$a" "$b"; return 1; }
+      { printf 'mode %s\n' "$oldm"; python3 "$strip" "$f" < "$list.blob"; } > "$a" || { rm -f "$list" "$list.blob" "$a" "$b"; return 1; }
     else
       : > "$a"
     fi
-    if [ -f "$root/$f" ]; then
-      python3 "$strip" "$f" < "$root/$f" > "$b" || { rm -f "$a" "$b"; return 1; }
+    if [ "$newm" != 000000 ]; then
+      [ -e "$root/$f" ] || { rm -f "$list" "$a" "$b"; return 1; }
+      { printf 'mode %s\n' "$newm"; python3 "$strip" "$f" < "$root/$f"; } > "$b" || { rm -f "$list" "$a" "$b"; return 1; }
     else
       : > "$b"
     fi
     d=$(diff -u -L "a/$f" -L "b/$f" "$a" "$b"); rc=$?
-    [ "$rc" -le 1 ] || { rm -f "$a" "$b"; return 1; }
+    [ "$rc" -le 1 ] || { rm -f "$list" "$a" "$b"; return 1; }
     [ -n "$d" ] && out="$out$d
 "
-  done <<EOF_F
-$files
-EOF_F
-  rm -f "$a" "$b"
+  done < "$list"
+  rm -f "$list" "$list.blob" "$a" "$b"
   [ -n "$out" ] || return 0
   printf '%s' "$out" | shasum -a 256 | cut -d' ' -f1
 }

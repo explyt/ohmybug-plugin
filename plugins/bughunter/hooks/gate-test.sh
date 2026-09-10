@@ -1568,6 +1568,25 @@ want=$(printf '%b' 'val s = """\n// raw\n"""\n')
 # An extension the stripper does not know is not stripped at all: no rule is the strict rule.
 got=$(strip_out f.rs '// x\nfn main() {}\n')
 [ "$got" = "$(printf '// x\nfn main() {}')" ] || { printf 'FAIL strip: an unknown language was stripped: %s\n' "$got"; fails=$((fails + 1)); }
+# ...and neither is JSX: text there can begin with `//`, and only a parser knows.
+got=$(strip_out f.tsx '// x\nconst a = <p>//not a comment</p>\n')
+[ "$got" = "$(printf '// x\nconst a = <p>//not a comment</p>')" ] || { printf 'FAIL strip: tsx was stripped: %s\n' "$got"; fails=$((fails + 1)); }
+# Directive comments steer a tool and are code: they stay on every language path.
+got=$(strip_out f.ts '// @ts-expect-error\n// plain\n/* eslint-disable */\nx()\n')
+[ "$got" = "$(printf '// @ts-expect-error\n/* eslint-disable */\nx()')" ] || { printf 'FAIL strip: a ts directive was dropped: %s\n' "$got"; fails=$((fails + 1)); }
+got=$(strip_out f.sh '# shellcheck disable=SC2086\n# plain\nx\n')
+[ "$got" = "$(printf '# shellcheck disable=SC2086\nx')" ] || { printf 'FAIL strip: a shellcheck directive was dropped: %s\n' "$got"; fails=$((fails + 1)); }
+got=$(strip_out f.py '#!/usr/bin/env python3\n# -*- coding: latin-1 -*-\n# type: ignore\n# plain\nx = 1\n')
+[ "$got" = "$(printf '#!/usr/bin/env python3\n# -*- coding: latin-1 -*-\n# type: ignore\nx = 1')" ] || { printf 'FAIL strip: a python directive or coding cookie was dropped: %s\n' "$got"; fails=$((fails + 1)); }
+# A `/*` after code on its line is not trusted to open a block (a regex class,
+# text): the line stays and the file's tail is not swallowed.
+got=$(strip_out f.ts 'const RE = /[/*]/\nexport function boom() { return secret }\n// gone\nexport const z = 1\n')
+[ "$got" = "$(printf 'const RE = /[/*]/\nexport function boom() { return secret }\nexport const z = 1')" ] || { printf 'FAIL strip: a mid-line /* swallowed the file tail: %s\n' "$got"; fails=$((fails + 1)); }
+# Shell: a backslash-quoted heredoc word, two heredocs on one line, and `#`
+# inside a word — each keeps the lines it used to lose.
+got=$(strip_out f.sh 'cat <<\\EOF\n# body\nEOF\ncat <<A <<B\n# a\nA\n# b\nB\necho abc#def "text\n# in string\n"\n# plain\n')
+want=$(printf '%b' 'cat <<\\EOF\n# body\nEOF\ncat <<A <<B\n# a\nA\n# b\nB\necho abc#def "text\n# in string\n"')
+[ "$got" = "$want" ] || { printf 'FAIL strip sh edges: got\n%s\n--- want\n%s\n' "$got" "$want"; fails=$((fails + 1)); }
 
 CREPO=$(mktemp -d)/repo
 mkdir -p "$CREPO/src" && (
@@ -1603,6 +1622,21 @@ printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt ob
 [ "$(cmt_in "$CREPO")" = "rc:0 cmt:" ] || { printf 'FAIL cmt: a comment-only branch should be empty with rc 0, got %s\n' "$(cmt_in "$CREPO")"; fails=$((fails + 1)); }
 rc=$(mk "$V" "$CREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL gate: an unhunted comment-only branch merged on an empty cmt key (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+# What `git diff` carries that file text does not is in the key too: a path git
+# would C-quote, and a file mode. Both moved diff id and sig: and left this key
+# alone, so the gate said "only comment lines" over code and over a chmod.
+(cd "$CREPO" && git checkout -q src/f.ts && printf 'export const c = 1\n' > 'src/café.ts' && printf '#!/bin/sh\necho hi\n' > src/run.sh && git add 'src/café.ts' src/run.sh && git -c user.email=t@t -c user.name=t commit -qm more >/dev/null && git update-ref refs/remotes/origin/main HEAD)
+(cd "$CREPO" && printf 'export const a = 2\n// x\n' > src/f.ts && printf 'export const c = 2\n' > 'src/café.ts')
+Q1=$(cmt_in "$CREPO")
+case "$Q1" in "rc:0 cmt:"[0-9a-f]*) ;; *) printf 'FAIL cmt: no key with a quoted path in the diff, got %s\n' "$Q1"; fails=$((fails + 1)) ;; esac
+printf 'export const c = 999; dropTables()\n' > "$CREPO/src/café.ts"
+[ "$(cmt_in "$CREPO")" != "$Q1" ] || { printf 'FAIL cmt: code in a file whose path git quotes did not move the key\n'; fails=$((fails + 1)); }
+printf 'export const c = 2\n' > "$CREPO/src/café.ts"
+chmod +x "$CREPO/src/run.sh"
+[ "$(cmt_in "$CREPO")" != "$Q1" ] || { printf 'FAIL cmt: a mode change did not move the key\n'; fails=$((fails + 1)); }
+chmod -x "$CREPO/src/run.sh"
+[ "$(cmt_in "$CREPO")" = "$Q1" ] || { printf 'FAIL cmt: control — the key did not return once the mode did\n'; fails=$((fails + 1)); }
+(cd "$CREPO" && git checkout -q -- . && git reset -q --hard HEAD~1 && git update-ref refs/remotes/origin/main HEAD && printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n// in template\n`\n' > src/f.ts)
 # Without python3 the key cannot be computed: exit 1, and the gate still judges by the other keys.
 got=$(cd "$CREPO" && bash -c "python3() { return 127; }; . '$G/diff-id.sh'; c=\$(ohmybug_cmt_id 2>/dev/null); echo \"rc:\$? cmt:\$c\"")
 [ "$got" = "rc:1 cmt:" ] || { printf 'FAIL cmt: no python3 must be exit 1, got %s\n' "$got"; fails=$((fails + 1)); }

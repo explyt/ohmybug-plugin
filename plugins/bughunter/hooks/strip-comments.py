@@ -16,10 +16,31 @@ ships, and stripping it would let a code edit merge unhunted. So each scanner
 tracks the multi-line constructs its language has, and when it cannot tell, it
 keeps the line. Errors in the other direction — keeping a real comment — only
 cost a re-hunt, never an unreviewed merge.
+
+Two more lines that look like prose and are not: a DIRECTIVE comment steers a
+tool (`// @ts-expect-error`, `# shellcheck disable=`, `# noqa`, a PEP 263
+coding cookie…) and stays as code; and a block comment opens only when nothing
+but whitespace precedes it on its line — a `/*` after code (a regex class
+`/[/*]/`, JSX text) is not trusted to be a comment, so the line stays and no
+block state is entered.
 """
+import re
 import sys
 import tokenize
 import io
+
+# A comment whose first word is a tool directive. Deleting or editing one
+# changes what compiles, lints or decodes, so it is code for this key.
+DIRECTIVE = re.compile(
+    r"^\s*(?:#|//|/\*+|\*)\s*(?:"
+    r"@ts-|eslint|prettier-ignore|biome-ignore|shellcheck|noqa\b|type:|pragma\b|"
+    r"pyright:|mypy:|ruff:|fmt:|syntax=|escape=|coding[:=]|-\*-|@formatter|"
+    r"c8\s|istanbul\s|v8\s+ignore|sourceMappingURL=|/\s*<reference\s"
+    r")", re.I)
+
+
+def is_directive(line):
+    return DIRECTIVE.match(line) is not None
 
 
 def c_family(text, tick, triple):
@@ -43,7 +64,7 @@ def c_family(text, tick, triple):
     def flush():
         nonlocal line, has_code, saw_comment
         s = "".join(line)
-        if not (saw_comment and not has_code):
+        if not (saw_comment and not has_code) or is_directive(s):
             out.append(s)
         line = []
         has_code = saw_comment = False
@@ -69,7 +90,10 @@ def c_family(text, tick, triple):
             if ch == "/" and nxt == "/" and prev != "\\":
                 stack.append(("L", 0)); saw_comment = True
                 line.append(nxt); i += 2; continue
-            if ch == "/" and nxt == "*" and prev != "\\":
+            # `/*` opens a block only when nothing but whitespace or comment
+            # precedes it on this line: mid-line it may be a regex class or
+            # JSX text, and a wrong B state would swallow the file's tail.
+            if ch == "/" and nxt == "*" and prev != "\\" and not has_code:
                 stack.append(("B", 0)); saw_comment = True
                 line.append(nxt); i += 2; continue
             if triple and text.startswith('"""', i):
@@ -129,25 +153,28 @@ def shell(text):
     out = []
     lines = text.split("\n")
     state = "CODE"          # CODE | SQ | DQ
-    heredoc = None          # (terminator, strip_tabs)
+    heredoc = None          # (terminator, strip_tabs) of the body being read
+    queue = []              # heredocs opened on one line, bodies follow in order
     continued = False
     for idx, raw in enumerate(lines):
         if heredoc is not None:
             term, strip_tabs = heredoc
             body = raw.lstrip("\t") if strip_tabs else raw
             if body == term:
-                heredoc = None
+                heredoc = queue.pop(0) if queue else None
             out.append(raw)
             continue
         stripped = raw.lstrip()
         is_comment = (state == "CODE" and not continued and stripped.startswith("#")
-                      and not (idx == 0 and stripped.startswith("#!")))
+                      and not (idx == 0 and stripped.startswith("#!"))
+                      and not is_directive(raw))
         if is_comment:
             continued = False
             continue
-        # Scan the line for quote state and a heredoc opener.
+        # Scan the line for quote state and heredoc openers — every one on the
+        # line, in order (`cat <<A <<B` reads two bodies).
         j = 0
-        pending = None
+        pending = []
         while j < len(raw):
             ch = raw[j]
             if state == "CODE":
@@ -157,24 +184,24 @@ def shell(text):
                     state = "SQ"
                 elif ch == '"':
                     state = "DQ"
-                elif ch == "#":
-                    break  # trailing comment: the rest of the line is prose
-                elif ch == "<" and raw.startswith("<<", j) and not raw.startswith("<<<", j) and pending is None:
+                elif ch == "#" and (j == 0 or raw[j - 1] in " \t;|&(){}<>"):
+                    break  # a comment starts at a word boundary only: `abc#def` is a word
+                elif ch == "<" and raw.startswith("<<", j) and not raw.startswith("<<<", j):
                     k = j + 2
                     strip_tabs = k < len(raw) and raw[k] == "-"
                     if strip_tabs:
                         k += 1
                     while k < len(raw) and raw[k] == " ":
                         k += 1
-                    q = raw[k] if k < len(raw) and raw[k] in "'\"" else ""
+                    q = raw[k] if k < len(raw) and raw[k] in "'\"\\" else ""
                     if q:
                         k += 1
                     m = k
                     while m < len(raw) and (raw[m].isalnum() or raw[m] == "_"):
                         m += 1
                     if m > k:
-                        pending = (raw[k:m], strip_tabs)
-                        j = m + (1 if q else 0); continue
+                        pending.append((raw[k:m], strip_tabs))
+                        j = m + (1 if q and q != "\\" else 0); continue
             elif state == "SQ":
                 if ch == "'":
                     state = "CODE"
@@ -185,8 +212,10 @@ def shell(text):
                     state = "CODE"
             j += 1
         continued = state == "CODE" and raw.endswith("\\") and not raw.endswith("\\\\")
-        if pending is not None and state == "CODE":
-            heredoc = pending
+        if pending and state == "CODE":
+            queue.extend(pending)
+        if queue and heredoc is None:
+            heredoc = queue.pop(0)
         out.append(raw)
     return "\n".join(out)
 
@@ -210,7 +239,9 @@ def python(text):
     lines = text.split("\n")
     out = []
     for no, raw in enumerate(lines, 1):
-        if no in comment_lines and no not in code_lines and not (no == 1 and raw.lstrip().startswith("#!")):
+        if (no in comment_lines and no not in code_lines
+                and not (no == 1 and raw.lstrip().startswith("#!"))
+                and not is_directive(raw)):
             continue
         out.append(raw)
     return "\n".join(out)
@@ -218,7 +249,10 @@ def python(text):
 
 def strip(path, text):
     ext = path.rsplit(".", 1)[-1].lower() if "." in path.rsplit("/", 1)[-1] else ""
-    if ext in ("ts", "tsx", "js", "mjs", "cjs", "jsx"):
+    # No tsx/jsx: JSX text is untrackable without a parser, and a text line
+    # that begins with `//` would be dropped as a comment. No rule is the
+    # strict rule.
+    if ext in ("ts", "js", "mjs", "cjs"):
         return c_family(text, tick=True, triple=False)
     if ext in ("kt", "kts"):
         return c_family(text, tick=False, triple=True)
