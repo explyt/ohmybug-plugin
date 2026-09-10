@@ -155,13 +155,13 @@ This is a required client action, not a reminder to do later:
   body names — `next_poll_after_s`, which the server sets per submit (the
   watcher cadence for a payload submit, whose file request is held open for
   minutes; `interval_s` for a repo or deep one, where the server serves the
-  files itself) — prints the compact line at least every `monitor.heartbeat_s`
+  files itself) — prints the compact line on the `monitor.heartbeat_s` clock
   even when nothing changed (that line is the heartbeat that keeps the cache
   warm), prints immediately on
   every review status change and exits on `done` / `failed` or on the
   `awaiting_client_files`/`files_requested` flags — that body carries a file
   request in those flags, never in its status word. Every number in the loop
-  comes from the server: the submit response's `monitor.interval_s` seeds the
+  comes from the server: the submit response's `next_poll_after_s` seeds the
   first sleep, the body's own fields take over from the first poll. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
@@ -175,11 +175,11 @@ This is a required client action, not a reminder to do later:
   and stays quiet while it is fresh, so a turn may end on a running hunt — do
   not add a foreground `get_findings` beside an armed monitor.
   No `Monitor` tool in this harness? Fall back to `CronCreate` at the cadence
-  the status body names — so curl `status_url` ONCE before creating the job:
-  the submit response carries `interval_s`, and `next_poll_after_s` is on the
-  status body only. Under a minute — a payload submit, whose file request is
-  held open for minutes — means every minute, the tightest cron allows
-  (`* * * * *`); otherwise `interval_s`, off the :00/:30 marks (240 s →
+  the submit response names — `next_poll_after_s` (an older server's submit
+  answer carries only `interval_s`: then curl `status_url` ONCE before creating
+  the job, the field is on that body). Under a minute — a payload submit, whose
+  file request is held open for minutes — means every minute, the tightest cron
+  allows (`* * * * *`); otherwise `interval_s`, off the :00/:30 marks (240 s →
   `3-59/4 * * * *`). The server fixes `next_poll_after_s` per submit, so one
   job at one cadence for the whole hunt; the failure retirement below scales
   with it — 3 consecutive failures at `interval_s`, 12 at every minute — so
@@ -226,9 +226,11 @@ print is a status a tool just answered.
 If the runtime cannot create its monitor, wait in the current turn, at the
 server's cadence: read once (`get_findings`, or one `wait_review(review_id)` —
 a `timed_out: true` answer is the reading `running` and carries
-`retry_after_s`), then sleep that long in the foreground before the next read —
-`Bash`: `sleep <retry_after_s> && curl -fsS <status_url>` with a `timeout` above
-it — and repeat until the answer is `done`, `failed` or `needs_files`, the same
+`retry_after_s`), then sleep in the foreground before the next read: `retry_after_s`
+from a timed-out `wait_review`, or `next_poll_after_s` from the `status_url` body —
+a `get_findings` answer carries neither, so after one take the cadence from a
+`status_url` read — `Bash`: `sleep <retry_after_s> && curl -fsS <status_url>` with
+a `timeout` above it — and repeat until the answer is `done`, `failed` or `needs_files`, the same
 three the heartbeat loop stops on, because `needs_files` is not terminal and the
 request behind it is held open for minutes only (§3a): send the files, then keep
 waiting. Read the request where that body puts it: a `status_url` body flags a file request in
@@ -513,10 +515,11 @@ not the default:
 ```bash
 mode=fast # use deep for a deep submit
 url='<status_url>'; watch="$HOME/.ohmybug/watch/<review_id>"; mkdir -p "${watch%/*}"
-every=<interval_s> # seconds between polls: the submit response's monitor.interval_s
-                   # seeds it; the body's next_poll_after_s takes over from the first poll
-beat=$every        # seconds between `running` lines while nothing changes: the
-                   # body's monitor.heartbeat_s, which keeps the prompt cache warm
+every=<next_poll_after_s> # seconds between polls: the submit response's next_poll_after_s
+                          # seeds it (its monitor.interval_s on an older server that has none);
+                          # the body's next_poll_after_s takes over from the first poll
+beat=<heartbeat_s>        # seconds between `running` lines while nothing changes: the submit
+                          # response's monitor.heartbeat_s, which keeps the prompt cache warm
 start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
 fails=0 # consecutive failed polls; 12 retires the watch (12 poll cadences of a dead URL)
 num() { printf '%s' "$s" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1; }
@@ -540,7 +543,7 @@ while :; do
     continue
   fi
   fails=0
-  n=$(num next_poll_after_s); [ -n "$n" ] && every=$n
+  n=$(num next_poll_after_s); [ -n "$n" ] && [ "$n" -gt 0 ] && every=$n
   n=$(num heartbeat_s); [ -n "$n" ] && beat=$n
   printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true' && st=needs-files
   printf '%s %s\n' "$st" "$every" > "$watch" # the Stop hook reads this: fresh + running = armed
@@ -556,8 +559,9 @@ while :; do
 done
 ```
 
-Substitute the three placeholders from the submit response — `<status_url>`,
-`<review_id>`, and `<interval_s>` from its `monitor` — and nothing else: the
+Substitute the four placeholders from the submit response — `<status_url>`,
+`<review_id>`, `<next_poll_after_s>` (its `monitor.interval_s` on an older
+server that has none) and `<heartbeat_s>` from its `monitor` — and nothing else: the
 cadence between polls and between lines is read off each status body
 (`next_poll_after_s`, `monitor.heartbeat_s`), so the loop keeps the server's
 numbers without you typing them.
@@ -602,8 +606,10 @@ review was watched. Any form you write must keep:
   session learns the watch ended rather than inferring it from silence. Every
   printed line is a wake; a watch nothing can satisfy must not wake you forever.
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
-- **Prints its first reading immediately, then a reading at least every
-  `heartbeat_s`, and every review status change immediately — at the poll
+- **Prints its first reading immediately, then a reading on the `heartbeat_s`
+  clock — checked once per poll, so the real gap is `heartbeat_s` rounded up to
+  whole poll cadences plus the poll's own cost, and it must stay under the
+  prompt-cache TTL — and every review status change immediately, at the poll
   cadence the body names.** Poll failures are
   the exception: they land on the clock only, so a flapping endpoint costs at
   most two lines per heartbeat window (`poll-failed` on the clock, `running`
@@ -641,8 +647,9 @@ review was watched. Any form you write must keep:
   does the same.
 
 No background tasks in your harness? Then wait at the server's cadence IN the
-current turn — read once, sleep `retry_after_s` (or `next_poll_after_s` from
-the status body) in the foreground, read again – never leave a
+current turn — read once, sleep `retry_after_s` from a timed-out `wait_review`
+or `next_poll_after_s` from the `status_url` body (a `get_findings` answer
+carries neither) in the foreground, read again – never leave a
 running review unwatched at the end of a turn.
 
 If the response carries `pending_verdicts` from an earlier review, resolve
