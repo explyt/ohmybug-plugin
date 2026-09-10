@@ -80,6 +80,14 @@ assert ('''    fails=$((fails + 1))
     sleep "$every"
     continue
 ''') in monitor_code, "poll-failed branch lost its shape"
+# A 200 with no status word is a failed poll, not a running review: read as
+# success it wrote a blank word into the watch file and the hook read the
+# cadence as the status — armed — while the loop could never see `done`, so a
+# finished review sat unread for the whole age cap (found in review). The status
+# is extracted BEFORE the branch so the emptiness test can sit beside the rc test.
+assert '''  s=$(curl -fsS --max-time 15 "$url"); rc=$?
+  st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\\([^"\\]*\\)".*/\\1/p' | head -n 1)
+  if [ "$rc" -ne 0 ] || [ -z "$st" ]; then''' in monitor_code, "an unparseable 200 is not a failed poll"
 assert "failing" not in monitor_code
 # The init line: an empty prev is what makes the first reading print at once.
 assert "\nstart=$(date +%s); last=$start; prev= #" in monitor_code
@@ -190,6 +198,19 @@ lines = r.stdout.splitlines()
 assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
 assert "bughunt · fast · poll-failed" in lines and "bughunt · fast · running" not in lines, r.stdout
 assert 1 <= lines.count("bughunt · fast · poll-failed") <= 6, lines  # 12 failed polls, one line per 240 s of shim clock
+# The same run against an endpoint that answers 200 with something that is not
+# the review (a redirect page, a proxy's HTML): no status word, so a failed poll
+# — `poll-failed` in the file, never `running` on stdout, retired on the twelfth.
+# A loop that takes the success path here writes a blank status word the Stop
+# hook reads as armed, and prints `running` on a body it could not read.
+with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '<html><body>Moved</body></html>')
+    open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
+    r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, env=env)
+    assert open(f"{d}/.ohmybug/watch/rev_test").read() == "poll-failed 240\n", open(f"{d}/.ohmybug/watch/rev_test").read()
+lines = r.stdout.splitlines()
+assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
+assert "bughunt · fast · running" not in lines and "bughunt · fast · poll-failed" in lines, r.stdout
 # The properties list is normative for any rewrite of the loop: property 4
 # must describe the shipped loop (clock-gated poll-failed, retirement after 12
 # failures), not the pre-retirement one that printed per failure and never ended.
@@ -202,7 +223,7 @@ assert "- **Writes `~/.ohmybug/watch/<review_id>` on every poll, failed ones too
 assert "`next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in props
 assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "`next_poll_after_s`", "at least every `monitor.heartbeat_s`", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
+for phrase in ("`Monitor` tool", "`next_poll_after_s`", "at least every `monitor.heartbeat_s`", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after `<fail_cap>` consecutive poll failures (3 for a job at\n  `interval_s`, 12 for one every minute", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
 # No cadence literal in the bullet either (#67): the 240 in the cron example is
@@ -247,7 +268,7 @@ assert WAKE_RULE in codex_bullet, "the heartbeat prompt must carry the server's 
 # The war story that justifies the rule carries the magnitude the record supports:
 # three wakes at the four-minute cadence is twelve minutes, not more.
 assert "on three wakes — twelve minutes — after" in codex_bullet
-assert "`wake_rule` — copy `wake_rule` into the prompt word for word" in codex_bullet
+assert "copy `wake_rule` into the prompt word for word" in codex_bullet
 # ...and the hand-wait path prints on the same terms: it is the path with no
 # heartbeat, i.e. the one where nothing else would catch a remembered status.
 assert "a status you\nprint is a status a tool just answered" in skill
@@ -287,8 +308,12 @@ assert "this surface must not be the one that only prints" in after_loop
 # The cron fallback follows the body's cadence too (found in review): a payload
 # submit's next_poll_after_s is under a minute and its file request is held open
 # for minutes, so the job runs every minute there and at interval_s otherwise.
-for phrase in ("`next_poll_after_s` under a minute", "every minute, the\n  tightest cron allows (`* * * * *`)", "otherwise `interval_s`", "one job at one cadence for the whole hunt"):
+for phrase in ("so curl `status_url` ONCE before creating the job", "`next_poll_after_s` is on the\n  status body only", "Under a minute", "every minute, the tightest cron allows\n  (`* * * * *`)", "otherwise `interval_s`", "one\n  job at one cadence for the whole hunt", "3 consecutive failures at `interval_s`, 12 at every minute"):
     assert phrase in claude_bullet, phrase
+# The placeholders the cron prompt carries: the fail cap is one of them now, so
+# a job created every minute is not retired by a three-minute blip.
+assert "after `<fail_cap>` consecutive poll failures" in claude_bullet
+assert "after 3\n  consecutive poll failures" not in claude_bullet
 # No literal hold or cadence on either surface: the server caps the hold and
 # names the cadence, and a number written here is the one an agent obeys when
 # the two disagree (measured: the tool's 45 beat the field's 240).
@@ -307,7 +332,7 @@ router_text = session_text
 # The ROUTING text is the other Codex surface and restates the whole heartbeat
 # contract on its own, so a rule stated only in the skill still ships an agent
 # that arms a heartbeat allowed to answer from memory.
-ROUTER_WAKE_RULE = ("wake_rule — copy wake_rule into the prompt word for word: every wake reports the status it just read "
+ROUTER_WAKE_RULE = ("copy wake_rule into the prompt word for word: every wake reports the status it just read "
                     "(from wait_review or get_findings on a fast hunt, from the status_url read on a deep one), "
                     "and a wake with no answer prints bughunt · <mode> · poll-failed, never the previous status")
 assert ROUTER_WAKE_RULE in router_text, "ROUTING must carry the whole wake rule, not a fragment of it"
@@ -322,7 +347,10 @@ assert "Retire a heartbeat older than 180 minutes" in router_text, "ROUTING must
 # The deep wake reads status_url, so the agent must be told to copy the URL into
 # the heartbeat and to poll it once per wake — or the rule names a read it was
 # never handed, on the longest hunt there is.
-assert "status_url, interval_s, wake_on, stop_on, and wake_rule" in router_text
+# heartbeat_s travels in the prompt too (found in review): the carve-out is
+# measured against it, and a wake holds nothing but its prompt.
+assert "status_url, interval_s, heartbeat_s, wake_on, stop_on, and wake_rule" in router_text
+assert "every number the wake will measure against goes into the prompt" in router_text
 assert "for a deep hunt the wake polls status_url once and reports that" in router_text
 # ...and that poll sees a file request only in the body's flags, never in the
 # status word, so the deep wake is told to read them; a failed poll falls back to
@@ -345,7 +373,7 @@ assert "then call get_findings once and arm a fresh heartbeat if the review is s
 # ...and the routing text names the flags itself: the consequent alone leaves a
 # dangling "either flag" if the names are deleted.
 assert "that body flags a file request as awaiting_client_files/files_requested rather than in its status word" in router_text
-assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
+assert "`review_id`, `status_url`, `interval_s`,\n  `heartbeat_s`, `wake_on`, `stop_on` and `wake_rule`" in codex_bullet
 assert "its wake polls `status_url` once and reports\n  that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
 # A prompt rule did not hold (a heartbeat carrying wake_rule word for word still

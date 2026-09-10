@@ -52,7 +52,9 @@ This is a required client action, not a reminder to do later:
 - **Codex:** immediately read the submit response's `monitor` object, then call
   `automation_update` with `destination=thread` (not `targetThreadId`; destination
   binds the current thread), using that exact `review_id`, `status_url`, `interval_s`,
-  `wake_on`, `stop_on` and `wake_rule` — copy `wake_rule` into the prompt word for word,
+  `heartbeat_s`, `wake_on`, `stop_on` and `wake_rule` — every number the wake
+  will measure against goes into the prompt, because a wake fires in a fresh
+  context holding nothing but that prompt; copy `wake_rule` into the prompt word for word,
   because it is the sentence that makes a wake a reading rather than a
   recollection: every wake reports the status it just read — from `wait_review`
   or `get_findings` on a fast hunt, from the `status_url` read on a deep one —
@@ -173,11 +175,15 @@ This is a required client action, not a reminder to do later:
   and stays quiet while it is fresh, so a turn may end on a running hunt — do
   not add a foreground `get_findings` beside an armed monitor.
   No `Monitor` tool in this harness? Fall back to `CronCreate` at the cadence
-  the status body names: `next_poll_after_s` under a minute — a payload submit,
-  whose file request is held open for minutes — means every minute, the
-  tightest cron allows (`* * * * *`); otherwise `interval_s`, off the :00/:30
-  marks (240 s → `3-59/4 * * * *`). The server fixes `next_poll_after_s` per
-  submit, so one job at one cadence for the whole hunt. Prompt: "bughunt
+  the status body names — so curl `status_url` ONCE before creating the job:
+  the submit response carries `interval_s`, and `next_poll_after_s` is on the
+  status body only. Under a minute — a payload submit, whose file request is
+  held open for minutes — means every minute, the tightest cron allows
+  (`* * * * *`); otherwise `interval_s`, off the :00/:30 marks (240 s →
+  `3-59/4 * * * *`). The server fixes `next_poll_after_s` per submit, so one
+  job at one cadence for the whole hunt; the failure retirement below scales
+  with it — 3 consecutive failures at `interval_s`, 12 at every minute — so
+  a three-minute blip does not retire the one watcher a payload hunt has. Prompt: "bughunt
   heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
   line for what THAT read answered; if it answered nothing, call `get_findings`
   once and print what that answered, and only if THAT fails too print `bughunt ·
@@ -189,8 +195,9 @@ This is a required client action, not a reminder to do later:
   on done/failed call `get_findings`, print `findings=N` from that answer
   and `CronDelete` this job; if that `get_findings` answer's `next_step`
   begins "this is the first read after done", say so — this job outlived
-  the hunt; after 3
-  consecutive poll failures or once the current time is past `<retire_at>` (an
+  the hunt; after `<fail_cap>` consecutive poll failures (3 for a job at
+  `interval_s`, 12 for one every minute — substitute the number that matches
+  the cadence you created the job at) or once the current time is past `<retire_at>` (an
   ISO timestamp you substitute at creation: the SUBMIT time + 180 minutes,
   carried unchanged into every replacement job – the watch is then older than 180 minutes,
   the hunt's 150 min budget plus queue time – as an instant,
@@ -511,7 +518,8 @@ while :; do
     printf 'bughunt · %s · watch-retired\n' "$mode"; break # past 180 min, or a dead URL
   fi
   s=$(curl -fsS --max-time 15 "$url"); rc=$?
-  if [ "$rc" -ne 0 ]; then
+  st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
+  if [ "$rc" -ne 0 ] || [ -z "$st" ]; then # no answer, or a 200 that is not the review (a redirect page, a proxy's HTML)
     fails=$((fails + 1))
     printf 'poll-failed %s\n' "$every" > "$watch" # still alive: the endpoint failed, not the watcher
     now=$(date +%s)
@@ -525,7 +533,6 @@ while :; do
   fails=0
   n=$(num next_poll_after_s); [ -n "$n" ] && every=$n
   n=$(num heartbeat_s); [ -n "$n" ] && beat=$n
-  st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
   printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true' && st=needs-files
   printf '%s %s\n' "$st" "$every" > "$watch" # the Stop hook reads this: fresh + running = armed
   case "$st" in
@@ -606,7 +613,11 @@ review was watched. Any form you write must keep:
   "no match" reads as "still running"; capture curl's output and exit code
   first, count the failure, print `poll-failed` on the heartbeat clock
   (property 3) and keep polling – only 12 consecutive failures end the
-  watch, and they do so with `watch-retired` (property 1).
+  watch, and they do so with `watch-retired` (property 1). A 200 with no
+  status word in it is a failed poll too — a redirect page, a proxy's HTML —
+  not a `running` review: read as success it wrote a blank word into the
+  watch file, the Stop hook read the cadence as the status, and a finished
+  review sat unread behind an armed-looking watch for the whole age cap.
 - **Writes `~/.ohmybug/watch/<review_id>` on every poll, failed ones too** —
   the status word (`poll-failed` when curl failed) and the poll cadence, one
   line. The Stop hook reads it: a fresh file that says `running` or
