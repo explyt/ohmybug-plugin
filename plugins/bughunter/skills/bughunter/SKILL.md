@@ -40,11 +40,14 @@ installing and before relying on automatic routing. The skill and MCP server
 remain usable without the hook, but a local advisory review is never a
 substitute for the cloud hunt.
 
-The first cloud call is always the fast `submit_review`; wait for its terminal
-`get_findings`/`wait_review` result before doing anything else. Deep is strictly
-sequential: call it only when the server returned `deep_offer` and the user
-explicitly agreed. Never report a clean merge or finish the turn while a review
-is running; keep the wait active or arm a monitor and resume on its event.
+The first cloud call is the fast `submit_review` – unless the user asked for
+the deep hunt outright (§3b: their words, never your judgement); then it is one
+`submit_review` with `deep: true`. Wait for its terminal
+`get_findings`/`wait_review` result before doing anything else. On your own
+initiative deep is strictly sequential: call it only when the server returned
+`deep_offer` and the user explicitly agreed. Never report a clean merge or
+finish the turn while a review is running; keep the wait active or arm a
+monitor and resume on its event.
 
 **Arm the monitor immediately after every successful submit (fast and deep).**
 This is a required client action, not a reminder to do later:
@@ -513,7 +516,7 @@ measured over ~45 hunts in five sessions – so that is the last-resort form,
 not the default:
 
 ```bash
-mode=fast # use deep for a deep submit
+mode=fast # deep for a deep submit – an escalation or a deep-first hunt (`deep: true`)
 url='<status_url>'; watch="$HOME/.ohmybug/watch/<review_id>"; mkdir -p "${watch%/*}"
 every=<next_poll_after_s> # seconds between polls: the submit response's next_poll_after_s
                           # seeds it (its monitor.interval_s on an older server that has none);
@@ -700,12 +703,35 @@ send them – the manifest keeps it auditable. If nothing can be sent, call
 
 ### 3b. Two stages: the fast hunt, then maybe the deep one
 
-**Every review starts fast** – the diff plus whatever files the reviewers
-ask for mid-run (how long: the server's `recent_median_minutes`, never a
-number from this page). You never request the deep hunt yourself
-and never as a first review: it pulls the whole repository into a throwaway
-VM, takes about an hour, and only makes sense once the cheap pass has come
-back empty.
+**A review starts fast** – the diff plus whatever files the reviewers ask
+for mid-run (how long: the server's `recent_median_minutes`, never a number
+from this page) – **unless the user asked for the deep hunt up front.** You
+never request the deep hunt on your own initiative: it pulls the whole
+repository into a throwaway VM, takes about an hour and costs the deep price,
+so as YOUR idea it only makes sense once the cheap pass has come back empty.
+
+- **Deep first, only on the user's word.** The user asked for the deep hunt
+  when their request says so, in any language – "deep", "deep hunt",
+  "full-repo", `--deep` on `/bughunter:review`, or a standing "yes, deep" they
+  gave for this branch earlier in the session. Then call `submit_review` ONCE
+  with `deep: true` and rung 1's `meta` (`repo` + `ref` = the pushed head sha +
+  `base_branch`, empty `diff`, no `upload`): no fast stage first, and no
+  second "are you sure" – they already said yes. Never read the ask into the
+  size of the diff or a fast result that looks thin: that is the model's
+  initiative, and the bill is the user's.
+- A refusal of a deep-first request is the server's answer: show it verbatim,
+  then offer the fast hunt as the alternative with ONE yes/no question – never
+  downgrade to fast on your own, and never present a fast hunt as the deep one
+  they asked for. `repo_required` (the App install; a public repo needs only
+  `meta.repo` as owner/name), `repo_too_big` (the repository cannot be seeded –
+  the fast hunt with context files is the way to go deeper), `commit_required`
+  (push the head and pass `meta.repo` + `meta.ref`), `fast_running` (a fast
+  hunt of this commit is live – let it finish and escalate it; the text names
+  the id), `deep_at_capacity` (retry later, or the fast hunt now).
+- For the monitor a deep-first hunt is a deep submit like an escalation:
+  `mode=deep`, the cadence from ITS response (`next_poll_after_s`, else
+  `monitor.interval_s`) – never a fast default carried over from an earlier
+  hunt – and the compact line reads `bughunt · deep · running`.
 
 - `submit_review` carries `connect_repo` when the repo is not readable:
   while the fast review runs, show the user the `pitch` and ask ONE yes/no
@@ -741,7 +767,7 @@ back empty.
   `deep_at_capacity` (tell the user the fast result stands, deep can be
   tried later), `repo_too_big` (send context files instead),
   `repo_required` (the App install), `fast_not_finished` (let stage one
-  finish).
+  finish). The deep-first refusals above are final the same way.
 
 ### 3c. Show the review report
 

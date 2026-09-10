@@ -522,6 +522,50 @@ review_text = review["hookSpecificOutput"]["additionalContext"]
 assert "Route this request now" in review_text
 assert "local review agents" in review_text
 
+# Deep as the first review, on the user's word alone. The server takes
+# `deep: true` from nobody else, so the routing text puts deep first only when
+# the user asked, the prompt hook adds its sentence only when the prompt
+# carries the words, and a plain review request never reads as a deep ask.
+DEEP_MARK = "submit_review with deep: true is the first and only review – no fast stage first, no second question"
+assert DEEP_MARK in review_text
+for phrase in ("unless the user asked for the deep hunt in their own words (deep, deep hunt, full-repo, --deep, in any language)",
+               "one submit_review with deep: true and meta.repo + meta.ref (the pushed head sha) + meta.base_branch, no payload, is the first and only review",
+               "On your own initiative start deep only after the server returns deep_offer",
+               "A refusal of a deep-first request (repo_required, repo_too_big, commit_required, fast_running, deep_at_capacity) is shown to the user verbatim",
+               "never a silent downgrade to fast",
+               "its compact line reads bughunt · deep · running"):
+    assert phrase in session_text, phrase
+assert "Only start deep after the server returns deep_offer" not in session_text
+assert DEEP_MARK not in session_text
+for prompt in ("run a deep hunt on this", "full-repo review of the branch please", "/bughunter:review --deep"):
+    text = run("prompt", {"prompt": prompt})["hookSpecificOutput"]["additionalContext"]
+    assert "Route this request now" in text and DEEP_MARK in text, prompt
+for prompt in ("review this PR before merge", "hunt bugs in the diff", "I have a deeply held view; fix the typo"):
+    out = run("prompt", {"prompt": prompt})
+    text = out.get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert DEEP_MARK not in text, prompt
+assert "Route this request now" in run("prompt", {"prompt": "review this PR before merge"})["hookSpecificOutput"]["additionalContext"]
+
+# SKILL.md and the command carry the same rule: the "never as a first review"
+# sentence is gone, deep first is the user's word, a refusal is shown verbatim
+# with the fast hunt offered, and the watcher is the deep one.
+assert "never as a first review" not in skill and "Every review starts fast" not in skill
+for phrase in ("**Deep first, only on the user's word.**",
+               "`--deep` on `/bughunter:review`",
+               "no fast stage first, and no",
+               "second \"are you sure\" – they already said yes",
+               "Never read the ask into the\n  size of the diff or a fast result that looks thin",
+               "show it verbatim,\n  then offer the fast hunt as the alternative with ONE yes/no question",
+               "`repo_required`", "`repo_too_big`", "`commit_required`", "`fast_running`",
+               "`mode=deep`, the cadence from ITS response",
+               "the compact line reads `bughunt · deep · running`"):
+    assert phrase in skill, phrase
+assert "unless the user asked for\nthe deep hunt outright" in skill
+assert "mode=fast # deep for a deep submit – an escalation or a deep-first hunt (`deep: true`)" in monitor_code
+command = open(str(Path(router).parent.parent / "commands/review.md"), encoding="utf-8").read()
+for phrase in ("except `deep` / `--deep`", "carries\n`deep: true`", "no fast stage first, no second question", "show its answer verbatim and offer the\nfast hunt instead; never downgrade silently"):
+    assert phrase in command, phrase
+
 assert run("prompt", {"prompt": "Fix the typo in the README"}) == {}
 assert run("subagent")["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
 
