@@ -256,14 +256,18 @@ assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
 # "first read after done" next_step. Dropping any one of the four leaves a
 # heartbeat that can outlive its hunt again.
 for phrase in (
-    "`retire_at` = now + 180 min", "ISO\n    timestamp",
+    # Anchored at SUBMIT and carried into every replacement: a per-job cap plus
+    # the re-arm rule is a watch that never ends.
+    "`retire_at` = submit time + 180 min", "the SAME instant into every replacement heartbeat",
     # A retirement with a clock in it, not a verdict: 180 min is budget plus
     # queue, so a queued deep hunt can still be live there (the wake must say so).
     "print `bughunt ·\n    <mode> · watch-retired`, call `get_findings` once, report what it\n    answered — `still running` when it is",
     "retired at wake regardless of what the wake\n    believes",
     # findings=N on the TERMINAL line only; the enumeration carries that form.
-    "On `done`, print\n    `findings=N` read from that wake's tool result", "Non-terminal wakes\n    keep the enumerated lines",
-    "the only line\n    allowed is `bughunt · <mode> · poll-failed`",
+    # Keyed on the wake's READ, not a tool call: a deep wake polls status_url.
+    "read from that wake's read — `wait_review`, `get_findings`\n    or the `status_url` body", "Non-terminal wakes keep the enumerated lines",
+    "no answer from this wake's\n    read → the only line allowed is `bughunt · <mode> · poll-failed`",
+    "done for more than ten minutes",
     "deletes this heartbeat in the turn that read the\n    status",
     "delete it first, then report",
     "begins \"this is the first read after done\"", "delete it in that same turn",
@@ -272,10 +276,10 @@ for phrase in (
 assert "terminal by construction" not in skill, "the age cap is a retirement, not a verdict about the review"
 assert "`bughunt · fast · done · findings=N`" in codex_bullet, "the enumerated lines must carry the terminal form"
 for phrase in (
-    "retire_at = now + 180 min", "ISO timestamp", "print bughunt · <mode> · watch-retired, call get_findings once, report what it answered (still running when it is",
+    "retire_at = submit time + 180 min", "the same instant into every replacement heartbeat", "print bughunt · <mode> · watch-retired, call get_findings once, report what it answered (still running when it is",
     "whatever the wake believes",
-    "on done print findings=N from that wake's result", "non-terminal wakes keep the enumerated lines",
-    "the only line allowed is bughunt · <mode> · poll-failed",
+    "on done print findings=N from that wake's read (wait_review, get_findings or the status_url body", "non-terminal wakes keep the enumerated lines",
+    "no answer from a wake's read means the only line allowed is bughunt · <mode> · poll-failed", "done for over ten minutes",
     "delete the heartbeat in the same turn as the read", "delete it first, then report",
     'next_step begins "this is the first read after done"', "delete it in that same turn",
 ):
@@ -284,7 +288,8 @@ assert "terminal by construction" not in router_text
 # The CronCreate fallback is the other model-driven wake: a fresh cron turn has
 # no creation time, so the same ISO instant and the same first-read clause
 # travel in its prompt (rev: the remedy had landed on the Codex heartbeat only).
-assert "past `<retire_at>` (an\n  ISO timestamp you substitute at creation" in claude_bullet
+assert "past `<retire_at>` (an\n  ISO timestamp you substitute at creation: the SUBMIT time + 180 minutes,\n  carried unchanged into every replacement job" in claude_bullet
+assert "now + 180" not in skill and "tool result" not in codex_bullet
 assert "begins \"this is the first read after done\", say so" in claude_bullet
 assert "print `findings=N` from that answer" in claude_bullet
 assert "status_url read, whichever that wake uses" in router_text
