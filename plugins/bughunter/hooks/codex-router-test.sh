@@ -292,6 +292,9 @@ assert "past `<retire_at>` (an\n  ISO timestamp you substitute at creation: the 
 assert "now + 180" not in skill and "tool result" not in codex_bullet
 assert "begins \"this is the first read after done\", say so" in claude_bullet
 assert "print `findings=N` from that answer" in claude_bullet
+# The age-cap retirement is honest on this surface too: a bare watch-retired on
+# a live hunt reads as "the hunt is over" (the queued deep hunt past 180 min).
+assert "either\n  way print what that `get_findings` answered — `still running` when it is" in claude_bullet
 assert "status_url read, whichever that wake uses" in router_text
 for text in (skill, router_text):
     assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"

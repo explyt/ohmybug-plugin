@@ -176,7 +176,9 @@ This is a required client action, not a reminder to do later:
   `CronDelete` it, then call `get_findings` once and create a fresh job if the
   review is still running or waiting for files AND the retirement came from poll
   failures, not from the age cap – a job nothing can satisfy is how a control gets
-  disarmed, and a job that vanishes in silence reads as 'still running'".
+  disarmed, and a job that vanishes in silence reads as 'still running'; either
+  way print what that `get_findings` answered — `still running` when it is, so
+  the user knows the watch ended on a live hunt".
   One job per review: `CronDelete` any earlier bughunt job before creating
   the next – never leave one pointing at an older review id. Only
   as the last resort keep a `run_in_background` until-loop – and say so:
