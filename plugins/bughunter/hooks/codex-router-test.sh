@@ -540,7 +540,7 @@ assert DEEP_MARK not in session_text
 for prompt in ("run a deep hunt on this", "full-repo review of the branch please", "/bughunter:review --deep"):
     text = run("prompt", {"prompt": prompt})["hookSpecificOutput"]["additionalContext"]
     assert "Route this request now" in text and DEEP_MARK in text, prompt
-for prompt in ("review this PR before merge", "hunt bugs in the diff", "I have a deeply held view; fix the typo"):
+for prompt in ("review this PR before merge", "hunt bugs in the diff", "review this PR, the deeply nested loop in the deeper module worries me"):
     out = run("prompt", {"prompt": prompt})
     text = out.get("hookSpecificOutput", {}).get("additionalContext", "")
     assert DEEP_MARK not in text, prompt
