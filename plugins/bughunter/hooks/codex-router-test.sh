@@ -433,6 +433,11 @@ assert "past `<retire_at>` (an\n  ISO timestamp you substitute at creation: the 
 assert "now + 180" not in skill and "tool result" not in codex_bullet
 assert "begins \"this is the first read after done\", say so" in claude_bullet
 assert "print `findings=N` from that answer" in claude_bullet
+# The count is `done`'s alone on this surface too: the Codex rule scopes it to
+# done and the enumerated failed line is bare, but the cron prompt read
+# "on done/failed … print findings=N" (rev: a failed hunt has no count to quote).
+assert "on `done` call `get_findings`, print `findings=N` from that answer;\n  on `failed` print the bare `bughunt · <mode> · failed`" in claude_bullet
+assert "on done/failed call `get_findings`" not in claude_bullet
 # The age-cap retirement is honest on this surface too: a bare watch-retired on
 # a live hunt reads as "the hunt is over" (the queued deep hunt past 180 min).
 assert "either\n  way print what that `get_findings` answered — `still running` when it is" in claude_bullet
