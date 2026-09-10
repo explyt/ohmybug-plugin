@@ -98,7 +98,7 @@ This is a required client action, not a reminder to do later:
   deliberate handover slack, not spare waiting: finish the status line and the
   cleanup inside them, or the next heartbeat fires while this wake still loops. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
-  `bughunt · fast · needs-files`, `bughunt · fast · done`,
+  `bughunt · fast · needs-files`, `bughunt · fast · done · findings=N`,
   `bughunt · fast · failed`, `bughunt · fast · poll-failed`, or
   `bughunt · fast · watch-retired`).
   A rule in the prompt did not hold: a heartbeat whose prompt carried the
@@ -107,15 +107,20 @@ This is a required client action, not a reminder to do later:
   check, and the stop is mechanical, not a judgement:
   - **The age cap is an instant, not a duration.** At arm time compute
     `retire_at` = now + 180 min and write it into the prompt as an ISO
-    timestamp: "If the current time is past `<retire_at>` this review is
-    terminal by construction: call `get_findings` now, print what it answered,
-    and delete this automation." A clock the model compares beats an
-    instruction it can skip; any heartbeat older than its `retire_at` is
-    deleted at wake regardless of what the wake believes.
-  - **The compact line quotes the answer it came from.** Print `status` and
+    timestamp: "If the current time is past `<retire_at>`: print `bughunt ·
+    <mode> · watch-retired`, call `get_findings` once, report what it
+    answered — `still running` when it is, so the user knows the watch ended
+    on a live hunt — then delete this automation." That is the age-cap
+    retirement above with a clock in it, not a verdict: 180 min is the hunt's
+    budget plus queue time, so a queued deep hunt can still be live there. A
+    clock the model compares beats an instruction it can skip; any heartbeat
+    older than its `retire_at` is retired at wake regardless of what the wake
+    believes.
+  - **A terminal line quotes the answer it came from.** On `done`, print
     `findings=N` read from that wake's tool result (`bughunt · fast · done ·
-    findings=3`), never a bare word. No tool result in this wake → the only
-    line allowed is `bughunt · <mode> · poll-failed`.
+    findings=3`) — the bare word is what a memory produces. Non-terminal wakes
+    keep the enumerated lines; no tool result in this wake → the only line
+    allowed is `bughunt · <mode> · poll-failed`.
   - **Stop in the same turn as the read.** On `done` or `failed`,
     `automation_update` deletes this heartbeat in the turn that read the
     status. If the automation still exists at the next wake after a terminal
@@ -152,10 +157,15 @@ This is a required client action, not a reminder to do later:
   body (which flags a request there, not in its status word) or `needs_files`
   from the `get_findings` fallback (which flags it exactly there) call
   `get_findings`, serve the files and KEEP this job;
-  on done/failed call `get_findings` and `CronDelete` this job; after 3
-  consecutive poll failures or once it is older than 180 minutes (the hunt's
-  150 min budget plus queue time – the job's age starts at submit, the
-  budget at claim) print `bughunt · <mode> · watch-retired` and only then
+  on done/failed call `get_findings`, print `findings=N` from that answer
+  and `CronDelete` this job; if that `get_findings` answer's `next_step`
+  begins "this is the first read after done", say so — this job outlived
+  the hunt; after 3
+  consecutive poll failures or once the current time is past `<retire_at>` (an
+  ISO timestamp you substitute at creation: now + 180 minutes – the job is
+  then older than 180 minutes, the hunt's 150 min budget plus queue time – as
+  an instant, because a fresh cron turn has no creation time to count from)
+  print `bughunt · <mode> · watch-retired` and only then
   `CronDelete` it, then call `get_findings` once and create a fresh job if the
   review is still running or waiting for files AND the retirement came from poll
   failures, not from the age cap – a job nothing can satisfy is how a control gets
