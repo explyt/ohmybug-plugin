@@ -98,6 +98,14 @@ assert ('''  if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
     printf 'bughunt · %s · watch-retired\\n' "$mode"; break # past 180 min, or a dead URL
 ''') in monitor_code, "watch retirement lost its shape"
 assert "    fails=$((fails + 1))\n" in monitor_code and "\n  fails=0\n" in monitor_code
+# The watch file exists from the instant the watch starts: the first write used
+# to be after the first curl returned, and a Stop inside that round trip (or
+# right after a needs-files re-arm, while the file still held the exit word) had
+# the hook call a just-armed Monitor dead and order a second one (found in
+# review). Pinned as the line above the loop, and executed below: the curl shim
+# records whether the file was already there when the first poll ran.
+assert "\nprintf 'armed %s\\n' \"$every\" > \"$watch\" #" in monitor_code
+assert monitor_code.index("printf 'armed %s") < monitor_code.index("while :; do")
 # The running gate, verbatim, for the same reason: moving `last=$now` one line
 # down (out of the gate) keeps count == 2 and silences the heartbeat for the
 # whole hunt; `-lt` or a literal in the gate floods it.
@@ -147,7 +155,9 @@ assert not loop_src.startswith("bash"), "fence info string leaked into the execu
 assert set(re.findall(r"<[a-z_]+>", loop_src)) == {"<status_url>", "<review_id>", "<interval_s>"}, set(re.findall(r"<[a-z_]+>", loop_src))
 def armed(src): return src.replace("<status_url>", "http://x/").replace("<review_id>", "rev_test").replace("<interval_s>", "240")
 def shims(d, curl_body):
-    open(f"{d}/curl", "w").write("#!/bin/sh\nprintf '%s' '" + curl_body + "'\n"); os.chmod(f"{d}/curl", 0o755)
+    # The shim notes whether the watch file already existed when it was called:
+    # the file must be there before the first poll, not one poll later.
+    open(f"{d}/curl", "w").write(f"#!/bin/sh\n[ -f \"$HOME/.ohmybug/watch/rev_test\" ] && echo yes >> \"{d}/seen\"\nprintf '%s' '" + curl_body + "'\n"); os.chmod(f"{d}/curl", 0o755)
     # The sleep shim records what it was asked for: that number IS the cadence.
     open(f"{d}/sleep", "w").write(f'#!/bin/sh\necho "$1" >> "{d}/slept"\nexit 0\n'); os.chmod(f"{d}/sleep", 0o755)
     return {**os.environ, "PATH": f"{d}:{os.environ['PATH']}", "HOME": d}
@@ -157,6 +167,7 @@ for body, want in (('{"status":"done"}', "done"), ('{"status":"failed"}', "faile
         # The Stop hook's file: the state the loop exited on, so a terminal or
         # needs-files word there is what tells the hook to speak again.
         assert open(f"{d}/.ohmybug/watch/rev_test").read() == f"{want} 240\n", open(f"{d}/.ohmybug/watch/rev_test").read()
+        assert open(f"{d}/seen").read() == "yes\n", "the watch file must exist before the first poll runs"
     assert r.returncode == 0 and r.stdout == f"bughunt · fast · {want}\n", (want, r.returncode, r.stdout, r.stderr)
 # The cadence comes off the body (#67): a payload submit's body says
 # next_poll_after_s 45 and heartbeat_s 225, and the loop sleeps 45 — not the
@@ -219,7 +230,7 @@ assert "- **A poll failure is seen, not swallowed.**" in props
 assert "print `poll-failed` on the heartbeat clock" in props and "only 12 consecutive failures end the\n  watch" in props
 assert "does not end the watch" not in props and "print the failure, and keep polling" not in props
 # Property 5 (#67): the watch file is what makes the Stop hook stand down.
-assert "- **Writes `~/.ohmybug/watch/<review_id>` on every poll, failed ones too**" in props
+assert "- **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on every\n  poll after it, failed ones too**" in props
 assert "`next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in props
 assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]

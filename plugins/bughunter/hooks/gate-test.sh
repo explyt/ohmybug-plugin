@@ -2183,6 +2183,15 @@ age "$W/rev_watched" 420
 rc=$(nsrc 0 A1)
 [ "$rc" = 2 ] || { printf 'FAIL nudge: a 7-minute-old watch at a 240 s cadence was read as armed (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
+# ...and inside the grace band: between writes the file is cadence + the poll's
+# own duration old (up to 15 s of curl), so a 250 s old file on a 240 s cadence
+# is a healthy watcher mid-poll. Without this row `(wiv + 59) / 60` — the bound
+# collapsed to the cadence itself — kept every other row green while the hook
+# read a live watcher as dead for the length of each poll (found in review).
+printf 'running 240\n' > "$W/rev_watched"; age "$W/rev_watched" 250
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a watch mid-poll (250 s old at a 240 s cadence) was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
 # The cadence in the file moves the bound: at 45 s the same 3-minute-old file is
 # dead. A hook that ignores the field and uses its default alone is red here.
 printf 'running 45\n' > "$W/rev_watched"; age "$W/rev_watched" 180

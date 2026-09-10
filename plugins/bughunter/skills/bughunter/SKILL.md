@@ -512,6 +512,7 @@ beat=$every        # seconds between `running` lines while nothing changes: the
 start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
 fails=0 # consecutive failed polls; 12 retires the watch (12 poll cadences of a dead URL)
 num() { printf '%s' "$s" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1; }
+printf 'armed %s\n' "$every" > "$watch" # visible to the Stop hook from the instant the watch starts, not one poll later
 while :; do
   now=$(date +%s)
   if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
@@ -618,14 +619,18 @@ review was watched. Any form you write must keep:
   not a `running` review: read as success it wrote a blank word into the
   watch file, the Stop hook read the cadence as the status, and a finished
   review sat unread behind an armed-looking watch for the whole age cap.
-- **Writes `~/.ohmybug/watch/<review_id>` on every poll, failed ones too** —
-  the status word (`poll-failed` when curl failed) and the poll cadence, one
-  line. The Stop hook reads it: a fresh file that says `running` or
-  `poll-failed` is an armed watch and the hook stays quiet; a stale one means
-  the watcher died, and the hook says so. Drop the write and every turn ends
-  with a nag beside a live monitor — the doubled polling this loop exists to
-  end; drop it from the failure branch alone and a two-poll blip of the
-  endpoint has the hook declare a live watcher dead and order a second one.
+- **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on every
+  poll after it, failed ones too** — the status word (`armed` before the first
+  answer, `poll-failed` when curl failed) and the poll cadence, one line. The
+  Stop hook reads it: a fresh file whose word is not one the loop writes as it
+  exits is an armed watch and the hook stays quiet; a stale one means the
+  watcher died, and the hook says so. Drop the write and every turn ends with
+  a nag beside a live monitor — the doubled polling this loop exists to end;
+  drop it from the failure branch alone and a two-poll blip of the endpoint
+  has the hook declare a live watcher dead and order a second one; drop the
+  one above the loop and a Stop inside the first poll's round trip — or right
+  after a `needs-files` re-arm, while the file still holds that exit word —
+  does the same.
 
 No background tasks in your harness? Then wait at the server's cadence IN the
 current turn — read once, sleep `retry_after_s` (or `next_poll_after_s` from
