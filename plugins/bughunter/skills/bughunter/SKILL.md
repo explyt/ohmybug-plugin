@@ -798,6 +798,17 @@ disproving its own report. If a charge looks wrong, quote the receipt.
 Fix the confirmed bugs as part of the normal workflow. Findings include a
 suggested fix; treat it as a hint, not gospel.
 
+**Three hunts in a row that each confirm a major end the loop.** Do not offer a
+fourth on the same change. Two ways forward, and only two: ship it dark – the
+feature behind a flag that defaults to off, the confirmed majors in the dark
+code filed as a debt ticket that names the cause – or split it – merge the part
+that held, and open a ticket for the rest that starts from the cause, not from
+a patch. "One more round" is the user's call, once per change; after it, the
+next confirmed major goes to one of the two without discussion. A major about
+prose – a comment, a doc, a `next_step` line that contradicts the code – is
+fixed by deleting the false sentence, never by adding an explaining one: text
+written to explain code is itself a surface for the next hunt.
+
 ### 6b. Offer the story (only when a bug actually landed)
 
 `confirm_findings` answers with a `share` block whenever at least one bug
