@@ -192,9 +192,12 @@ This is a required client action, not a reminder to do later:
   body (which flags a request there, not in its status word) or `needs_files`
   from the `get_findings` fallback (which flags it exactly there) call
   `get_findings`, serve the files and KEEP this job;
-  on `done` call `get_findings`, print `findings=N` from that answer;
-  on `failed` print the bare `bughunt · <mode> · failed` — the count belongs
-  to `done` alone, as in the enumerated lines; either way `CronDelete` this
+  on `done` or `failed` call `get_findings` (this surface reads with curl,
+  and only a tool read tells the local hooks the hunt is over — skip it on
+  `failed` and the merge gate keeps saying a hunt is RUNNING); on `done`
+  print `findings=N` from that answer, on `failed` the bare `bughunt ·
+  <mode> · failed` — the count belongs to `done` alone, as in the
+  enumerated lines; either way `CronDelete` this
   job; if that `get_findings` answer's `next_step`
   begins "this is the first read after done", say so — this job outlived
   the hunt; after `<fail_cap>` consecutive poll failures (3 for a job at

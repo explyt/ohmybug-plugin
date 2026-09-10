@@ -436,8 +436,14 @@ assert "print `findings=N` from that answer" in claude_bullet
 # The count is `done`'s alone on this surface too: the Codex rule scopes it to
 # done and the enumerated failed line is bare, but the cron prompt read
 # "on done/failed … print findings=N" (rev: a failed hunt has no count to quote).
-assert "on `done` call `get_findings`, print `findings=N` from that answer;\n  on `failed` print the bare `bughunt · <mode> · failed`" in claude_bullet
+# ...but the READ stays on both branches: this surface polls with curl, so
+# its get_findings is the only tool call that clears the pending record on a
+# failed hunt (rev: the first cut dropped the call with the count, and the
+# gate then said "a hunt is RUNNING" until the record aged out).
+assert "on `done` or `failed` call `get_findings`" in claude_bullet
+assert "on `done`\n  print `findings=N` from that answer, on `failed` the bare `bughunt ·\n  <mode> · failed`" in claude_bullet
 assert "on done/failed call `get_findings`" not in claude_bullet
+assert "on `failed` print the bare" not in claude_bullet, "a bare print on failed with no read leaves the pending record"
 # The age-cap retirement is honest on this surface too: a bare watch-retired on
 # a live hunt reads as "the hunt is over" (the queued deep hunt past 180 min).
 assert "either\n  way print what that `get_findings` answered — `still running` when it is" in claude_bullet
