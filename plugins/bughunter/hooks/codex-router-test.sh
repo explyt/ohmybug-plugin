@@ -29,10 +29,12 @@ def run(event, payload=None):
 session = run("session")
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
-# The hold cap is the server's, not ours: a longer timeout_s comes back at the
-# same 45 s with timed_out:true, so the heartbeat loops short waits instead —
-# and only for a fast hunt, since a deep one outlives any loop (#988).
-for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "timeout_s=45 up to 3 times", "timed_out:true", "deep hunt call wait_review once", "every 45s for 180s", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
+# One cadence (#67): the automation fires once per interval_s and a wake is ONE
+# read. The hold cap is the server's — a longer timeout_s comes back with
+# timed_out:true — and that answer is the wake's reading, not a reason to loop:
+# a wake that loops holds the thread when the next one fires, measured as a
+# client polling once a minute against a four-minute contract.
+for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "The automation is the cadence and a wake is one read", "make ONE read and end", "timed_out:true", "never loop either call inside the wake", "stop on done, failed or needs_files", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
 assert "set targetThreadId" not in session_text
@@ -41,31 +43,51 @@ skill = open(str(Path(router).parent.parent / "skills/bughunter/SKILL.md"), enco
 monitor_section = skill.split("start this compact, unbounded loop immediately with the", 1)[1]
 monitor_code = monitor_section.split("```", 2)[1]
 assert "while :" in monitor_code
-assert monitor_code.count("sleep 45") == 2
+# One cadence (#67): no literal sleep. The poll gap is the body's
+# next_poll_after_s (the server answers the watcher cadence for a payload
+# submit and interval_s for a repo or deep one), the line gap its heartbeat_s;
+# the submit response's interval_s only seeds the first sleep. A literal here
+# is the loop that polled once a minute against a four-minute contract.
+import re
+assert monitor_code.count('sleep "$every"') == 2 and not re.search(r"sleep\s+\d", monitor_code)
 assert "seq " not in monitor_code
-# The heartbeat (#57): a line at least every 240 s even when nothing changed, and
-# never one per 45 s poll – Monitor floods stop the watch.
-# The whole assignment: "heartbeat=180" is a prefix of "heartbeat=1800".
-assert "\nheartbeat=180 #" in monitor_code
+assert "\nevery=<interval_s> #" in monitor_code and "\nbeat=$every " in monitor_code
+assert 'n=$(num next_poll_after_s); [ -n "$n" ] && every=$n' in monitor_code
+assert 'n=$(num heartbeat_s); [ -n "$n" ] && beat=$n' in monitor_code
+assert not re.search(r"\b(45|90|100|180|225|240)\b", re.sub(r"#.*", "", monitor_code).replace("10800", "")), "a cadence literal in the loop"
 assert "--max-time 15 " in monitor_code
-assert "-ge \"$heartbeat\"" in monitor_code
+assert "-ge \"$beat\"" in monitor_code
 assert "*) printf" not in monitor_code
 # The heartbeat is a heartbeat only because the clock resets when it prints:
-# drop `last=$now` and the loop prints every poll after the first 180 s, with
+# drop `last=$now` and the loop prints every poll after the first beat, with
 # every pin above still green. Both gated branches (running AND poll-failed)
 # reset it.
 assert monitor_code.count("last=$now") == 2, monitor_code.count("last=$now")
 # The failure branch prints on the clock only (a first-failure-immediate rule
 # floods under a flapping endpoint), resets the clock INSIDE its gate (moved
 # out, every failed poll refreshes `last` and an outage prints once, then
-# nothing) and clears `prev` so the first good poll prints the recovery.
-assert ('''    if [ $((now - last)) -ge "$heartbeat" ]; then
+# nothing) and clears `prev` so the first good poll prints the recovery. It
+# writes the watch file FIRST: the endpoint failed, the watcher did not, and a
+# Stop hook reading a stale file here called a live watcher dead two polls into
+# a blip and ordered a second one over it (found in review).
+assert ('''    fails=$((fails + 1))
+    printf 'poll-failed %s\\n' "$every" > "$watch" # still alive: the endpoint failed, not the watcher
+    now=$(date +%s)
+    if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\\n' "$mode"
       last=$now; prev=
     fi
-    sleep 45
+    sleep "$every"
     continue
 ''') in monitor_code, "poll-failed branch lost its shape"
+# A 200 with no status word is a failed poll, not a running review: read as
+# success it wrote a blank word into the watch file and the hook read the
+# cadence as the status — armed — while the loop could never see `done`, so a
+# finished review sat unread for the whole age cap (found in review). The status
+# is extracted BEFORE the branch so the emptiness test can sit beside the rc test.
+assert '''  s=$(curl -fsS --max-time 15 "$url"); rc=$?
+  st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\\([^"\\]*\\)".*/\\1/p' | head -n 1)
+  if [ "$rc" -ne 0 ] || [ -z "$st" ]; then''' in monitor_code, "an unparseable 200 is not a failed poll"
 assert "failing" not in monitor_code
 # The init line: an empty prev is what makes the first reading print at once.
 assert "\nstart=$(date +%s); last=$start; prev= #" in monitor_code
@@ -76,26 +98,39 @@ assert ('''  if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
     printf 'bughunt · %s · watch-retired\\n' "$mode"; break # past 180 min, or a dead URL
 ''') in monitor_code, "watch retirement lost its shape"
 assert "    fails=$((fails + 1))\n" in monitor_code and "\n  fails=0\n" in monitor_code
+# The watch file exists from the instant the watch starts: the first write used
+# to be after the first curl returned, and a Stop inside that round trip (or
+# right after a needs-files re-arm, while the file still held the exit word) had
+# the hook call a just-armed Monitor dead and order a second one (found in
+# review). Pinned as the line above the loop, and executed below: the curl shim
+# records whether the file was already there when the first poll ran.
+assert "\nprintf 'armed %s\\n' \"$every\" > \"$watch\" #" in monitor_code
+assert monitor_code.index("printf 'armed %s") < monitor_code.index("while :; do")
 # The running gate, verbatim, for the same reason: moving `last=$now` one line
 # down (out of the gate) keeps count == 2 and silences the heartbeat for the
-# whole hunt; `-lt` or a literal 45 in the gate floods it.
+# whole hunt; `-lt` or a literal in the gate floods it.
 assert ('''  now=$(date +%s)
-  if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
+  if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$beat" ]; then
     printf 'bughunt · %s · running\\n' "$mode"
     last=$now; prev=$st
   fi
-  sleep 45
+  sleep "$every"
 done
 ''') in monitor_code, "running heartbeat gate lost its shape"
-# needs-files must exit the loop, not print every 45 s.
-assert ('''    printf 'bughunt · %s · needs-files\\n' "$mode"
-    break
-''') in monitor_code, "needs-files no longer breaks"
+# needs-files must exit the loop, not print every poll — and it is written to
+# the watch file BEFORE the break, so the Stop hook reads the state the loop
+# exited on, not the last `running`.
+assert '''  printf '%s %s\\n' "$st" "$every" > "$watch" # the Stop hook reads this: fresh + running = armed
+  case "$st" in
+    done|failed|needs-files) printf 'bughunt · %s · %s\\n' "$mode" "$st"; break ;;
+  esac
+''' in monitor_code, "terminal branch lost its shape"
+assert '&& st=needs-files\n' in monitor_code
 # Every printf inside the loop is either terminal (break follows) or gated.
 loop = monitor_code.split("while :; do", 1)[1]
 for line in loop.splitlines():
     if "printf 'bughunt" in line and "break" not in line:
-        assert line.startswith("      printf") or line.startswith("    printf 'bughunt · %s · running") or line.startswith("    printf 'bughunt · %s · needs-files"), line
+        assert line.startswith("      printf") or line.startswith("    printf 'bughunt · %s · running"), line
 assert loop.count("printf 'bughunt · %s · running") == 1
 assert loop.count("printf 'bughunt · %s · poll-failed") == 1
 # Claude Code's Monitor tool runs the loop in the user's login shell – zsh on
@@ -115,26 +150,78 @@ assert zsh, "zsh is required: the loop must be executed under the shell Claude C
 # `needs-files`.
 loop_src = monitor_code.split("\n", 1)[1]
 assert not loop_src.startswith("bash"), "fence info string leaked into the executed loop"
+# The three placeholders the agent substitutes, and only those: a fourth is a
+# number the agent types, and the numbers are the server's.
+assert set(re.findall(r"<[a-z_]+>", loop_src)) == {"<status_url>", "<review_id>", "<interval_s>"}, set(re.findall(r"<[a-z_]+>", loop_src))
+def armed(src): return src.replace("<status_url>", "http://x/").replace("<review_id>", "rev_test").replace("<interval_s>", "240")
+def shims(d, curl_body):
+    # The shim notes whether the watch file already existed when it was called:
+    # the file must be there before the first poll, not one poll later.
+    open(f"{d}/curl", "w").write(f"#!/bin/sh\n[ -f \"$HOME/.ohmybug/watch/rev_test\" ] && echo yes >> \"{d}/seen\"\nprintf '%s' '" + curl_body + "'\n"); os.chmod(f"{d}/curl", 0o755)
+    # The sleep shim records what it was asked for: that number IS the cadence.
+    open(f"{d}/sleep", "w").write(f'#!/bin/sh\necho "$1" >> "{d}/slept"\nexit 0\n'); os.chmod(f"{d}/sleep", 0o755)
+    return {**os.environ, "PATH": f"{d}:{os.environ['PATH']}", "HOME": d}
 for body, want in (('{"status":"done"}', "done"), ('{"status":"failed"}', "failed"), ('{"status":"running","files_requested":true}', "needs-files")):
     with tempfile.TemporaryDirectory() as d:
-        open(f"{d}/curl", "w").write("#!/bin/sh\nprintf '%s' '" + body + "'\n"); os.chmod(f"{d}/curl", 0o755)
-        open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
-        r = subprocess.run([zsh, "-c", loop_src.replace("<status_url>", "http://x/")], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
+        r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env=shims(d, body))
+        # The Stop hook's file: the state the loop exited on, so a terminal or
+        # needs-files word there is what tells the hook to speak again.
+        assert open(f"{d}/.ohmybug/watch/rev_test").read() == f"{want} 240\n", open(f"{d}/.ohmybug/watch/rev_test").read()
+        assert open(f"{d}/seen").read() == "yes\n", "the watch file must exist before the first poll runs"
     assert r.returncode == 0 and r.stdout == f"bughunt · fast · {want}\n", (want, r.returncode, r.stdout, r.stderr)
+# The cadence comes off the body (#67): a payload submit's body says
+# next_poll_after_s 45 and heartbeat_s 225, and the loop sleeps 45 — not the
+# 240 it was seeded with — and writes that cadence into the watch file, so the
+# hook's freshness bound follows the same number. `date` advances 60 s per call
+# and the loop reads it twice per iteration, so a poll costs 120 s of shim clock:
+# the first reading prints at once (empty prev), then one `running` per 225 s of
+# clock, never per poll — five polls of running, three lines (polls 1, 3, 5).
+with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '')
+    open(f"{d}/curl", "w").write(f'#!/bin/sh\nn=$(cat "{d}/polls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "{d}/polls"\n'
+        'if [ "$n" -le 5 ]; then printf \'%s\' \'{"status":"running","monitor":{"interval_s":240,"heartbeat_s":225},"next_poll_after_s":45,"files_requested":false}\'; else printf \'%s\' \'{"status":"done","monitor":{"interval_s":240,"heartbeat_s":225},"next_poll_after_s":240}\'; fi\n'); os.chmod(f"{d}/curl", 0o755)
+    open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
+    r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env=env)
+    slept = open(f"{d}/slept").read().split()
+    watch = open(f"{d}/.ohmybug/watch/rev_test").read()
+assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+assert slept == ["45"] * 5, slept
+assert watch == "done 240\n", watch
+assert r.stdout.splitlines() == ["bughunt · fast · running"] * 3 + ["bughunt · fast · done"], r.stdout
 # The failed-poll path, executed: a dead endpoint. The curl shim honours `-f`
 # (exit 22 on an HTTP error, else a 404 page with exit 0 – what dropping `-f`
 # or piping curl's output would see) and `date` advances 60 s per call, so the
 # clock-gated poll-failed lines land and the 12-failure retirement fires. A
-# loop that treats the failure as "running" prints `running` and is red.
+# loop that treats the failure as "running" prints `running` and is red. No body
+# ever arrived, so the loop sleeps the seeded interval_s — and still writes the
+# watch file, `poll-failed 240`: the watcher is alive, the endpoint is not, and a
+# Stop hook that read the missing file as a dead watcher ordered a second monitor
+# over a live one for the length of a blip (found in review).
 with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '')
     open(f"{d}/curl", "w").write('#!/bin/sh\ncase " $* " in *" -f"*) exit 22 ;; esac\nprintf \'<html>404</html>\'\n'); os.chmod(f"{d}/curl", 0o755)
-    open(f"{d}/sleep", "w").write("#!/bin/sh\nexit 0\n"); os.chmod(f"{d}/sleep", 0o755)
     open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
-    r = subprocess.run([zsh, "-c", loop_src.replace("<status_url>", "http://x/")], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"})
+    r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, env=env)
+    slept = set(open(f"{d}/slept").read().split())
+    assert open(f"{d}/.ohmybug/watch/rev_test").read() == "poll-failed 240\n", open(f"{d}/.ohmybug/watch/rev_test").read()
+assert slept == {"240"}, slept
 lines = r.stdout.splitlines()
 assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
 assert "bughunt · fast · poll-failed" in lines and "bughunt · fast · running" not in lines, r.stdout
-assert 1 <= lines.count("bughunt · fast · poll-failed") <= 6, lines  # 12 failed polls, one line per 180 s of shim clock
+assert 1 <= lines.count("bughunt · fast · poll-failed") <= 6, lines  # 12 failed polls, one line per 240 s of shim clock
+# The same run against an endpoint that answers 200 with something that is not
+# the review (a redirect page, a proxy's HTML): no status word, so a failed poll
+# — `poll-failed` in the file, never `running` on stdout, retired on the twelfth.
+# A loop that takes the success path here writes a blank status word the Stop
+# hook reads as armed, and prints `running` on a body it could not read.
+with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '<html><body>Moved</body></html>')
+    open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
+    r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, env=env)
+    assert open(f"{d}/.ohmybug/watch/rev_test").read() == "poll-failed 240\n", open(f"{d}/.ohmybug/watch/rev_test").read()
+lines = r.stdout.splitlines()
+assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
+assert "bughunt · fast · running" not in lines and "bughunt · fast · poll-failed" in lines, r.stdout
 # The properties list is normative for any rewrite of the loop: property 4
 # must describe the shipped loop (clock-gated poll-failed, retirement after 12
 # failures), not the pre-retirement one that printed per failure and never ended.
@@ -142,11 +229,18 @@ props = skill.split("Any form you write must keep:", 1)[1].split("\n\nNo backgro
 assert "- **A poll failure is seen, not swallowed.**" in props
 assert "print `poll-failed` on the heartbeat clock" in props and "only 12 consecutive failures end the\n  watch" in props
 assert "does not end the watch" not in props and "print the failure, and keep polling" not in props
-assert "~9 min" not in skill and "13 min" not in skill, "12 failed polls take 9-12 min: 12 x (45 + 15) s"
+# Property 5 (#67): the watch file is what makes the Stop hook stand down.
+assert "- **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on every\n  poll after it, failed ones too**" in props
+assert "`next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in props
+assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
-for phrase in ("`Monitor` tool", "240 seconds", "180 s budget", "persistent: true", "up to 150 min", "CronCreate", "every 4 minutes", "`3-59/4 * * * *`", "KEEP this job", "after 3\n  consecutive poll failures", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop"):
+for phrase in ("`Monitor` tool", "`next_poll_after_s`", "at least every `monitor.heartbeat_s`", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after `<fail_cap>` consecutive poll failures (3 for a job at\n  `interval_s`, 12 for one every minute", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
     assert phrase in claude_bullet, phrase
 assert "up to 2 h" not in claude_bullet
+# No cadence literal in the bullet either (#67): the 240 in the cron example is
+# a derivation from interval_s, stated as one; the rest are the server's.
+for literal in ("every 45 seconds", "every 240 seconds", "180 s budget", "every 4 minutes"):
+    assert literal not in claude_bullet, literal
 # The deep bullet must not tell the agent nothing will prod it mid-run: the deep
 # wake is exactly what catches a file request now.
 assert "rarely needs files from you, so little prods you mid-run — the heartbeat's\n  `status_url` poll is what catches a request when it does" in skill
@@ -185,16 +279,57 @@ assert WAKE_RULE in codex_bullet, "the heartbeat prompt must carry the server's 
 # The war story that justifies the rule carries the magnitude the record supports:
 # three wakes at the four-minute cadence is twelve minutes, not more.
 assert "on three wakes — twelve minutes — after" in codex_bullet
-assert "`wake_rule` — copy `wake_rule` into the prompt word for word" in codex_bullet
+assert "copy `wake_rule` into the prompt word for word" in codex_bullet
 # ...and the hand-wait path prints on the same terms: it is the path with no
 # heartbeat, i.e. the one where nothing else would catch a remembered status.
 assert "a status you\nprint is a status a tool just answered" in skill
-for phrase in ("poll_after_s=30", "timeout_s=45)` in a\n  loop", "up to 3 times inside one wake", "`WAIT_REVIEW_MAX_S` (45 s)", "`timed_out: true`", "call `wait_review` once", "`get_findings` every 45 seconds", "for at most\n  180 seconds", "needs_files", "older than 180 minutes", "watch-retired`, then delete it"):
-
+# One read per wake (#67), on this surface too: the loop of short holds that
+# filled the cadence is what made a client poll once a minute.
+for phrase in ("**The automation is the cadence; a wake is one read.**", "makes ONE read and\n  ends", "one `wait_review(review_id)` with its\n  default hold", "`timed_out: true`\n  answer IS this wake's reading: `running`", "Do not loop either call inside the\n  wake", "needs_files", "older than 180 minutes", "watch-retired`, then delete it"):
     assert phrase in codex_bullet, phrase
-# The 225 s hold is gone from BOTH surfaces (the comment used to promise that
-# while the assert read one): the server caps a hold at 45 s, so asking for more
-# returns the same timed_out answer at 45 s and waits no longer.
+for literal in ("up to 3 times", "3 x 60 s", "180 + 60", "poll_after_s=30", "timeout_s=45", "every 45 seconds", "for at most\n  180 seconds", "loop instead", "Loop instead"):
+    assert literal not in codex_bullet, literal
+# ...with the one carve-out the other two surfaces keep (found in review): a
+# payload submit is the one path where the server cannot serve the reviewers'
+# file requests itself, the request is held open for minutes, and one read per
+# interval_s misses it — there the wake's back-to-back wait_review IS the
+# watcher, bounded so it ends before the next wake fires.
+# The bound is the iteration's cost against heartbeat_s, not one hold against
+# interval_s: a hold costs the server's cap plus a round trip, and subtracting
+# the hold alone let a fourth one start at 180 s and return at 240 s — as the
+# next wake fired, with nothing left for the line or the file answer (found in
+# review). heartbeat_s is the contract's own "the line must land by then", so
+# the handover before interval_s is derived, not typed.
+# ...and the handover is priced in round trips, not left to the
+# heartbeat_s–interval_s gap: at a 10 s round trip that gap-derived handover
+# was 20 s for calls that are themselves round trips (found in review).
+for phrase in ("a PAYLOAD submit\n  (§2, rung 3) while a file request can still arrive", "call `wait_review` back to back", "start another hold only if\n  it, its round trip, and one more round trip for the handover's own calls\n  would end inside `heartbeat_s` from this wake's start", "a bound that subtracts the hold alone lets the last one return\n  exactly as the next wake fires", "shrinks it on exactly the slow links whose\n  calls need it", "A repo or deep submit never needs this"):
+    assert phrase in codex_bullet, phrase
+assert "less one hold" not in skill and "less one hold" not in session_text
+assert "it and its round trip would end inside" not in skill and "it and its round trip would end inside" not in session_text
+for phrase in ("the one exception is a payload submit", "inside that wake call wait_review back to back", "start another hold only if it, its round trip, and one more round trip for the handover's own calls would end inside heartbeat_s from this wake's start", "a bound that subtracts the hold alone lets the last one return as the next wake fires", "shrinks it on the slow links that need it", "a repo or deep submit never needs this"):
+    assert phrase in session_text, phrase
+# The Monitor surface reads on a failed poll like the other two (found in
+# review): a fresh poll-failed file keeps the Stop hook quiet for twelve polls,
+# so without this read a review sat done and unread behind that silence.
+assert "on `poll-failed` → one\n  `get_findings`, print what it answered" in claude_bullet
+after_loop = skill.split("Every printed line wakes you.", 1)[1].split("The loop above keeps", 1)[0]
+assert "**A `poll-failed`\nwake is a wake with no answer, and the wake rule applies: call `get_findings`\nonce" in after_loop
+assert "this surface must not be the one that only prints" in after_loop
+# The cron fallback follows the body's cadence too (found in review): a payload
+# submit's next_poll_after_s is under a minute and its file request is held open
+# for minutes, so the job runs every minute there and at interval_s otherwise.
+for phrase in ("so curl `status_url` ONCE before creating the job", "`next_poll_after_s` is on the\n  status body only", "Under a minute", "every minute, the tightest cron allows\n  (`* * * * *`)", "otherwise `interval_s`", "one\n  job at one cadence for the whole hunt", "3 consecutive failures at `interval_s`, 12 at every minute"):
+    assert phrase in claude_bullet, phrase
+# The placeholders the cron prompt carries: the fail cap is one of them now, so
+# a job created every minute is not retired by a three-minute blip.
+assert "after `<fail_cap>` consecutive poll failures" in claude_bullet
+assert "after 3\n  consecutive poll failures" not in claude_bullet
+# No literal hold or cadence on either surface: the server caps the hold and
+# names the cadence, and a number written here is the one an agent obeys when
+# the two disagree (measured: the tool's 45 beat the field's 240).
+for text in (skill, session_text):
+    assert "timeout_s=45" not in text and "up to 3 times" not in text and "3 x 60" not in text, "the wake loop is back"
 # The reason must not survive as the pre-clamp one: a client told to expect a
 # dead socket books ordinary timed_out answers as unreachable-server wakes and
 # retires a healthy watch after three of them. And that consequence is the whole
@@ -208,7 +343,7 @@ router_text = session_text
 # The ROUTING text is the other Codex surface and restates the whole heartbeat
 # contract on its own, so a rule stated only in the skill still ships an agent
 # that arms a heartbeat allowed to answer from memory.
-ROUTER_WAKE_RULE = ("wake_rule — copy wake_rule into the prompt word for word: every wake reports the status it just read "
+ROUTER_WAKE_RULE = ("copy wake_rule into the prompt word for word: every wake reports the status it just read "
                     "(from wait_review or get_findings on a fast hunt, from the status_url read on a deep one), "
                     "and a wake with no answer prints bughunt · <mode> · poll-failed, never the previous status")
 assert ROUTER_WAKE_RULE in router_text, "ROUTING must carry the whole wake rule, not a fragment of it"
@@ -223,8 +358,11 @@ assert "Retire a heartbeat older than 180 minutes" in router_text, "ROUTING must
 # The deep wake reads status_url, so the agent must be told to copy the URL into
 # the heartbeat and to poll it once per wake — or the rule names a read it was
 # never handed, on the longest hunt there is.
-assert "status_url, interval_s, wake_on, stop_on, and wake_rule" in router_text
-assert "each of its wakes polling status_url once and reporting that" in router_text
+# heartbeat_s travels in the prompt too (found in review): the carve-out is
+# measured against it, and a wake holds nothing but its prompt.
+assert "status_url, interval_s, heartbeat_s, wake_on, stop_on, and wake_rule" in router_text
+assert "every number the wake will measure against goes into the prompt" in router_text
+assert "for a deep hunt the wake polls status_url once and reports that" in router_text
 # ...and that poll sees a file request only in the body's flags, never in the
 # status word, so the deep wake is told to read them; a failed poll falls back to
 # one get_findings before it counts against retirement, and a retired watch calls
@@ -246,8 +384,8 @@ assert "then call get_findings once and arm a fresh heartbeat if the review is s
 # ...and the routing text names the flags itself: the consequent alone leaves a
 # dangling "either flag" if the names are deleted.
 assert "that body flags a file request as awaiting_client_files/files_requested rather than in its status word" in router_text
-assert "`review_id`, `status_url`, `interval_s`" in codex_bullet
-assert "each of its wakes polls `status_url` once and\n  reports that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
+assert "`review_id`, `status_url`, `interval_s`,\n  `heartbeat_s`, `wake_on`, `stop_on` and `wake_rule`" in codex_bullet
+assert "its wake polls `status_url` once and reports\n  that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
 # A prompt rule did not hold (a heartbeat carrying wake_rule word for word still
 # answered `running` from memory for forty minutes after done): the prompt must
@@ -302,33 +440,42 @@ assert "status_url read, whichever that wake uses" in router_text
 for text in (skill, router_text):
     assert "timeout_s=225" not in text, "a 225 s hold is capped by the server to 45 s"
     assert "client MCP timeout" not in text and "client-side timeout" not in text, "the clamp answers; it does not kill the socket"
-assert "never count it towards the retirement" in skill
+assert "never a wake to\n  count towards the retirement rule" in skill
 assert "never a wake to count towards retirement" in router_text
-# The stop-early rule, in its own words on each surface: every bare needs_files
+# The stop rule, in its own words on each surface: every bare needs_files
 # token in the tuples above is satisfied by a neighbouring sentence, so deleting
 # this clause used to ship green — and a wake that keeps waiting through a
 # needs_files answer burns a file request that is held open for minutes.
-assert "stop the loop the moment the answer is `done`,\n  `failed` or `needs_files`" in skill
-assert "stopping early on done, failed or needs_files" in router_text
-# The wake budget must leave room for the round trips: holds alone filling the
-# cadence is how two wakes end up looping over the same review.
-# Both branches of the wake spend the same budget, or the one left behind
-# overruns the cadence the other was cut to fit: an iteration is 45 s of waiting
-# plus up to 15 s of round trip, three of them, 60 s left for the status line
-# and the cleanup. A count or a budget that drifts on either surface is a wake
-# still looping when the next heartbeat fires.
+assert "On `needs_files`, send files first; on `done` or\n  `failed`, process the result and delete the heartbeat" in skill
+assert "stop on done, failed or needs_files" in router_text
+# The wake's shape is one read, on both surfaces, in the same words: a wake that
+# loops is still holding the thread when the next one fires. The budget
+# arithmetic that used to size the loop (holds plus round trips against the
+# cadence) is gone with it — there is nothing left to size.
 for text in (skill, router_text):
-    assert "up to 3 times" in text, "an iteration costs 45 + 15 s: more than three overruns the 240 s wake"
-    assert "225s" not in text and "225 seconds" not in text, "225 s of polling leaves no handover slack either"
-assert "3 x 60 s\n  = 180 s" in skill and "3 x 60 s = 180 s" in router_text
-assert "15-second gap" not in skill
+    assert "a wake that\n  loops is still holding the thread when the next one fires" in text or "a wake that loops is still holding the thread when the next one fires" in text
+    assert "225s" not in text and "225 seconds" not in text
+assert "15-second gap" not in skill and "handover slack" not in skill
 # The no-monitor fallback is the one place with no heartbeat to hand the wait
-# to, so it must loop for a DEEP hunt as well: one call there ends the turn on
-# an hour-long review nobody reads.
+# to, so it must keep waiting for a DEEP hunt as well: one call there ends the
+# turn on an hour-long review nobody reads. It waits at the server's cadence —
+# read, sleep retry_after_s in the foreground, read — and loops wait_review back
+# to back only for a payload submit, where the hold is the watcher a file
+# request needs.
 fallback = skill.split("If the runtime cannot create its monitor,", 1)[1].split("\n\nIf the MCP server is missing", 1)[0]
-for phrase in ("`done`, `failed` or `needs_files`", "held open for minutes only", "the loop is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed"):
+for phrase in ("`done`, `failed` or `needs_files`", "held open for minutes only", "the waiting is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed", "`retry_after_s`", "sleep <retry_after_s>", "Do not loop `wait_review` back to back to fill the gap", "The one place the hold IS the watcher is a payload submit"):
     assert phrase in fallback, phrase
+# The hand-wait read of status_url sees a file request in the body's FLAGS, never
+# in its status word — the same rule the Monitor loop and the deep wake carry.
+# Told to stop on the word `needs_files`, this path slept through a request the
+# body was flagging on every poll (found in review).
+assert "a `status_url` body flags a file request in\n`awaiting_client_files`/`files_requested`, never in its status word" in fallback
+assert "treat either flag as `needs_files`" in fallback
 assert "one call for a deep one" not in fallback
+assert "poll_after_s=30" not in fallback and "timeout_s=45" not in fallback
+# The last-resort paragraph after the loop waits at the same cadence.
+assert "No background tasks in your harness? Then wait at the server's cadence" in skill
+assert "every 45-60\nseconds" not in skill
 
 review = run("prompt", {"prompt": "Please do a deep review of PR 3401 before merge"})
 review_text = review["hookSpecificOutput"]["additionalContext"]
