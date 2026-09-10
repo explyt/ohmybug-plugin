@@ -713,8 +713,8 @@ so as YOUR idea it only makes sense once the cheap pass has come back empty.
 
 - **Deep first, only on the user's word.** The user asked for the deep hunt
   when their request names it, in any language – "deep hunt", "deep review",
-  "full-repo", `--deep` on `/bughunter:review`, or a standing "yes, deep" they
-  gave for this branch earlier in the session. The adjective alone is not the
+  "full-repo", `deep` or `--deep` as the argument of `/bughunter:review`, or a
+  standing "yes, deep" they gave for this branch earlier in the session. The adjective alone is not the
   ask: a "deep-dive review" or "a deep look at the diff" is a thorough FAST
   review, and when in doubt that is the one question worth asking. Then call `submit_review` ONCE
   with `deep: true` and rung 1's `meta` (`repo` + `ref` = the pushed head sha +
