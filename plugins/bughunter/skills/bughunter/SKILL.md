@@ -98,9 +98,44 @@ This is a required client action, not a reminder to do later:
   deliberate handover slack, not spare waiting: finish the status line and the
   cleanup inside them, or the next heartbeat fires while this wake still loops. Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
-  `bughunt · fast · needs-files`, `bughunt · fast · done`,
+  `bughunt · fast · needs-files`, `bughunt · fast · done · findings=N`,
   `bughunt · fast · failed`, `bughunt · fast · poll-failed`, or
   `bughunt · fast · watch-retired`).
+  A rule in the prompt did not hold: a heartbeat whose prompt carried the
+  wake_rule word for word still answered `running` from memory for forty
+  minutes after the hunt was done. So the prompt carries FACTS the model can
+  check, and the stop is mechanical, not a judgement:
+  - **The age cap is an instant, not a duration.** At the submit compute
+    `retire_at` = submit time + 180 min and write it into the prompt as an ISO
+    timestamp — the SAME instant into every replacement heartbeat, so the cap
+    bounds the review, not each job in turn: "If the current time is past
+    `<retire_at>`: print `bughunt · <mode> · watch-retired`, delete this
+    automation, then call `get_findings` once and report what it answered —
+    `still running` when it is, so the user knows the watch ended on a live
+    hunt." Delete BEFORE the read: a delete that waits on a tool call is lost
+    when that call fails, and the next wake fails the same way forever. That is the age-cap
+    retirement above with a clock in it, not a verdict: 180 min is the hunt's
+    budget plus queue time, so a queued deep hunt can still be live there. A
+    clock the model compares beats an instruction it can skip; any heartbeat
+    older than its `retire_at` is retired at wake regardless of what the wake
+    believes.
+  - **A terminal line quotes the answer it came from.** On `done`, print
+    `findings=N` read from that wake's read — `wait_review`, `get_findings`
+    or the `status_url` body, all of which carry a findings count (`bughunt ·
+    fast · done · findings=3`) — the bare word is what a memory produces.
+    Non-terminal wakes keep the enumerated lines; no answer from this wake's
+    read → the only line allowed is `bughunt · <mode> · poll-failed`.
+  - **Stop in the same turn as the read.** On `done` or `failed`,
+    `automation_update` deletes this heartbeat in the turn that read the
+    status. If the automation still exists at the next wake after a terminal
+    read, delete it first, then report.
+  - **The server names an overrun.** When a `get_findings` answer's
+    `next_step` begins "this is the first read after done", this heartbeat
+    outlived the hunt: delete it in that same turn and say so — that sentence
+    is the server's record of the wake this rule exists to prevent. The server
+    sends it only when the hunt has been done for more than ten minutes and
+    nothing has read its findings since, so a wake that catches `done` within
+    one cadence never sees it.
 - **Claude Code:** immediately start the monitor described below with the
   **`Monitor` tool** – not `Bash run_in_background`. Claude Code wakes a session
   on a background command only when it EXITS, so a `run_in_background` loop
@@ -129,14 +164,23 @@ This is a required client action, not a reminder to do later:
   body (which flags a request there, not in its status word) or `needs_files`
   from the `get_findings` fallback (which flags it exactly there) call
   `get_findings`, serve the files and KEEP this job;
-  on done/failed call `get_findings` and `CronDelete` this job; after 3
-  consecutive poll failures or once it is older than 180 minutes (the hunt's
-  150 min budget plus queue time – the job's age starts at submit, the
-  budget at claim) print `bughunt · <mode> · watch-retired` and only then
+  on done/failed call `get_findings`, print `findings=N` from that answer
+  and `CronDelete` this job; if that `get_findings` answer's `next_step`
+  begins "this is the first read after done", say so — this job outlived
+  the hunt; after 3
+  consecutive poll failures or once the current time is past `<retire_at>` (an
+  ISO timestamp you substitute at creation: the SUBMIT time + 180 minutes,
+  carried unchanged into every replacement job – the watch is then older than 180 minutes,
+  the hunt's 150 min budget plus queue time – as an instant,
+  because a fresh cron turn has no creation time to count from, and anchored
+  at submit so a replacement job cannot restart the cap)
+  print `bughunt · <mode> · watch-retired` and only then
   `CronDelete` it, then call `get_findings` once and create a fresh job if the
   review is still running or waiting for files AND the retirement came from poll
   failures, not from the age cap – a job nothing can satisfy is how a control gets
-  disarmed, and a job that vanishes in silence reads as 'still running'".
+  disarmed, and a job that vanishes in silence reads as 'still running'; either
+  way print what that `get_findings` answered — `still running` when it is, so
+  the user knows the watch ended on a live hunt".
   One job per review: `CronDelete` any earlier bughunt job before creating
   the next – never leave one pointing at an older review id. Only
   as the last resort keep a `run_in_background` until-loop – and say so:
