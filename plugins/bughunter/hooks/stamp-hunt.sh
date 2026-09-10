@@ -317,7 +317,7 @@ case "$TOOL" in
         # taken out any more: they are the protection the hunt checked.
         SIG=$(ohmybug_sig_id 2>/dev/null) && [ -n "$SIG" ] && printf 'sig:%s\n' "$SIG"
         # ...and with whole-line comments inside the code files taken out too
-        # (0.91): a KDoc sentence deleted after the hunt is prose the reviewers
+        # (0.92): a KDoc sentence deleted after the hunt is prose the reviewers
         # never saw, same as a README line. Absent on an old hook: no key.
         CMT=$(ohmybug_cmt_id 2>/dev/null) && [ -n "$CMT" ] && printf 'cmt:%s\n' "$CMT"
       fi
@@ -473,7 +473,7 @@ case "$TOOL" in
       # to ask the owner for SKIP_BUGHUNT. A true fact with a false conclusion
       # attached pushes an operator to disarm the control, and it is worse than a
       # plain error because there is nothing in the message to disprove.
-      say "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of six keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), cmt:<id> (when it is docs/skills or comment lines in code, 0.91), ref:<sha> on a clean tree, ref:<sha> of the pull request the merge command names (0.85), or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this."
+      say "ohmybug: no rev-id record for $REVIEW in $PWD, so THIS call promoted nothing. That is not a statement about the merge gate: the gate recognises a hunted diff by any of six keys — the diff id, sig:<id> (when everything changed since the hunt is docs/skills), cmt:<id> (when it is docs/skills or comment lines in code, 0.92), ref:<sha> on a clean tree, ref:<sha> of the pull request the merge command names (0.85), or a live pending record — and this says nothing about those. Run the gate to find out. What the rev-id record is FOR: it is the one that promotes a finished review into the marker, so if this session submitted the review, the submit ran from another checkout — re-run get_findings from the worktree the diff lives in. If another session owns it, that one will promote it: ignore this."
     fi
     ;;
 esac

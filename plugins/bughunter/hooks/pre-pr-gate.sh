@@ -601,7 +601,7 @@ if [ -n "$SIG" ] && ohmybug_hunted "sig:$SIG"; then
   exit 0
 fi
 # The same question one step further in: docs, skills AND whole-line comments
-# inside the code files taken out (ohmybug_cmt_id, 0.91). A KDoc sentence the
+# inside the code files taken out (ohmybug_cmt_id, 0.92). A KDoc sentence the
 # review asked to delete is the #1 delta after a clean round, and re-hunting it
 # is a paid review of prose. A failure to compute is no key, not a refusal: the
 # sig arm above is the ruler, this one only ADDS a way to say yes.
