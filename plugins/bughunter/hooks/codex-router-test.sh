@@ -262,9 +262,16 @@ for literal in ("up to 3 times", "3 x 60 s", "180 + 60", "poll_after_s=30", "tim
 # file requests itself, the request is held open for minutes, and one read per
 # interval_s misses it — there the wake's back-to-back wait_review IS the
 # watcher, bounded so it ends before the next wake fires.
-for phrase in ("a PAYLOAD submit\n  (§2, rung 3) while a file request can still arrive", "call `wait_review` back to back", "or when the next wake is due: `interval_s` from this wake's\n  start, less one hold", "A repo or deep submit never needs this"):
+# The bound is the iteration's cost against heartbeat_s, not one hold against
+# interval_s: a hold costs the server's cap plus a round trip, and subtracting
+# the hold alone let a fourth one start at 180 s and return at 240 s — as the
+# next wake fired, with nothing left for the line or the file answer (found in
+# review). heartbeat_s is the contract's own "the line must land by then", so
+# the handover before interval_s is derived, not typed.
+for phrase in ("a PAYLOAD submit\n  (§2, rung 3) while a file request can still arrive", "call `wait_review` back to back", "start another hold only if\n  it and its round trip would end inside `heartbeat_s` from this wake's start", "a bound that subtracts the hold alone lets the last one return exactly\n  as the next wake fires", "A repo or deep submit never needs this"):
     assert phrase in codex_bullet, phrase
-for phrase in ("the one exception is a payload submit", "inside that wake call wait_review back to back", "when the next wake is due (interval_s from this wake's start, less one hold)", "a repo or deep submit never needs this"):
+assert "less one hold" not in skill and "less one hold" not in session_text
+for phrase in ("the one exception is a payload submit", "inside that wake call wait_review back to back", "start another hold only if it and its round trip would end inside heartbeat_s from this wake's start", "a bound that subtracts the hold alone lets the last one return as the next wake fires", "a repo or deep submit never needs this"):
     assert phrase in session_text, phrase
 # No literal hold or cadence on either surface: the server caps the hold and
 # names the cadence, and a number written here is the one an agent obeys when

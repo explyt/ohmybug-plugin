@@ -119,16 +119,20 @@ EOF
 # A WATCHED hunt is not an unread one. The skill's monitor loop (Claude Code)
 # writes `<status> <poll_s>` into ~/.ohmybug/watch/<rev> on every poll (keyed by
 # review id: the loop runs in the agent's shell, which knows the id and not the
-# repo key). A file younger than poll_s + 60 s that reads `running` — or
-# `poll-failed`, the endpoint's failure and not the watcher's: the loop writes
-# that word and keeps polling for twelve of them — is a live watcher, and the
-# watcher is what wakes the session: nagging beside it is how a fleet ended up
-# with a foreground get_findings every 2–5 min on top of the armed watch (#67).
-# Stale means the watcher died; any other word is its last write before exiting
-# on a state that must be read now. Both fall through to the nag. Codex arms an
-# automation instead and writes nothing here, so on that client every record of
-# its own is unwatched by this test — the nag below says so rather than
-# claiming a watcher there has died.
+# repo key). A file younger than poll_s + 60 s is a live watcher unless its word
+# is one the loop writes as it EXITS (`done`, `failed`, `needs-files`): the
+# watcher is what wakes the session, and nagging beside it is how a fleet ended
+# up with a foreground get_findings every 2–5 min on top of the armed watch
+# (#67). The test is on the exit words and not a whitelist of live ones because
+# the loop writes the server's status word verbatim — `running`, `poll-failed`
+# (the endpoint's failure, not the watcher's: it keeps polling for twelve of
+# them), `awaiting_upload` on an upload ticket, whatever the door answers next —
+# and a whitelist read each new word as a dead watcher and ordered a second one
+# (found in review, twice). Stale means the watcher died; an exit word is its
+# last write before leaving on a state that must be read now. Both fall through
+# to the nag. Codex arms an automation instead and writes nothing here, so on
+# that client every record of its own is unwatched by this test — the nag below
+# says so rather than claiming a watcher there has died.
 WATCH="$HOME/.ohmybug/watch"
 UNWATCHED='' ARMED=0
 while IFS= read -r rec; do
@@ -136,7 +140,7 @@ while IFS= read -r rec; do
   wst='' wiv=''
   { read -r wst wiv < "$WATCH/$rec"; } 2>/dev/null
   case $wiv in ''|*[!0-9]*) wiv=240 ;; esac
-  case $wst in running|poll-failed) alive=1 ;; *) alive=0 ;; esac
+  case $wst in ''|done|failed|needs-files) alive=0 ;; *) alive=1 ;; esac
   if [ "$alive" = 1 ] &&
      [ -n "$(find "$WATCH/$rec" -maxdepth 0 -mmin "-$(( (wiv + 119) / 60 ))" 2>/dev/null)" ]; then
     ARMED=$((ARMED + 1))

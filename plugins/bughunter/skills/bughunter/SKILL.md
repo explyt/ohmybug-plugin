@@ -78,8 +78,13 @@ This is a required client action, not a reminder to do later:
   read the repo — and the request is held open for minutes, so inside that wake
   call `wait_review` back to back (each answer is a reading; it returns the
   moment `needs_files` shows) and stop when the answer is `done`, `failed` or
-  `needs_files`, or when the next wake is due: `interval_s` from this wake's
-  start, less one hold. A repo or deep submit never needs this. A
+  `needs_files` — or before the next wake is due: start another hold only if
+  it and its round trip would end inside `heartbeat_s` from this wake's start.
+  The line must land by then, and what is left before `interval_s` is the
+  handover — the status line, the file answer, the delete — so the next wake
+  finds the thread free. A hold costs the server's cap plus the call's round
+  trip; a bound that subtracts the hold alone lets the last one return exactly
+  as the next wake fires. A repo or deep submit never needs this. A
   deep hunt runs about an hour: its wake polls `status_url` once and reports
   that, which is the read `wake_rule` names for a deep hunt. That body
   keys a file request off `awaiting_client_files`/`files_requested`, not off its

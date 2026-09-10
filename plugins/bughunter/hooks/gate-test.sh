@@ -2197,6 +2197,15 @@ printf 'poll-failed 240\n' > "$W/rev_watched"
 rc=$(nsrc 0 A1)
 [ "$rc" = 0 ] || { printf 'FAIL nudge: a fresh poll-failed watch was read as dead (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
+# The loop writes the server's status word verbatim, so the alive test cannot
+# be a whitelist: `awaiting_upload` (an upload ticket before its payload lands)
+# is a fresh file from a live watcher too, and a two-word whitelist read it as
+# dead and ordered a second monitor (found in review). Dead is stale, or one of
+# the words the loop writes as it EXITS — nothing else.
+printf 'awaiting_upload 240\n' > "$W/rev_watched"
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a fresh watch with an unlisted live word was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
 # A terminal word in a fresh file is the watcher's last write before it exited:
 # the review is over and nobody has read it — exactly the nag's case. The same
 # for a file request, which the reviewers hold open for minutes only.
