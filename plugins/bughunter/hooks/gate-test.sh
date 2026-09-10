@@ -1637,6 +1637,25 @@ chmod +x "$CREPO/src/run.sh"
 chmod -x "$CREPO/src/run.sh"
 [ "$(cmt_in "$CREPO")" = "$Q1" ] || { printf 'FAIL cmt: control — the key did not return once the mode did\n'; fails=$((fails + 1)); }
 (cd "$CREPO" && git checkout -q -- . && git reset -q --hard HEAD~1 && git update-ref refs/remotes/origin/main HEAD && printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n// in template\n`\n' > src/f.ts)
+# A non-UTF-8 .py, a tab-separated heredoc word, JSX in a plain .js: each once
+# dropped or killed lines it must keep.
+got=$(printf '# c\ns = "\xff\xfe"\nx = 1\n' | python3 "$G/strip-comments.py" f.py | od -An -c | tr -d ' \n')
+[ -n "$got" ] || { printf 'FAIL strip: a non-UTF-8 .py killed the stripper\n'; fails=$((fails + 1)); }
+got=$(strip_out f.sh 'cat <<\tEOF\n# body\nEOF\n# plain\n')
+[ "$got" = "$(printf '%b' 'cat <<\tEOF\n# body\nEOF')" ] || { printf 'FAIL strip: a tab before the heredoc word lost the body: %s\n' "$got"; fails=$((fails + 1)); }
+got=$(strip_out f.js 'export function Help() {\n  return (\n    <pre>\n      // shown to the user\n    </pre>\n  )\n}\n')
+[ "$got" = "$(printf '%b' 'export function Help() {\n  return (\n    <pre>\n      // shown to the user\n    </pre>\n  )\n}')" ] || { printf 'FAIL strip: JSX text in a .js file was stripped: %s\n' "$got"; fails=$((fails + 1)); }
+got=$(strip_out f.js '// plain\nconst a = 1\n')
+[ "$got" = "const a = 1" ] || { printf 'FAIL strip: a .js file without JSX was not stripped: %s\n' "$got"; fails=$((fails + 1)); }
+# OHMYBUG_HUNT_ALL=1 is the strict gate: the key is then the full diff id, and
+# a comment deletion moves it like any byte (the short-circuit had no row).
+(cd "$CREPO" && printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n// in template\n`\n' > src/f.ts)
+S1=$(cd "$CREPO" && bash -c "OHMYBUG_HUNT_ALL=1; export OHMYBUG_HUNT_ALL; . '$G/diff-id.sh'; echo \"\$(ohmybug_cmt_id) \$(ohmybug_diff_id)\"")
+[ "${S1% *}" = "${S1#* }" ] && [ -n "${S1% *}" ] || { printf 'FAIL cmt: under OHMYBUG_HUNT_ALL=1 the key is not the full diff id: %s\n' "$S1"; fails=$((fails + 1)); }
+(cd "$CREPO" && printf 'export const a = 2 // changed\n// old comment\nexport const t = `\n// in template\n`\n' > src/f.ts)
+S2=$(cd "$CREPO" && bash -c "OHMYBUG_HUNT_ALL=1; export OHMYBUG_HUNT_ALL; . '$G/diff-id.sh'; ohmybug_cmt_id")
+[ "$S2" != "${S1% *}" ] || { printf 'FAIL cmt: under OHMYBUG_HUNT_ALL=1 a comment deletion did not move the key\n'; fails=$((fails + 1)); }
+(cd "$CREPO" && printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n// in template\n`\n' > src/f.ts)
 # Without python3 the key cannot be computed: exit 1, and the gate still judges by the other keys.
 got=$(cd "$CREPO" && bash -c "python3() { return 127; }; . '$G/diff-id.sh'; c=\$(ohmybug_cmt_id 2>/dev/null); echo \"rc:\$? cmt:\$c\"")
 [ "$got" = "rc:1 cmt:" ] || { printf 'FAIL cmt: no python3 must be exit 1, got %s\n' "$got"; fails=$((fails + 1)); }

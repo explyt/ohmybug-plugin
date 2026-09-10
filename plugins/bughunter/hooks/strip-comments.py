@@ -43,6 +43,10 @@ def is_directive(line):
     return DIRECTIVE.match(line) is not None
 
 
+# A closing tag or a self-closing element: JSX-looking text in a .js file.
+JSX = re.compile(r"</[A-Za-z>]|/>")
+
+
 def c_family(text, tick, triple):
     """`//` and `/* */` comments. `tick`: backtick template literals with `${}`
     (TS/JS). `triple`: `\"\"\"` raw strings (Kotlin). A comment line is one where
@@ -191,7 +195,7 @@ def shell(text):
                     strip_tabs = k < len(raw) and raw[k] == "-"
                     if strip_tabs:
                         k += 1
-                    while k < len(raw) and raw[k] == " ":
+                    while k < len(raw) and raw[k] in " \t":
                         k += 1
                     q = raw[k] if k < len(raw) and raw[k] in "'\"\\" else ""
                     if q:
@@ -225,7 +229,9 @@ def python(text):
     COMMENT/NL. A shebang stays. A file tokenize rejects is returned whole."""
     try:
         toks = list(tokenize.generate_tokens(io.StringIO(text).readline))
-    except (tokenize.TokenError, SyntaxError, IndentationError):
+    except Exception:  # noqa: BLE001 — TokenError, SyntaxError, a non-UTF-8 byte the C
+        # tokenizer refuses (UnicodeEncodeError): whatever tokenize cannot read is
+        # returned whole. A raise here killed the key for the whole branch.
         return text
     code_lines = set()
     comment_lines = set()
@@ -251,8 +257,13 @@ def strip(path, text):
     ext = path.rsplit(".", 1)[-1].lower() if "." in path.rsplit("/", 1)[-1] else ""
     # No tsx/jsx: JSX text is untrackable without a parser, and a text line
     # that begins with `//` would be dropped as a comment. No rule is the
-    # strict rule.
-    if ext in ("ts", "js", "mjs", "cjs"):
+    # strict rule. JSX is legal in plain .js too (Babel, Next, CRA), so a .js
+    # file that carries a closing tag or a self-closing `/>` is left whole.
+    if ext == "ts":
+        return c_family(text, tick=True, triple=False)
+    if ext in ("js", "mjs", "cjs"):
+        if JSX.search(text):
+            return text
         return c_family(text, tick=True, triple=False)
     if ext in ("kt", "kts"):
         return c_family(text, tick=False, triple=True)

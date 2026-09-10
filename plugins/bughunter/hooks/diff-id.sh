@@ -196,42 +196,46 @@ ohmybug_sig_consistent() {
 # `--no-renames`: a rename is a deletion plus an addition here, so the old
 # path's stripped content is compared too, whatever git's rename heuristics say.
 ohmybug_cmt_id() {
-  local base root list meta f oldm newm a b out='' d rc strip
+  local base root list blob meta f oldm newm a b out='' d rc strip
   [ "${OHMYBUG_HUNT_ALL:-0}" = "1" ] && { ohmybug_diff_id; return $?; }
   command -v python3 >/dev/null 2>&1 || return 1
   strip="$(dirname "${BASH_SOURCE[0]}")/strip-comments.py"
   [ -f "$strip" ] || return 1
   base=$(ohmybug_base) || return 1
   root=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
-  list=$(mktemp) && a=$(mktemp) && b=$(mktemp) || { rm -f "${list:-}" "${a:-}"; return 1; }
+  # Every scratch file from mktemp (0600, unguessable), none from a derived
+  # name: a `> "$x.blob"` beside them was 0644 in a shared temp dir and would
+  # follow a symlink planted under that name (rev: base blobs of a private
+  # repository readable by every local user).
+  list=$(mktemp) && blob=$(mktemp) && a=$(mktemp) && b=$(mktemp) || { rm -f "${list:-}" "${blob:-}" "${a:-}" "${b:-}"; return 1; }
   # shellcheck disable=SC2086
   if ! git -C "$root" -c core.quotePath=false diff -z --raw --no-renames "$base" -- $OHMYBUG_SKIP_GLOBS > "$list" 2>/dev/null; then
-    rm -f "$list" "$a" "$b"; return 1
+    rm -f "$list" "$blob" "$a" "$b"; return 1
   fi
-  if [ ! -s "$list" ]; then rm -f "$list" "$a" "$b"; return 0; fi
+  if [ ! -s "$list" ]; then rm -f "$list" "$blob" "$a" "$b"; return 0; fi
   # Records alternate: ":<old mode> <new mode> <old sha> <new sha> <status>" NUL path NUL.
   while IFS= read -r -d '' meta && IFS= read -r -d '' f; do
     IFS=' ' read -r oldm newm _ <<<"${meta#:}"
     if [ "$oldm" != 000000 ]; then
       # Two steps, not a pipe: a pipe's status is python3's, and a blob git
       # could not show would strip to an empty side instead of refusing.
-      git -C "$root" show "$base:$f" > "$list.blob" 2>/dev/null || { rm -f "$list" "$list.blob" "$a" "$b"; return 1; }
-      { printf 'mode %s\n' "$oldm"; python3 "$strip" "$f" < "$list.blob"; } > "$a" || { rm -f "$list" "$list.blob" "$a" "$b"; return 1; }
+      git -C "$root" show "$base:$f" > "$blob" 2>/dev/null || { rm -f "$list" "$blob" "$a" "$b"; return 1; }
+      { printf 'mode %s\n' "$oldm"; python3 "$strip" "$f" < "$blob"; } > "$a" || { rm -f "$list" "$blob" "$a" "$b"; return 1; }
     else
       : > "$a"
     fi
     if [ "$newm" != 000000 ]; then
-      [ -e "$root/$f" ] || { rm -f "$list" "$a" "$b"; return 1; }
-      { printf 'mode %s\n' "$newm"; python3 "$strip" "$f" < "$root/$f"; } > "$b" || { rm -f "$list" "$a" "$b"; return 1; }
+      [ -e "$root/$f" ] || { rm -f "$list" "$blob" "$a" "$b"; return 1; }
+      { printf 'mode %s\n' "$newm"; python3 "$strip" "$f" < "$root/$f"; } > "$b" || { rm -f "$list" "$blob" "$a" "$b"; return 1; }
     else
       : > "$b"
     fi
     d=$(diff -u -L "a/$f" -L "b/$f" "$a" "$b"); rc=$?
-    [ "$rc" -le 1 ] || { rm -f "$list" "$a" "$b"; return 1; }
+    [ "$rc" -le 1 ] || { rm -f "$list" "$blob" "$a" "$b"; return 1; }
     [ -n "$d" ] && out="$out$d
 "
   done < "$list"
-  rm -f "$list" "$list.blob" "$a" "$b"
+  rm -f "$list" "$blob" "$a" "$b"
   [ -n "$out" ] || return 0
   printf '%s' "$out" | shasum -a 256 | cut -d' ' -f1
 }
