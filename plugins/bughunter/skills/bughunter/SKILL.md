@@ -161,7 +161,7 @@ This is a required client action, not a reminder to do later:
   every review status change and exits on `done` / `failed` or on the
   `awaiting_client_files`/`files_requested` flags — that body carries a file
   request in those flags, never in its status word. Every number in the loop
-  comes from the server: the submit response's `monitor.interval_s` seeds the
+  comes from the server: the submit response's `next_poll_after_s` seeds the
   first sleep, the body's own fields take over from the first poll. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
@@ -559,8 +559,9 @@ while :; do
 done
 ```
 
-Substitute the three placeholders from the submit response — `<status_url>`,
-`<review_id>`, and `<interval_s>` from its `monitor` — and nothing else: the
+Substitute the four placeholders from the submit response — `<status_url>`,
+`<review_id>`, `<next_poll_after_s>` (its `monitor.interval_s` on an older
+server that has none) and `<heartbeat_s>` from its `monitor` — and nothing else: the
 cadence between polls and between lines is read off each status body
 (`next_poll_after_s`, `monitor.heartbeat_s`), so the loop keeps the server's
 numbers without you typing them.

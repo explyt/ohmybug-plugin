@@ -2061,7 +2061,7 @@ esac
 # write on done/failed/needs-files IS that exit word, so a nag beside a fresh
 # file is as often "read this now" as "re-arm" — the order is read first.
 case $said in
-  *'dead OR it exited on a state to read now'*'read first; re-arm only if the review is still running'*) ;;
+  *'dead OR it exited on a state to read now'*'read first; re-arm only if the review is still running or waiting for files'*) ;;
   *) printf 'FAIL nudge: a nag beside an exited watcher still reads as "it has died: re-arm": %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac

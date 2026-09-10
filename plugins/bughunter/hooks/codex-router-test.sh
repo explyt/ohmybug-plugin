@@ -157,6 +157,12 @@ assert not loop_src.startswith("bash"), "fence info string leaked into the execu
 # The four placeholders the agent substitutes, and only those: a fifth is a
 # number the agent types, and the numbers are the server's.
 assert set(re.findall(r"<[a-z_]+>", loop_src)) == {"<status_url>", "<review_id>", "<next_poll_after_s>", "<heartbeat_s>"}, set(re.findall(r"<[a-z_]+>", loop_src))
+# ...and the sentence under the fence that tells the agent what to substitute
+# names the same four (#1029 f1 of PR 74): it still said three, with
+# `<interval_s>`, so a literal follower left `every=<next_poll_after_s>` in place
+# and the loop died on a parse error, the hunt unwatched.
+assert "Substitute the four placeholders from the submit response — `<status_url>`,\n`<review_id>`, `<next_poll_after_s>` (its `monitor.interval_s` on an older\nserver that has none) and `<heartbeat_s>` from its `monitor` — and nothing else" in skill
+assert "the submit response's `next_poll_after_s` seeds the\n  first sleep" in skill and "`monitor.interval_s` seeds the\n  first sleep" not in skill
 def armed(src): return src.replace("<status_url>", "http://x/").replace("<review_id>", "rev_test").replace("<next_poll_after_s>", "240").replace("<heartbeat_s>", "225")
 def shims(d, curl_body):
     # The shim notes whether the watch file already existed when it was called:

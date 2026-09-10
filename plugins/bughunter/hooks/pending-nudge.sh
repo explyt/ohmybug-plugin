@@ -193,9 +193,10 @@ echo "ohmybug: $WHOSE: $IDS — do not end the turn waiting" \
      "skill (Claude Code: the Monitor tool; Codex: automation_update + wait_review) so it" \
      "wakes you, rather than polling in a loop or waiting for a background shell to exit." \
      "On Claude Code the skill's loop writes ~/.ohmybug/watch/<review_id> on every poll and" \
-     "this hook is silent while that file is fresh and running — so a nag beside a Monitor" \
+     "this hook is silent while that file is fresh — so a nag beside a Monitor" \
      "you armed there means it is dead OR it exited on a state to read now (done, failed," \
-     "needs-files): read first; re-arm only if the review is still running. On Codex the" \
+     "needs-files): read first; re-arm only if the review is still running or waiting" \
+     "for files. On Codex the" \
      "heartbeat leaves no file here, so" \
      "this line does not know whether yours is alive: do not arm a second one over it." \
      "$ALSO" \
