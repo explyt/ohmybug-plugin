@@ -798,6 +798,15 @@ disproving its own report. If a charge looks wrong, quote the receipt.
 Fix the confirmed bugs as part of the normal workflow. Findings include a
 suggested fix; treat it as a hint, not gospel.
 
+**Three hunts in a row that each confirm a major end the fix-and-re-hunt
+loop.** Two ways forward: ship it dark – the feature behind a flag that
+defaults to off, the confirmed majors in the dark code filed as a debt ticket
+that names the cause – or split it – merge the part that held, and open a
+ticket for the rest that starts from the cause, not from a patch. Which of the
+two is the user's call, and so is "one more round" – once per change; after
+it, the next confirmed major goes to the user's pick of the two, with no
+further fix round.
+
 ### 6b. Offer the story (only when a bug actually landed)
 
 `confirm_findings` answers with a `share` block whenever at least one bug
