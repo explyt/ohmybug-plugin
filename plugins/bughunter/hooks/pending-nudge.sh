@@ -116,14 +116,19 @@ while IFS= read -r rec; do
 done <<EOF
 $PEND
 EOF
-# A WATCHED hunt is not an unread one. The skill's monitor loop writes
-# `<status> <poll_s>` into ~/.ohmybug/watch/<rev> on every poll (keyed by review
-# id: the loop runs in the agent's shell, which knows the id and not the repo
-# key). A file younger than poll_s + 60 s that reads `running` is a live watcher,
-# and the watcher is what wakes the session — nagging beside it is how a fleet
-# ended up with a foreground get_findings every 2–5 min on top of the armed
-# watch (#67). Stale means the watcher died; any other word is its last write
-# before exiting on a state that must be read now. Both fall through to the nag.
+# A WATCHED hunt is not an unread one. The skill's monitor loop (Claude Code)
+# writes `<status> <poll_s>` into ~/.ohmybug/watch/<rev> on every poll (keyed by
+# review id: the loop runs in the agent's shell, which knows the id and not the
+# repo key). A file younger than poll_s + 60 s that reads `running` — or
+# `poll-failed`, the endpoint's failure and not the watcher's: the loop writes
+# that word and keeps polling for twelve of them — is a live watcher, and the
+# watcher is what wakes the session: nagging beside it is how a fleet ended up
+# with a foreground get_findings every 2–5 min on top of the armed watch (#67).
+# Stale means the watcher died; any other word is its last write before exiting
+# on a state that must be read now. Both fall through to the nag. Codex arms an
+# automation instead and writes nothing here, so on that client every record of
+# its own is unwatched by this test — the nag below says so rather than
+# claiming a watcher there has died.
 WATCH="$HOME/.ohmybug/watch"
 UNWATCHED='' ARMED=0
 while IFS= read -r rec; do
@@ -131,7 +136,8 @@ while IFS= read -r rec; do
   wst='' wiv=''
   { read -r wst wiv < "$WATCH/$rec"; } 2>/dev/null
   case $wiv in ''|*[!0-9]*) wiv=240 ;; esac
-  if [ "$wst" = running ] &&
+  case $wst in running|poll-failed) alive=1 ;; *) alive=0 ;; esac
+  if [ "$alive" = 1 ] &&
      [ -n "$(find "$WATCH/$rec" -maxdepth 0 -mmin "-$(( (wiv + 119) / 60 ))" 2>/dev/null)" ]; then
     ARMED=$((ARMED + 1))
   else
@@ -182,9 +188,10 @@ echo "ohmybug: $WHOSE: $IDS — do not end the turn waiting" \
      "running: for those, arm the heartbeat monitor on the status_url per the bughunter" \
      "skill (Claude Code: the Monitor tool; Codex: automation_update + wait_review) so it" \
      "wakes you, rather than polling in a loop or waiting for a background shell to exit." \
-     "The skill's loop writes ~/.ohmybug/watch/<review_id> on every poll and this hook is" \
-     "silent while that file is fresh — so if you believe a watch is armed for one of these," \
-     "it has died: re-arm it." \
+     "On Claude Code the skill's loop writes ~/.ohmybug/watch/<review_id> on every poll and" \
+     "this hook is silent while that file is fresh — so a nag beside a Monitor you armed" \
+     "there means it has died: re-arm it. On Codex the heartbeat leaves no file here, so" \
+     "this line does not know whether yours is alive: do not arm a second one over it." \
      "$ALSO" \
      "This fires once per stop, and again after you do work — the counter is honest, the" \
      "old wording ('this fires once') was not." >&2

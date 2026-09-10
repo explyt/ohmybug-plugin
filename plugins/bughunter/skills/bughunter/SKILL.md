@@ -71,7 +71,15 @@ This is a required client action, not a reminder to do later:
   count towards the retirement rule below. Do not loop either call inside the
   wake to "cover the cadence": the cadence is the automation's, and a wake that
   loops is still holding the thread when the next one fires — measured as a
-  client polling once a minute against a contract that says once per four. A
+  client polling once a minute against a contract that says once per four. The
+  one exception is the one the hand-wait fallback below has: a PAYLOAD submit
+  (§2, rung 3) while a file request can still arrive. There nothing else is
+  watching for `needs_files` — the server serves files itself only when it can
+  read the repo — and the request is held open for minutes, so inside that wake
+  call `wait_review` back to back (each answer is a reading; it returns the
+  moment `needs_files` shows) and stop when the answer is `done`, `failed` or
+  `needs_files`, or when the next wake is due: `interval_s` from this wake's
+  start, less one hold. A repo or deep submit never needs this. A
   deep hunt runs about an hour: its wake polls `status_url` once and reports
   that, which is the read `wake_rule` names for a deep hunt. That body
   keys a file request off `awaiting_client_files`/`files_requested`, not off its
@@ -491,6 +499,7 @@ while :; do
   s=$(curl -fsS --max-time 15 "$url"); rc=$?
   if [ "$rc" -ne 0 ]; then
     fails=$((fails + 1))
+    printf 'poll-failed %s\n' "$every" > "$watch" # still alive: the endpoint failed, not the watcher
     now=$(date +%s)
     if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\n' "$mode"
@@ -576,12 +585,14 @@ review was watched. Any form you write must keep:
   first, count the failure, print `poll-failed` on the heartbeat clock
   (property 3) and keep polling – only 12 consecutive failures end the
   watch, and they do so with `watch-retired` (property 1).
-- **Writes `~/.ohmybug/watch/<review_id>` on every successful poll** — the
-  status word and the poll cadence, one line. The Stop hook reads it: a fresh
-  file that says `running` is an armed watch and the hook stays quiet; a stale
-  one means the watcher died, and the hook says so. Drop the write and every
-  turn ends with a nag beside a live monitor — the doubled polling this loop
-  exists to end.
+- **Writes `~/.ohmybug/watch/<review_id>` on every poll, failed ones too** —
+  the status word (`poll-failed` when curl failed) and the poll cadence, one
+  line. The Stop hook reads it: a fresh file that says `running` or
+  `poll-failed` is an armed watch and the hook stays quiet; a stale one means
+  the watcher died, and the hook says so. Drop the write and every turn ends
+  with a nag beside a live monitor — the doubled polling this loop exists to
+  end; drop it from the failure branch alone and a two-poll blip of the
+  endpoint has the hook declare a live watcher dead and order a second one.
 
 No background tasks in your harness? Then wait at the server's cadence IN the
 current turn — read once, sleep `retry_after_s` (or `next_poll_after_s` from

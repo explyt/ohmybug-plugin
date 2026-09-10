@@ -66,8 +66,14 @@ assert monitor_code.count("last=$now") == 2, monitor_code.count("last=$now")
 # The failure branch prints on the clock only (a first-failure-immediate rule
 # floods under a flapping endpoint), resets the clock INSIDE its gate (moved
 # out, every failed poll refreshes `last` and an outage prints once, then
-# nothing) and clears `prev` so the first good poll prints the recovery.
-assert ('''    if [ $((now - last)) -ge "$beat" ]; then
+# nothing) and clears `prev` so the first good poll prints the recovery. It
+# writes the watch file FIRST: the endpoint failed, the watcher did not, and a
+# Stop hook reading a stale file here called a live watcher dead two polls into
+# a blip and ordered a second one over it (found in review).
+assert ('''    fails=$((fails + 1))
+    printf 'poll-failed %s\\n' "$every" > "$watch" # still alive: the endpoint failed, not the watcher
+    now=$(date +%s)
+    if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\\n' "$mode"
       last=$now; prev=
     fi
@@ -168,16 +174,17 @@ assert r.stdout.splitlines() == ["bughunt · fast · running"] * 3 + ["bughunt �
 # or piping curl's output would see) and `date` advances 60 s per call, so the
 # clock-gated poll-failed lines land and the 12-failure retirement fires. A
 # loop that treats the failure as "running" prints `running` and is red. No body
-# ever arrived, so the loop sleeps the seeded interval_s and never writes the
-# watch file: the hook then reads the missing file as unwatched, which a dead
-# URL is.
+# ever arrived, so the loop sleeps the seeded interval_s — and still writes the
+# watch file, `poll-failed 240`: the watcher is alive, the endpoint is not, and a
+# Stop hook that read the missing file as a dead watcher ordered a second monitor
+# over a live one for the length of a blip (found in review).
 with tempfile.TemporaryDirectory() as d:
     env = shims(d, '')
     open(f"{d}/curl", "w").write('#!/bin/sh\ncase " $* " in *" -f"*) exit 22 ;; esac\nprintf \'<html>404</html>\'\n'); os.chmod(f"{d}/curl", 0o755)
     open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
     r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120, env=env)
     slept = set(open(f"{d}/slept").read().split())
-    assert not os.path.exists(f"{d}/.ohmybug/watch/rev_test")
+    assert open(f"{d}/.ohmybug/watch/rev_test").read() == "poll-failed 240\n", open(f"{d}/.ohmybug/watch/rev_test").read()
 assert slept == {"240"}, slept
 lines = r.stdout.splitlines()
 assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
@@ -191,7 +198,7 @@ assert "- **A poll failure is seen, not swallowed.**" in props
 assert "print `poll-failed` on the heartbeat clock" in props and "only 12 consecutive failures end the\n  watch" in props
 assert "does not end the watch" not in props and "print the failure, and keep polling" not in props
 # Property 5 (#67): the watch file is what makes the Stop hook stand down.
-assert "- **Writes `~/.ohmybug/watch/<review_id>` on every successful poll**" in props
+assert "- **Writes `~/.ohmybug/watch/<review_id>` on every poll, failed ones too**" in props
 assert "`next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in props
 assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
@@ -250,6 +257,15 @@ for phrase in ("**The automation is the cadence; a wake is one read.**", "makes 
     assert phrase in codex_bullet, phrase
 for literal in ("up to 3 times", "3 x 60 s", "180 + 60", "poll_after_s=30", "timeout_s=45", "every 45 seconds", "for at most\n  180 seconds", "loop instead", "Loop instead"):
     assert literal not in codex_bullet, literal
+# ...with the one carve-out the other two surfaces keep (found in review): a
+# payload submit is the one path where the server cannot serve the reviewers'
+# file requests itself, the request is held open for minutes, and one read per
+# interval_s misses it — there the wake's back-to-back wait_review IS the
+# watcher, bounded so it ends before the next wake fires.
+for phrase in ("a PAYLOAD submit\n  (§2, rung 3) while a file request can still arrive", "call `wait_review` back to back", "or when the next wake is due: `interval_s` from this wake's\n  start, less one hold", "A repo or deep submit never needs this"):
+    assert phrase in codex_bullet, phrase
+for phrase in ("the one exception is a payload submit", "inside that wake call wait_review back to back", "when the next wake is due (interval_s from this wake's start, less one hold)", "a repo or deep submit never needs this"):
+    assert phrase in session_text, phrase
 # No literal hold or cadence on either surface: the server caps the hold and
 # names the cadence, and a number written here is the one an agent obeys when
 # the two disagree (measured: the tool's 45 beat the field's 240).

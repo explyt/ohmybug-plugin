@@ -2047,6 +2047,16 @@ case $said in
   *run_in_background*) printf 'FAIL nudge points at run_in_background again: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
+# The watch-file sentence is scoped to the client that writes the file. This hook
+# runs on Codex too (hooks.json is in both manifests), where the heartbeat is an
+# automation and nothing writes ~/.ohmybug/watch — so an unscoped "it has died:
+# re-arm it" was false on every Codex turn and named the duplicate heartbeat the
+# skill forbids (found in review).
+case $said in
+  *'On Claude Code the skill'\''s loop writes'*'On Codex the heartbeat leaves no file here'*'do not arm a second one'*) ;;
+  *) printf 'FAIL nudge: the watch-file sentence is not scoped per client: %s\n' "$said"
+     fails=$((fails + 1)) ;;
+esac
 
 # --- whose hunt is it -------------------------------------------------------
 # Ten foreign runs woke non-owners in one shift, one of them seven times, and a
@@ -2159,6 +2169,34 @@ touch -t 202001010000 "$W/rev_watched"
 rc=$(nsrc 0 A1)
 [ "$rc" = 2 ] || { printf 'FAIL nudge: a stale watch file kept the nudge silent (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
+# ...and the bound has a SIZE, pinned on both sides of it: `running 240` is armed
+# at 3 min and dead at 7 min. Without these two rows the ceil-minutes arithmetic
+# could be off by a factor of sixty (minutes for seconds) and the year-2020 row
+# above would still be red on cue — a hook silent for six hours after its
+# watcher died is the header incident again.
+age() { python3 -c 'import os,sys,time; t=time.time()-int(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
+age "$W/rev_watched" 180
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a 3-minute-old watch at a 240 s cadence was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+age "$W/rev_watched" 420
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: a 7-minute-old watch at a 240 s cadence was read as armed (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# The cadence in the file moves the bound: at 45 s the same 3-minute-old file is
+# dead. A hook that ignores the field and uses its default alone is red here.
+printf 'running 45\n' > "$W/rev_watched"; age "$W/rev_watched" 180
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: a 3-minute-old watch at a 45 s cadence was read as armed (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# A failed poll is the endpoint's failure, not the watcher's: the loop writes
+# `poll-failed <cadence>` then and keeps going for twelve of them, so a fresh
+# `poll-failed` file is an armed watch too. Read as dead, the hook ordered a
+# second monitor over a live one for the length of a blip (found in review).
+printf 'poll-failed 240\n' > "$W/rev_watched"
+rc=$(nsrc 0 A1)
+[ "$rc" = 0 ] || { printf 'FAIL nudge: a fresh poll-failed watch was read as dead (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
 # A terminal word in a fresh file is the watcher's last write before it exited:
 # the review is over and nobody has read it — exactly the nag's case. The same
 # for a file request, which the reviewers hold open for minutes only.
@@ -2186,6 +2224,13 @@ printf 'running soon\n' > "$W/rev_watched"
 rm -f "$(ohmybug_hunt_dir).pending/rev_bare"
 rc=$(nsrc 0 A1)
 [ "$rc" = 0 ] || { printf 'FAIL nudge: a non-numeric cadence in the watch file broke the stand-down (rc=%s)\n' "$rc"
+                   fails=$((fails + 1)); }
+# ...and that default has the size of the contract's interval, not more: the
+# same file at 7 min is dead. A default of an hour would keep this row green
+# only by keeping the hook silent an hour after its watcher died.
+age "$W/rev_watched" 420
+rc=$(nsrc 0 A1)
+[ "$rc" = 2 ] || { printf 'FAIL nudge: the default cadence bound let a 7-minute-old watch pass as armed (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
 
 # Fail-open is the load-bearing property of a hook that runs at the end of every
