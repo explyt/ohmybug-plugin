@@ -1545,6 +1545,102 @@ rc=$(mk "$V" "$SREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 2 ] || { printf 'FAIL code after a ref-keyed hunt did not re-arm the gate (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
 rm -rf "$(dirname "$SREPO")"
 
+# --- the comment-blind key: prose that lives inside code files -------------------
+# `sig:` answers "did only docs change since the hunt"; `cmt:` answers "did only
+# comments change" — the KDoc sentence a review asked to delete is the first
+# delta after a clean round, and re-hunting it is a paid review of prose. The
+# stripper behind it errs one way only: doubt is code. A `//` inside a template
+# literal, a `#` inside a heredoc or a triple-quoted string, the shebang — all
+# stay, so a code edit hiding behind a comment marker still re-arms the gate.
+strip_out() { printf '%b' "$2" | python3 "$G/strip-comments.py" "$1"; }
+got=$(strip_out f.ts 'const a = 1 // trailing\n// whole line\n/**\n * KDoc\n *\n */\nconst t = `\n// inside template\n${x ? `// nested` : 1}\n// still inside\n`\n// after\nconst r = /\\/\\//; // regex\nconst s = "// in string"\n/* one-liner */\nx = a /* mid */ + b\n')
+want=$(printf '%b' 'const a = 1 // trailing\nconst t = `\n// inside template\n${x ? `// nested` : 1}\n// still inside\n`\nconst r = /\\/\\//; // regex\nconst s = "// in string"\nx = a /* mid */ + b\n')
+[ "$got" = "$want" ] || { printf 'FAIL strip ts: got\n%s\n--- want\n%s\n' "$got" "$want"; fails=$((fails + 1)); }
+got=$(strip_out f.sh '#!/bin/bash\n# comment\necho "a" # trailing\ncat <<EOF\n# heredoc body\nEOF\n# after heredoc\nx='"'"'\n# in single quotes\n'"'"'\n# comment 2\nfoo \\\n# continued: kept\n')
+want=$(printf '%b' '#!/bin/bash\necho "a" # trailing\ncat <<EOF\n# heredoc body\nEOF\nx='"'"'\n# in single quotes\n'"'"'\nfoo \\\n# continued: kept\n')
+[ "$got" = "$want" ] || { printf 'FAIL strip sh: got\n%s\n--- want\n%s\n' "$got" "$want"; fails=$((fails + 1)); }
+got=$(strip_out f.py '#!/usr/bin/env python3\n# comment\nx = 1  # trailing\ns = """\n# in triple\n"""\n# after\n')
+want=$(printf '%b' '#!/usr/bin/env python3\nx = 1  # trailing\ns = """\n# in triple\n"""\n')
+[ "$got" = "$want" ] || { printf 'FAIL strip py: got\n%s\n--- want\n%s\n' "$got" "$want"; fails=$((fails + 1)); }
+got=$(strip_out f.kt '// c\nval s = """\n// raw\n"""\n// after\n')
+want=$(printf '%b' 'val s = """\n// raw\n"""\n')
+[ "$got" = "$want" ] || { printf 'FAIL strip kt: got\n%s\n--- want\n%s\n' "$got" "$want"; fails=$((fails + 1)); }
+# An extension the stripper does not know is not stripped at all: no rule is the strict rule.
+got=$(strip_out f.rs '// x\nfn main() {}\n')
+[ "$got" = "$(printf '// x\nfn main() {}')" ] || { printf 'FAIL strip: an unknown language was stripped: %s\n' "$got"; fails=$((fails + 1)); }
+
+CREPO=$(mktemp -d)/repo
+mkdir -p "$CREPO/src" && (
+  cd "$CREPO" || exit 1
+  git init -q .
+  git config user.email t@t; git config user.name t
+  printf 'export const a = 1\n// old comment\nexport const t = `\n// in template\n`\n' > src/f.ts
+  printf 'prose\n' > README.md
+  git add src README.md && git commit -qm base
+  git branch -qM main
+  git remote add origin .
+  git update-ref refs/remotes/origin/main HEAD
+  # The hunted state: a code change and a comment the hunt objected to.
+  printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n// in template\n`\n' > src/f.ts
+)
+cmt_in() { # dir -> "rc:<rc> cmt:<hash|empty>"
+  (cd "$1" && bash -c ". '$G/diff-id.sh'; c=\$(ohmybug_cmt_id 2>/dev/null); echo \"rc:\$? cmt:\$c\"")
+}
+H1=$(cmt_in "$CREPO"); S1=$(sig_in "$CREPO")
+case "$H1" in "rc:0 cmt:"[0-9a-f]*) ;; *) printf 'FAIL cmt: code plus a comment should hash, got %s\n' "$H1"; fails=$((fails + 1)) ;; esac
+mkdir -p "$CREPO/sub"
+[ "$(cmt_in "$CREPO/sub")" = "$H1" ] || { printf 'FAIL cmt: the key depends on the cwd\n'; fails=$((fails + 1)); }
+rmdir "$CREPO/sub"
+# Delete the comment the hunt objected to: sig moves (a code file changed), cmt does not.
+printf 'export const a = 2 // changed\n// old comment\nexport const t = `\n// in template\n`\n' > "$CREPO/src/f.ts"
+[ "$(cmt_in "$CREPO")" = "$H1" ] || { printf 'FAIL cmt: deleting a comment line moved the key\n'; fails=$((fails + 1)); }
+[ "$(sig_in "$CREPO")" != "$S1" ] || { printf 'FAIL cmt: control — sig: did not move on the same edit, so this key proves nothing\n'; fails=$((fails + 1)); }
+# The same line inside a template literal is text the program ships: the key moves.
+printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n`\n' > "$CREPO/src/f.ts"
+[ "$(cmt_in "$CREPO")" != "$H1" ] || { printf 'FAIL cmt: a line deleted inside a template literal did not move the key\n'; fails=$((fails + 1)); }
+# A comment-only branch is empty — and empty is NO key here, never a free pass.
+(cd "$CREPO" && git checkout -q src/f.ts && printf '// only a comment\n' >> src/f.ts)
+[ "$(cmt_in "$CREPO")" = "rc:0 cmt:" ] || { printf 'FAIL cmt: a comment-only branch should be empty with rc 0, got %s\n' "$(cmt_in "$CREPO")"; fails=$((fails + 1)); }
+rc=$(mk "$V" "$CREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL gate: an unhunted comment-only branch merged on an empty cmt key (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+# Without python3 the key cannot be computed: exit 1, and the gate still judges by the other keys.
+got=$(cd "$CREPO" && bash -c "python3() { return 127; }; . '$G/diff-id.sh'; c=\$(ohmybug_cmt_id 2>/dev/null); echo \"rc:\$? cmt:\$c\"")
+[ "$got" = "rc:1 cmt:" ] || { printf 'FAIL cmt: no python3 must be exit 1, got %s\n' "$got"; fails=$((fails + 1)); }
+(cd "$CREPO" && git checkout -q src/f.ts)
+
+# Through the hooks: a rung-1 hunt at a clean commit records cmt: beside sig:,
+# and the gate then allows a comment deletion and refuses a code deletion.
+(
+  cd "$CREPO" || exit 1
+  printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n// in template\n`\n' > src/f.ts
+  git add src/f.ts && git commit -qm work
+)
+CHEAD=$(git -C "$CREPO" rev-parse HEAD)
+ppost submit_review running "$CREPO" "" rev_cmt1 "$CHEAD"
+ppost get_findings done "$CREPO" "" rev_cmt1 "$CHEAD"
+(cd "$CREPO" && ls "$(ohmybug_hunt_dir)"/cmt:* >/dev/null 2>&1) || { printf 'FAIL stamp: a rung-1 hunt at a clean commit recorded no cmt: key\n'; fails=$((fails + 1)); }
+printf 'export const a = 2 // changed\n// old comment\nexport const t = `\n// in template\n`\n' > "$CREPO/src/f.ts"
+out=$(mk "$V" "$CREPO" | bash "$G/pre-pr-gate.sh" 2>&1 >/dev/null; echo "rc=$?")
+case "$out" in
+  *"comment lines"*"rc=0") ;;
+  *) printf 'FAIL gate: a comment deleted after the hunt demanded a re-hunt: %s\n' "$out"; fails=$((fails + 1)) ;;
+esac
+printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n`\n' > "$CREPO/src/f.ts"
+rc=$(mk "$V" "$CREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 2 ] || { printf 'FAIL gate: a line deleted inside a template literal merged on the cmt: key (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+# The payload path records it too: the diff sent verbatim IS this tree.
+(cd "$CREPO" && rm -rf "$(ohmybug_hunt_dir)" "$(ohmybug_hunt_dir).pending" "$(ohmybug_hunt_dir).promoted")
+git -C "$CREPO" checkout -q src/f.ts
+printf 'export const b = 3\n// b, explained\n' >> "$CREPO/src/f.ts"
+git -C "$CREPO" diff origin/main > "$HOME/cmt.diff"
+ppost submit_review running "$CREPO" "@$HOME/cmt.diff" rev_cmt2
+ppost get_findings done "$CREPO" "@$HOME/cmt.diff" rev_cmt2
+(cd "$CREPO" && ls "$(ohmybug_hunt_dir)"/cmt:* >/dev/null 2>&1) || { printf 'FAIL stamp: a payload hunt recorded no cmt: key\n'; fails=$((fails + 1)); }
+printf 'export const a = 2 // changed\n// old comment\n// the phrase the hunt objected to\nexport const t = `\n// in template\n`\nexport const b = 3\n' > "$CREPO/src/f.ts"
+rc=$(mk "$V" "$CREPO" | bash "$G/pre-pr-gate.sh" >/dev/null 2>&1; echo $?)
+[ "$rc" = 0 ] || { printf 'FAIL gate: a comment deleted after a payload hunt demanded a re-hunt (rc=%s)\n' "$rc"; fails=$((fails + 1)); }
+rm -rf "$(dirname "$CREPO")"
+
 # An out-of-band upload (upload:true, empty diff) never passes through this
 # hook, so it can prove nothing about the tree: no tree ids, and with
 # uncommitted work the ref: line is never honoured either. The gate blocking
@@ -1606,7 +1702,7 @@ case "$out" in
   *) printf 'FAIL the promote miss named neither the review nor the directory: %s\n' "$out"
      fails=$((fails + 1)) ;;
 esac
-# ...and it must NOT conclude anything about the gate. The gate has five keys and
+# ...and it must NOT conclude anything about the gate. The gate has six keys and
 # this branch knows about none of them; three client sessions read the old
 # sentence as a verdict on the gate and reported their hunts uncounted while
 # `ref:<sha>` records for those hunts sat on disk, and one was about to ask for
@@ -1618,7 +1714,7 @@ case "$out" in
     fails=$((fails + 1)) ;;
 esac
 case "$out" in
-  *"five keys"*"pull request the merge command names"*) ;;
+  *"six keys"*"cmt:<id>"*"pull request the merge command names"*) ;;
   *) printf 'FAIL the promote miss does not say what the gate actually reads: %s\n' "$out"
      fails=$((fails + 1)) ;;
 esac
