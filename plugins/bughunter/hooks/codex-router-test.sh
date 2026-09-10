@@ -465,6 +465,12 @@ assert "15-second gap" not in skill and "handover slack" not in skill
 fallback = skill.split("If the runtime cannot create its monitor,", 1)[1].split("\n\nIf the MCP server is missing", 1)[0]
 for phrase in ("`done`, `failed` or `needs_files`", "held open for minutes only", "the waiting is for a deep hunt TOO", "running and unwatched", "never claim that a monitor is armed", "`retry_after_s`", "sleep <retry_after_s>", "Do not loop `wait_review` back to back to fill the gap", "The one place the hold IS the watcher is a payload submit"):
     assert phrase in fallback, phrase
+# The hand-wait read of status_url sees a file request in the body's FLAGS, never
+# in its status word — the same rule the Monitor loop and the deep wake carry.
+# Told to stop on the word `needs_files`, this path slept through a request the
+# body was flagging on every poll (found in review).
+assert "a `status_url` body flags a file request in\n`awaiting_client_files`/`files_requested`, never in its status word" in fallback
+assert "treat either flag as `needs_files`" in fallback
 assert "one call for a deep one" not in fallback
 assert "poll_after_s=30" not in fallback and "timeout_s=45" not in fallback
 # The last-resort paragraph after the loop waits at the same cadence.

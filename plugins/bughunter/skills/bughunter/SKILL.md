@@ -226,7 +226,10 @@ a `timed_out: true` answer is the reading `running` and carries
 it — and repeat until the answer is `done`, `failed` or `needs_files`, the same
 three the heartbeat loop stops on, because `needs_files` is not terminal and the
 request behind it is held open for minutes only (§3a): send the files, then keep
-waiting. Do not loop `wait_review` back to back to fill the gap: the hold is
+waiting. Read the request where that body puts it: a `status_url` body flags a file request in
+`awaiting_client_files`/`files_requested`, never in its status word, which stays
+`running` — treat either flag as `needs_files`, exactly as the loop and the deep
+wake do; only a `get_findings`/`wait_review` answer carries the word itself. Do not loop `wait_review` back to back to fill the gap: the hold is
 capped by the server and a `timed_out: true` answer tells you when to read
 again. The one place the hold IS the watcher is a payload submit (§2, rung 3)
 while a file request can still arrive: there `wait_review` back to back is the
