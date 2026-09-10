@@ -61,30 +61,23 @@ This is a required client action, not a reminder to do later:
   answers from memory reported `running` on three wakes — twelve minutes — after
   the hunt was done, and the merge waited on it. Update an existing heartbeat for the same review instead of
   creating a duplicate, and retire/replace any heartbeat pointing at an older
-  review. Its prompt calls `wait_review(review_id, poll_after_s=30, timeout_s=45)` in a
-  loop, up to 3 times inside one wake. Budget an iteration the way the Claude
-  loop below does — 45 s of holding plus up to 15 s of round trip — so 3 x 60 s
-  = 180 s of the 240 s cadence, and the remaining 60 s is the status line and
-  the cleanup. That is this file's rule everywhere: 180 + 60 at or under
-  `interval_s`.
-  The server holds a wait for at most `WAIT_REVIEW_MAX_S` (45 s) however long a
-  `timeout_s` you ask for, and answers the ordinary body plus `timed_out: true`
-  and a `next_step` when the hold expires — so a bigger `timeout_s` buys no
-  extra waiting, only the same answer at 45 s. A `timed_out: true` answer is a
-  healthy server, not an unreachable one: never count it towards the retirement
-  rule below. Loop instead, and stop the loop the moment the answer is `done`,
-  `failed` or `needs_files`. That loop is for a FAST hunt: a deep hunt runs about
-  an hour, so call `wait_review` once, read its `next_step`, and let the
-  heartbeat carry the waiting — each of its wakes polls `status_url` once and
-  reports that, which is the read `wake_rule` names for a deep hunt. That body
+  review. **The automation is the cadence; a wake is one read.** The heartbeat
+  fires once per `interval_s`, and inside a wake the prompt makes ONE read and
+  ends: `get_findings(review_id)`, or one `wait_review(review_id)` with its
+  default hold — the server caps the hold whatever `timeout_s` you ask for and
+  answers the ordinary body plus `timed_out: true` and a `next_step` when it
+  expires, so a bigger `timeout_s` buys no extra waiting, and a `timed_out: true`
+  answer IS this wake's reading: `running`, from a healthy server, never a wake to
+  count towards the retirement rule below. Do not loop either call inside the
+  wake to "cover the cadence": the cadence is the automation's, and a wake that
+  loops is still holding the thread when the next one fires — measured as a
+  client polling once a minute against a contract that says once per four. A
+  deep hunt runs about an hour: its wake polls `status_url` once and reports
+  that, which is the read `wake_rule` names for a deep hunt. That body
   keys a file request off `awaiting_client_files`/`files_requested`, not off its
   status word, so a wake that sees either flag prints `bughunt · <mode> ·
   needs-files` and serves the files first. If the poll itself fails, the wake
   falls back to one `get_findings` before it counts as a wake that read nothing.
-  If `wait_review` is
-  unavailable, loop `get_findings` every 45 seconds for at most
-  180 seconds inside this wake — the same three iterations, the same 60 s left —
-  then let the next heartbeat take over.
   On `needs_files`, send files first; on `done` or
   `failed`, process the result and delete the heartbeat. Retire it too when
   it is older than 180 minutes or after 3 consecutive wakes that could not read
@@ -94,9 +87,8 @@ This is a required client action, not a reminder to do later:
   still running or waiting for files, tell the user and — if the retirement came
   from unreadable wakes, not from the age cap — arm a fresh heartbeat: a live
   hunt must not lose its watch, and a heartbeat nothing can satisfy must not
-  wake the thread forever, so the age cap is the one that ends it for good. Those 60 seconds are
-  deliberate handover slack, not spare waiting: finish the status line and the
-  cleanup inside them, or the next heartbeat fires while this wake still loops. Keep each wake-up to
+  wake the thread forever, so the age cap is the one that ends it for good.
+  Keep each wake-up to
   one compact line (`bughunt · fast · running`, `bughunt · files-sent`,
   `bughunt · fast · needs-files`, `bughunt · fast · done · findings=N`,
   `bughunt · fast · failed`, `bughunt · fast · poll-failed`, or
@@ -141,21 +133,29 @@ This is a required client action, not a reminder to do later:
   on a background command only when it EXITS, so a `run_in_background` loop
   woke every session exactly once per hunt, 15–25 minutes after submit, and the
   prompt cache (5-minute TTL) went cold each time. `Monitor` delivers every
-  stdout line as an event: the loop polls `status_url` every 45 seconds, prints
-  the compact line at least every 240 seconds even when nothing changed (that
-  line is the heartbeat: a 180 s budget checked once per poll, so at most the
-  240 s `interval_s` and well under the 300 s cache TTL), prints immediately on
+  stdout line as an event: the loop polls `status_url` at the cadence the status
+  body names — `next_poll_after_s`, which the server sets per submit (the
+  watcher cadence for a payload submit, whose file request is held open for
+  minutes; `interval_s` for a repo or deep one, where the server serves the
+  files itself) — prints the compact line at least every `monitor.heartbeat_s`
+  even when nothing changed (that line is the heartbeat that keeps the cache
+  warm), prints immediately on
   every review status change and exits on `done` / `failed` or on the
   `awaiting_client_files`/`files_requested` flags — that body carries a file
-  request in those flags, never in its status word. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
+  request in those flags, never in its status word. Every number in the loop
+  comes from the server: the submit response's `monitor.interval_s` seeds the
+  first sleep, the body's own fields take over from the first poll. Use `persistent: true` (a deep hunt runs up to 150 min; a 1 h or 2 h
   `timeout_ms` drops the watch mid-hunt). Do not paste status JSON into the
   conversation.
   **A heartbeat wake is answered with that one line and nothing else** –
   `bughunt · fast · running` – no `get_findings`, no file reads, no summary. On
   `needs-files` → files first (§3a); on `done`/`failed` → `get_findings`, then
-  `TaskStop` the monitor if it did not exit.
-  No `Monitor` tool in this harness? Fall back to `CronCreate` every 4 minutes
-  off the :00/:30 marks (e.g. `3-59/4 * * * *`) with the prompt "bughunt
+  `TaskStop` the monitor if it did not exit. Between wakes the loop is the
+  watch: the Stop hook sees the file it writes (`~/.ohmybug/watch/<review_id>`)
+  and stays quiet while it is fresh, so a turn may end on a running hunt — do
+  not add a foreground `get_findings` beside an armed monitor.
+  No `Monitor` tool in this harness? Fall back to `CronCreate` at the
+  `interval_s` cadence, off the :00/:30 marks (240 s → `3-59/4 * * * *`) with the prompt "bughunt
   heartbeat for `<review_id>`: curl `<status_url>` once and print the compact
   line for what THAT read answered; if it answered nothing, call `get_findings`
   once and print what that answered, and only if THAT fails too print `bughunt ·
@@ -189,12 +189,20 @@ This is a required client action, not a reminder to do later:
 The same rule holds when you wait by hand instead of by heartbeat: a status you
 print is a status a tool just answered.
 
-If the runtime cannot create its monitor, wait in the current turn:
-`wait_review(review_id, poll_after_s=30, timeout_s=45)` in a loop until the
-answer is `done`, `failed` or `needs_files` — the same three the heartbeat loop
-stops on, because `needs_files` is not terminal and the request behind it is
-held open for minutes only (§3a): send the files, then keep looping. A longer
-`timeout_s` is clamped to the same 45 s, so looping is the only way to wait. Here the loop is for a deep hunt TOO: with no
+If the runtime cannot create its monitor, wait in the current turn, at the
+server's cadence: read once (`get_findings`, or one `wait_review(review_id)` —
+a `timed_out: true` answer is the reading `running` and carries
+`retry_after_s`), then sleep that long in the foreground before the next read —
+`Bash`: `sleep <retry_after_s> && curl -fsS <status_url>` with a `timeout` above
+it — and repeat until the answer is `done`, `failed` or `needs_files`, the same
+three the heartbeat loop stops on, because `needs_files` is not terminal and the
+request behind it is held open for minutes only (§3a): send the files, then keep
+waiting. Do not loop `wait_review` back to back to fill the gap: the hold is
+capped by the server and a `timed_out: true` answer tells you when to read
+again. The one place the hold IS the watcher is a payload submit (§2, rung 3)
+while a file request can still arrive: there `wait_review` back to back is the
+watcher the body's `next_poll_after_s` asks for, because it returns the moment
+`needs_files` shows. Here the waiting is for a deep hunt TOO: with no
 heartbeat there is nothing to hand the waiting to, and a deep hunt is the one
 that runs about an hour, so a single call would end the turn on a review nobody
 reads — the failure §3b records. If you cannot keep waiting, say the hunt is
@@ -467,59 +475,67 @@ not the default:
 
 ```bash
 mode=fast # use deep for a deep submit
-heartbeat=180 # seconds; the gate is checked once per iteration (45 s sleep +
-              # a poll of at most 15 s), so a line lands within 180 + 60 = 240 s:
-              # the server's interval_s, and well under the 300 s prompt-cache TTL
+url='<status_url>'; watch="$HOME/.ohmybug/watch/<review_id>"; mkdir -p "${watch%/*}"
+every=<interval_s> # seconds between polls: the submit response's monitor.interval_s
+                   # seeds it; the body's next_poll_after_s takes over from the first poll
+beat=$every        # seconds between `running` lines while nothing changes: the
+                   # body's monitor.heartbeat_s, which keeps the prompt cache warm
 start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
-fails=0 # consecutive failed polls; 12 retires the watch (9 min if they fail
-        # fast, 12 min against a hanging endpoint: 45 s sleep + 15 s timeout each)
+fails=0 # consecutive failed polls; 12 retires the watch (12 poll cadences of a dead URL)
+num() { printf '%s' "$s" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1; }
 while :; do
   now=$(date +%s)
   if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
     printf 'bughunt · %s · watch-retired\n' "$mode"; break # past 180 min, or a dead URL
   fi
-  s=$(curl -fsS --max-time 15 '<status_url>'); rc=$?
+  s=$(curl -fsS --max-time 15 "$url"); rc=$?
   if [ "$rc" -ne 0 ]; then
     fails=$((fails + 1))
     now=$(date +%s)
-    if [ $((now - last)) -ge "$heartbeat" ]; then
+    if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\n' "$mode"
       last=$now; prev=
     fi
-    sleep 45
+    sleep "$every"
     continue
   fi
   fails=0
+  n=$(num next_poll_after_s); [ -n "$n" ] && every=$n
+  n=$(num heartbeat_s); [ -n "$n" ] && beat=$n
   st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
-  if printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true'; then
-    printf 'bughunt · %s · needs-files\n' "$mode"
-    break
-  fi
+  printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true' && st=needs-files
+  printf '%s %s\n' "$st" "$every" > "$watch" # the Stop hook reads this: fresh + running = armed
   case "$st" in
-    done|failed) printf 'bughunt · %s · %s\n' "$mode" "$st"; break ;;
+    done|failed|needs-files) printf 'bughunt · %s · %s\n' "$mode" "$st"; break ;;
   esac
   now=$(date +%s)
-  if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$heartbeat" ]; then
+  if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$beat" ]; then
     printf 'bughunt · %s · running\n' "$mode"
     last=$now; prev=$st
   fi
-  sleep 45
+  sleep "$every"
 done
 ```
+
+Substitute the three placeholders from the submit response — `<status_url>`,
+`<review_id>`, and `<interval_s>` from its `monitor` — and nothing else: the
+cadence between polls and between lines is read off each status body
+(`next_poll_after_s`, `monitor.heartbeat_s`), so the loop keeps the server's
+numbers without you typing them.
 
 Every printed line wakes you. A plain `running` line is a heartbeat: answer it
 with that one line and do nothing else – no `get_findings`, no reading files.
 `needs-files` → serve `provide_files` first and re-arm the monitor. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. `watch-retired` → the URL has been dead for 9–12 min or the
+nothing to stop. `watch-retired` → the URL has been dead for 12 polls or the
 watch is 3 h old: call `get_findings` once; if the review is still running or
 waiting for files, tell the user, and arm a fresh monitor unless the watch
 retired on age — that cap ends the watching, and the user takes it from there. `poll-failed` lands on the heartbeat clock, never per poll: a
-dead endpoint shows up as `poll-failed` within one heartbeat instead of 80 wakes
-an hour, and a flood stops the watch. The first good poll after it prints
+dead endpoint shows up as `poll-failed` within one heartbeat instead of once per
+poll, and a flood stops the watch. The first good poll after it prints
 `running` once (recovery), then the clock takes over again.
 
-The loop above keeps the four properties below, and each line of it is
+The loop above keeps the five properties below, and each line of it is
 there for one of them – read it before you shorten it. What has failed in
 the field is REWRITING it: once into `for i in $(seq 1 60); …; sleep 45`
 (45 min), shorter than the hunt and shorter than the moment reviewers ask
@@ -535,31 +551,41 @@ review was watched. Any form you write must keep:
   the hunt's own budget (≥ 150 min): a watcher that dies before the hunt is a
   watcher that missed the event, and silence from it reads exactly like "still
   running". The two retirements it DOES have — 180 min of age, or 12 consecutive
-  failed polls (9–12 min of a dead URL) — print `watch-retired` first, so the
+  failed polls (12 poll cadences of a dead URL) — print `watch-retired` first, so the
   session learns the watch ended rather than inferring it from silence. Every
   printed line is a wake; a watch nothing can satisfy must not wake you forever.
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
-- **Prints its first reading immediately, then a reading at least every 240
-  seconds, and every review status change immediately.** Poll failures are
+- **Prints its first reading immediately, then a reading at least every
+  `heartbeat_s`, and every review status change immediately — at the poll
+  cadence the body names.** Poll failures are
   the exception: they land on the clock only, so a flapping endpoint costs at
   most two lines per heartbeat window (`poll-failed` on the clock, `running`
-  once on recovery) and never one per poll. The heartbeat budget (180 s) is checked once per 45 s poll, so
-  the real gap is the budget rounded up to whole iterations (45 s sleep + a poll
-  of at most 15 s); keep 180 + 60 at or under `interval_s` (240) and under the
-  300 s cache TTL when you touch any of the three numbers. A watcher silent for an hour is indistinguishable from a dead
+  once on recovery) and never one per poll. The numbers are the server's, not
+  yours: `next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line
+  clock, read off every body — a loop with a literal in either place is the
+  loop that polled once a minute against a four-minute contract, and one that
+  sleeps longer than the body says is the loop that misses a file request held
+  open for minutes. A watcher silent for an hour is indistinguishable from a dead
   one; the compact status line is the liveness signal AND the heartbeat that
   keeps the session's prompt cache warm between wakes – drop it and the terminal
   wake re-reads the whole context uncached. Never echo the response body. Do not
-  print every 45-second poll either: `Monitor` stops a watch that floods it.
+  print every poll either: `Monitor` stops a watch that floods it.
 - **A poll failure is seen, not swallowed.** A pipeline's exit status is
   its LAST command's, so `curl … | grep` masks curl's failure and grep's
   "no match" reads as "still running"; capture curl's output and exit code
   first, count the failure, print `poll-failed` on the heartbeat clock
   (property 3) and keep polling – only 12 consecutive failures end the
   watch, and they do so with `watch-retired` (property 1).
+- **Writes `~/.ohmybug/watch/<review_id>` on every successful poll** — the
+  status word and the poll cadence, one line. The Stop hook reads it: a fresh
+  file that says `running` is an armed watch and the hook stays quiet; a stale
+  one means the watcher died, and the hook says so. Drop the write and every
+  turn ends with a nag beside a live monitor — the doubled polling this loop
+  exists to end.
 
-No background tasks in your harness? Then poll `get_findings` every 45-60
-seconds IN the current turn while doing other work – never leave a
+No background tasks in your harness? Then wait at the server's cadence IN the
+current turn — read once, sleep `retry_after_s` (or `next_poll_after_s` from
+the status body) in the foreground, read again – never leave a
 running review unwatched at the end of a turn.
 
 If the response carries `pending_verdicts` from an earlier review, resolve
