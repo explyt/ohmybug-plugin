@@ -46,7 +46,8 @@ assert "while :" in monitor_code
 # One cadence (#67): no literal sleep. The poll gap is the body's
 # next_poll_after_s (the server answers the watcher cadence for a payload
 # submit and interval_s for a repo or deep one), the line gap its heartbeat_s;
-# the submit response's interval_s only seeds the first sleep. A literal here
+# the submit response's next_poll_after_s seeds the first sleep (its
+# monitor.interval_s on an older server that has none). A literal here
 # is the loop that polled once a minute against a four-minute contract.
 import re
 assert monitor_code.count('sleep "$every"') == 2 and not re.search(r"sleep\s+\d", monitor_code)
@@ -54,10 +55,11 @@ assert "seq " not in monitor_code
 # Seeded from the submit response's own watcher cadence (#1029 f2): the seed
 # used to be interval_s, so a first poll that failed slept 240 s on a payload
 # row whose watcher is 45 s. And the body's number takes over only when it is
-# a positive one (#1029 f3): `every` is the loop's only throttle.
+# a positive one (#1029 f3): `every` is the loop's only throttle — and the
+# same clamp on `beat`, whose zero would make the print gate true on every poll.
 assert "\nevery=<next_poll_after_s> #" in monitor_code and "\nbeat=<heartbeat_s> " in monitor_code
 assert 'n=$(num next_poll_after_s); [ -n "$n" ] && [ "$n" -gt 0 ] && every=$n' in monitor_code
-assert 'n=$(num heartbeat_s); [ -n "$n" ] && beat=$n' in monitor_code
+assert 'n=$(num heartbeat_s); [ -n "$n" ] && [ "$n" -gt 0 ] && beat=$n' in monitor_code
 assert not re.search(r"\b(45|90|100|180|225|240)\b", re.sub(r"#.*", "", monitor_code).replace("10800", "")), "a cadence literal in the loop"
 assert "--max-time 15 " in monitor_code
 assert "-ge \"$beat\"" in monitor_code
@@ -198,6 +200,19 @@ assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 assert slept == ["45"] * 5, slept
 assert watch == "done 240\n", watch
 assert r.stdout.splitlines() == ["bughunt · fast · running"] * 3 + ["bughunt · fast · done"], r.stdout
+# A body whose heartbeat_s is 0 must not become the line clock either: the
+# print gate is `now - last >= beat`, so a zero there prints `running` on every
+# poll — the flood property 3 forbids. Same shim clock as above (120 s per
+# poll), five running polls: the seeded 225 s clock prints on polls 1, 3, 5 —
+# three lines, not five.
+with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '')
+    open(f"{d}/curl", "w").write(f'#!/bin/sh\nn=$(cat "{d}/polls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "{d}/polls"\n'
+        'if [ "$n" -le 5 ]; then printf \'%s\' \'{"status":"running","monitor":{"interval_s":240,"heartbeat_s":0},"next_poll_after_s":45}\'; else printf \'%s\' \'{"status":"done","next_poll_after_s":240}\'; fi\n'); os.chmod(f"{d}/curl", 0o755)
+    open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
+    r = subprocess.run([zsh, "-c", armed(loop_src)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, env=env)
+assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+assert r.stdout.splitlines() == ["bughunt · fast · running"] * 3 + ["bughunt · fast · done"], r.stdout
 # A body whose next_poll_after_s is 0 must not become the cadence (#1029 f3):
 # `every` is the only throttle, and a zero there is a flood against the status
 # door. The seed stays — 240 here — and the watch file says so.
@@ -216,7 +231,7 @@ assert watch == "done 240\n", watch
 # or piping curl's output would see) and `date` advances 60 s per call, so the
 # clock-gated poll-failed lines land and the 12-failure retirement fires. A
 # loop that treats the failure as "running" prints `running` and is red. No body
-# ever arrived, so the loop sleeps the seeded interval_s — and still writes the
+# ever arrived, so the loop sleeps the seeded next_poll_after_s — and still writes the
 # watch file, `poll-failed 240`: the watcher is alive, the endpoint is not, and a
 # Stop hook that read the missing file as a dead watcher ordered a second monitor
 # over a live one for the length of a blip (found in review).
@@ -255,6 +270,11 @@ assert "does not end the watch" not in props and "print the failure, and keep po
 # Property 5 (#67): the watch file is what makes the Stop hook stand down.
 assert "- **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on every\n  poll after it, failed ones too**" in props
 assert "`next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in props
+# Property 3's clock is a reading once per poll, so its real gap is the
+# heartbeat rounded up to whole poll cadences, and the whole thing must stay
+# under the prompt-cache TTL: a rewrite to "at least every heartbeat_s" is the
+# promise no once-per-poll loop can keep.
+assert "rounded up to\n  whole poll cadences" in props and "must stay under the\n  prompt-cache TTL" in props
 assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
 for phrase in ("`Monitor` tool", "`next_poll_after_s`", "on the `monitor.heartbeat_s` clock", "Every number in the loop\n  comes from the server", "persistent: true", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after `<fail_cap>` consecutive poll failures (3 for a job at\n  `interval_s`, 12 for one every minute", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "one line and nothing else", "TaskStop", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):

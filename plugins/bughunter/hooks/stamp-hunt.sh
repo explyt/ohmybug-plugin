@@ -222,26 +222,37 @@ LIVE_URL=$(printf '%s' "$FIELDS" | sed -n 15p)
 # ...and `systemMessage` beside it, for the ONE thing a hook here has to hand
 # to the PERSON rather than the agent: the private page of the hunt they just
 # started (`live_url`). Claude Code shows that field to the user; a client that
-# does not know it ignores it, and the additionalContext still asks the agent
-# to print the link. One JSON object per hook run, so the message rides along
-# with whatever sentence is being said and is cleared once it has gone out.
+# does not know it ignores it, and the additionalContext asks the agent to
+# print the link — on EVERY sentence spoken while the page is pending, not
+# only the one `live_tail` says when nothing else was: a dead end (a payload
+# from another tree, out-of-band bytes, no diff) used to carry the link out
+# as systemMessage alone, and an agent on a client without that field never
+# heard of it. One JSON object per hook run, so the message rides along with
+# whatever sentence is being said and is cleared once it has gone out.
 LIVE_MSG=
+# The agent's half of the link: print it once, as a plain line, and know what
+# it is — a capability that must never land in a PR, an issue or a commit.
+live_note() {
+  printf '%s' "the person who started this hunt has a private live page for it — ${LIVE_URL:-} — print that link for them now, as a plain line, and once more beside your terminal done/failed line so they can save the report. It is a capability link (whoever holds it can read the findings for 6 hours after the result): never paste it into a PR, an issue, a commit or anything shared."
+}
 say() { # sentence -> the agent, result intact (+ the live page to the user, once)
+  local s=$1
+  if [ -n "${LIVE_MSG:-}" ]; then
+    if [ -n "$s" ]; then s="${s%.}. Also: $(live_note)"; else s="ohmybug: $(live_note)"; fi
+  fi
   python3 -c 'import json, sys
 out = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": sys.argv[1]}}
 if sys.argv[2]:
     out["systemMessage"] = sys.argv[2]
-print(json.dumps(out))' "$1" "${LIVE_MSG:-}" 2>/dev/null
+print(json.dumps(out))' "$s" "${LIVE_MSG:-}" 2>/dev/null
   LIVE_MSG=
 }
-# The link, when no other sentence carried it out already: the agent is asked
-# to print it once, as a plain line, and told what it is — a capability. It
-# must never land in a PR, an issue or a commit message. Called at the end of
+# The link when no other sentence carried it out already. Called at the end of
 # the submit arm AND on the two paths that leave it early because the record
 # could not be written (found in review): the page is the person's whatever
 # happens to the record.
 live_tail() {
-  [ -n "${LIVE_MSG:-}" ] && say "ohmybug: the person who started this hunt has a private live page for it — ${LIVE_URL:-} — print that link for them now, as a plain line, and once more beside your terminal done/failed line so they can save the report. It is a capability link (whoever holds it can read the findings for 6 hours after the result): never paste it into a PR, an issue, a commit or anything shared."
+  [ -n "${LIVE_MSG:-}" ] && say ""
   return 0
 }
 

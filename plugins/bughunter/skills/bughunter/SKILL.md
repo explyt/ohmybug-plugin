@@ -563,7 +563,7 @@ while :; do
   fi
   fails=0
   n=$(num next_poll_after_s); [ -n "$n" ] && [ "$n" -gt 0 ] && every=$n
-  n=$(num heartbeat_s); [ -n "$n" ] && beat=$n
+  n=$(num heartbeat_s); [ -n "$n" ] && [ "$n" -gt 0 ] && beat=$n
   printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true' && st=needs-files
   printf '%s %s\n' "$st" "$every" > "$watch" # the Stop hook reads this: fresh + running = armed
   case "$st" in
