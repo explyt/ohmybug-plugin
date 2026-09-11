@@ -10,7 +10,8 @@
 # minute of work before that is work it cannot deliver. Told at the start, the
 # remedy is a restart that costs a minute.
 #
-# additionalContext only, at session START (the hooks.json matcher), no state:
+# additionalContext only, on a NEW process (hooks.json matcher `startup|resume`
+# — a resumed session handshakes again; a cleared or compacted one does not), no state:
 # this is an instruction to the assistant, not news for the user's screen — the
 # user hears about it from the assistant exactly when it matters (the tools are
 # missing), not on every start. Once, and the user decides: the tools can be

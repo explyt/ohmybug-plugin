@@ -2506,15 +2506,18 @@ if not any("pending-nudge.sh" in k.get("command", "")
     bad.append("Stop: pending-nudge.sh not wired")
 # Same shape for SessionStart: the tools-present check is a separate file, so
 # the one line that installs it is the one line whose loss the file's own
-# tests cannot see. And it is wired to `startup` ONLY: a SessionStart entry
-# without a matcher fires on compact and resume too, which would put "first
-# thing this session" into the middle of an in-flight task.
+# tests cannot see. And it is wired to `startup|resume` ONLY — the two sources
+# that are a NEW process with a new handshake that can fail; the remedy the
+# note itself names (`claude -c`) arrives as `resume`, so a check on `startup`
+# alone would skip exactly the session it sends the user into. `clear` and
+# `compact` stay out: same process, handshake already good, and "first thing
+# this session" would land in the middle of an in-flight task.
 tc = [e for e in h.get("SessionStart", [])
       if any("tools-check.sh" in k.get("command", "") for k in e.get("hooks", []))]
 if not tc:
     bad.append("SessionStart: tools-check.sh not wired")
-elif any(e.get("matcher") != "startup" for e in tc):
-    bad.append("SessionStart: tools-check.sh must be wired with matcher 'startup', not every SessionStart")
+elif any(e.get("matcher") != "startup|resume" for e in tc):
+    bad.append("SessionStart: tools-check.sh must be wired with matcher 'startup|resume' — a resumed session is a new handshake, a cleared or compacted one is not")
 if bad:
     print("FAIL hooks.json wiring: " + "; ".join(bad))
     sys.exit(1)
