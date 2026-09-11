@@ -241,7 +241,7 @@ print(json.dumps(out))' "$1" "${LIVE_MSG:-}" 2>/dev/null
 # could not be written (found in review): the page is the person's whatever
 # happens to the record.
 live_tail() {
-  [ -n "${LIVE_MSG:-}" ] && say "ohmybug: the person who started this hunt has a private live page for it — ${LIVE_URL:-} — print that link for them once, as a plain line, right now. It is a capability link (whoever holds it can read the findings for 6 hours after the result): never paste it into a PR, an issue, a commit or anything shared."
+  [ -n "${LIVE_MSG:-}" ] && say "ohmybug: the person who started this hunt has a private live page for it — ${LIVE_URL:-} — print that link for them now, as a plain line, and once more beside your terminal done/failed line so they can save the report. It is a capability link (whoever holds it can read the findings for 6 hours after the result): never paste it into a PR, an issue, a commit or anything shared."
   return 0
 }
 

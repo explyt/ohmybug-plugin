@@ -414,12 +414,17 @@ assert "`review_id`, `status_url`, `interval_s`,\n  `heartbeat_s`, `wake_on`, `s
 # every sibling clause — parked in the file but dropped from the emitted array,
 # every Codex session would be routed free to paste the link into a PR body.
 assert "carry live_url: the private page where the person who started the hunt watches it in a browser" in router_text, "ROUTING must name live_url and whose page it is"
-assert "Print it once for the user as a plain line beside your terminal done/failed line" in router_text, "ROUTING must ask for the link to be printed once"
+# One moment for the agent's line, stated the same way in the hook's sentence,
+# here and in the skill (found in review): "once, right now" in the hook beside
+# "once, beside the done line" here had the agent either withhold the page
+# until the hunt was over or print twice under two instructions that said once.
+assert "Print it for the user as a plain line twice: once when the submit answer arrives, and once more beside your terminal done/failed line" in router_text, "ROUTING must name both moments for the link"
+assert "you print it as a plain line twice \u2013 once when that answer arrives,\nand once more beside your terminal `done` / `failed` line" in skill, "the skill must name the same two moments"
 assert "It is a capability link: never paste it into a PR, an issue, a commit or anything shared, and never poll it yourself" in router_text, "ROUTING must carry the never-paste, never-poll rule"
 assert "No live_url on the body (an older server) means no page: say nothing about one" in router_text, "ROUTING must cover the older server"
 assert "**The person's own window: `live_url`.**" in skill, "the skill must have the live_url section"
-assert "Never paste it into\na PR, an issue, a commit message, a comment or anything shared, and never\npoll it yourself" in skill, "the skill must carry the never-paste, never-poll rule"
-assert "**the link stops\nworking 6 hours after the result**" in skill, "the skill must state the link's lifetime"
+assert "Never paste it into a PR, an issue, a commit message, a comment\nor anything shared, and never poll it yourself" in skill, "the skill must carry the never-paste, never-poll rule"
+assert "**the link stops working 6 hours after the result**" in skill, "the skill must state the link's lifetime"
 assert "its wake polls `status_url` once and reports\n  that, which is the read `wake_rule` names for a deep hunt" in codex_bullet
 assert "`status_url` read,\n  whichever that wake uses" in codex_bullet
 # A prompt rule did not hold (a heartbeat carrying wake_rule word for word still
