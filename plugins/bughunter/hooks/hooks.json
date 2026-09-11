@@ -14,6 +14,15 @@
             "statusMessage": "Checking OhMyBug plugin updates..."
           }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/tools-check.sh"
+          }
+        ]
       }
     ],
     "PreToolUse": [
