@@ -534,6 +534,10 @@ print(json.dumps({'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review','ho
   [ "$(printf '%s' "$out" | grep -c .)" = 1 ] || { echo "FAIL stamp: a dead end plus a live page must still be ONE JSON object, got: $out"; fails=$((fails + 1)); }
   case "$(printf '%s' "$out" | ctx)" in *"does not match this working tree"*) ;; *) echo "FAIL stamp: the dead end was lost beside the live page: $out"; fails=$((fails + 1)) ;; esac
   case "$(printf '%s' "$out" | sysmsg)" in *"https://example.invalid/live/abc"*) ;; *) echo "FAIL stamp: the live page was lost beside the dead end: $out"; fails=$((fails + 1)) ;; esac
+  # ...and the AGENT's half rides with the dead-end sentence too: on a client
+  # that does not show systemMessage, the additionalContext is the only place
+  # the link and its "never paste" rule can reach anyone.
+  case "$(printf '%s' "$out" | ctx)" in *"does not match this working tree"*"https://example.invalid/live/abc"*"never paste"*) ;; *) echo "FAIL stamp: the dead-end sentence did not ask the agent to print the live page: $out"; fails=$((fails + 1)) ;; esac
   t "$V" 2
   # The server says yes — in either polling tool.
   for tool in get_findings wait_review; do
