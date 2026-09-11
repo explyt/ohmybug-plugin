@@ -37,6 +37,12 @@ session_text = session["hookSpecificOutput"]["additionalContext"]
 for phrase in ("submit_review", "wait_review", "automation_update", "destination=thread", "four-minute heartbeat", "The automation is the cadence and a wake is one read", "make ONE read and end", "timed_out:true", "never loop either call inside the wake", "stop on done, failed or needs_files", "answer needs_files first", "review_report", "get_attestation", "never run fast and deep in parallel"):
     assert phrase in session_text, phrase
 assert "local code-review" in session_text
+# The proof and its hand-off are two steps, and a Codex session has no hook
+# that writes the local record: a clean hunt met a gate that said "not
+# hunted", and the agent asked for a plugin update that would have changed
+# nothing. The routing text names the step, next to the proof it hands over.
+for phrase in ("get_attestation is the proof", "./scripts/ticket.sh attest <review_id> hands it to the gate", "Codex has no hook that records a hunt locally"):
+    assert phrase in session_text, phrase
 assert "set targetThreadId" not in session_text
 
 skill = open(str(Path(router).parent.parent / "skills/bughunter/SKILL.md"), encoding="utf-8").read()
