@@ -404,6 +404,9 @@ assert "3 consecutive wakes that could not read a status at all" in router_text,
 # ...and the age cap beside it: a cap shorter than the deep budget drops a live
 # hunt, and the counter alone lets a heartbeat nothing can satisfy run forever.
 assert "Retire a heartbeat older than 180 minutes" in router_text, "ROUTING must carry the 180-minute age cap"
+# Said at the start of every session: a session that began without the tools
+# never gets them, and the merge gate is too late to learn it.
+assert "confirm the ohmybug MCP tools are present" in router_text, "ROUTING must ask for the tools-present check at session start"
 # The deep wake reads status_url, so the agent must be told to copy the URL into
 # the heartbeat and to poll it once per wake — or the rule names a read it was
 # never handed, on the longest hunt there is.

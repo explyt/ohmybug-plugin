@@ -2027,6 +2027,27 @@ rm -rf "$FR/state"
 mkdir -p "$FR/.claude"
 printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
 [ -z "$(say)" ] || { printf 'FAIL first-run: nagged a user who had already decided\n'; fails=$((fails + 1)); }
+
+# --- the tools-present check speaks EVERY session, to the assistant only ------
+# A session whose handshake failed has no tools and no way back; the model has
+# to learn that at the start, not at the merge gate. So: said on a fresh
+# install and again on the next session, never as a systemMessage, never to
+# Codex (codex-router.js carries its own sentence), and it leaves no state
+# behind that could ever make it fall silent.
+TC=$(mktemp -d)
+tcsay() { OMB_STATE_DIR="$TC/state" HOME="$TC" bash "$G/tools-check.sh"; }
+[ -z "$(PLUGIN_DATA=/x tcsay)" ] || { printf 'FAIL tools-check: said something to Codex\n'; fails=$((fails + 1)); }
+for turn in 1 2; do
+  tc=$(tcsay)
+  python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+ctx = d.get('hookSpecificOutput', {}).get('additionalContext', '')
+sys.exit(0 if 'confirm the OhMyBug MCP tools (mcp__plugin_bughunter_ohmybug__*) are present' in ctx and 'restart the session' in ctx and 'systemMessage' not in d else 1)
+" "$tc" || { printf 'FAIL tools-check: session %s did not get the tools-present check in additionalContext only\n' "$turn"; fails=$((fails + 1)); }
+done
+[ ! -e "$TC/state" ] || { printf 'FAIL tools-check: wrote state — a mark is how a per-session notice falls silent\n'; fails=$((fails + 1)); }
+rm -rf "$TC"
 rm -rf "$FR"
 
 # --- the one model-authored string that becomes a path ------------------------
@@ -2473,6 +2494,12 @@ elif copy.stdout.strip():
 if not any("pending-nudge.sh" in k.get("command", "")
            for e in h.get("Stop", []) for k in e.get("hooks", [])):
     bad.append("Stop: pending-nudge.sh not wired")
+# Same shape for SessionStart: the tools-present check is a separate file, so
+# the one line that installs it is the one line whose loss the file's own
+# tests cannot see.
+if not any("tools-check.sh" in k.get("command", "")
+           for e in h.get("SessionStart", []) for k in e.get("hooks", [])):
+    bad.append("SessionStart: tools-check.sh not wired")
 if bad:
     print("FAIL hooks.json wiring: " + "; ".join(bad))
     sys.exit(1)
