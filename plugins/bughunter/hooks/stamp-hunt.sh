@@ -167,12 +167,16 @@ def one_line(v):
 # answerable there at any price. Appended after the original nine, so a reader
 # that splits by position keeps reading the same lines it always did.
 # The window the PERSON gets into the hunt: the server mints a private page per
-# review and names it `live_url` on the submit answer. Only an https URL is
-# taken — this string is shown to a human, so a body that did not come from the
-# server must not be able to put arbitrary text in front of them. (No
-# apostrophes in this block: it is a single-quoted shell string.)
+# review and names it `live_url` on the submit answer. Only a URL-shaped https
+# string is taken — this string is shown to a human, so a body that did not
+# come from the server must not be able to put arbitrary text in front of them.
+# The shape is the whole check (found in review): printable ASCII with no
+# whitespace of any kind, bounded in length — a guard that rejected only the
+# space let a newline- or tab-joined second sentence through, and one_line()
+# then folded it into an innocent-looking single line. (No apostrophes in this
+# block: it is a single-quoted shell string.)
 live = body.get("live_url")
-live = live if isinstance(live, str) and live.startswith("https://") and " " not in live else ""
+live = live if isinstance(live, str) and len(live) <= 512 and re.fullmatch(r"https://[!-~]+", live) else ""
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
       pre, failed, upload, one_line(d.get("session_id")), record, readable,
       errored, one_line(body.get("gate_note")), one_line(live), sep="\n")
@@ -229,6 +233,16 @@ if sys.argv[2]:
     out["systemMessage"] = sys.argv[2]
 print(json.dumps(out))' "$1" "${LIVE_MSG:-}" 2>/dev/null
   LIVE_MSG=
+}
+# The link, when no other sentence carried it out already: the agent is asked
+# to print it once, as a plain line, and told what it is — a capability. It
+# must never land in a PR, an issue or a commit message. Called at the end of
+# the submit arm AND on the two paths that leave it early because the record
+# could not be written (found in review): the page is the person's whatever
+# happens to the record.
+live_tail() {
+  [ -n "${LIVE_MSG:-}" ] && say "ohmybug: the person who started this hunt has a private live page for it — ${LIVE_URL:-} — print that link for them once, as a plain line, right now. It is a capability link (whoever holds it can read the findings for 6 hours after the result): never paste it into a PR, an issue, a commit or anything shared."
+  return 0
 }
 
 . "$(dirname "$0")/diff-id.sh" 2>/dev/null || exit 0
@@ -319,7 +333,7 @@ case "$TOOL" in
     # The sent bytes first, because that one is true from any directory; the
     # working-tree ids only when the payload proves to BE this tree; the ref
     # last, for the no-payload path where there are no bytes to hash.
-    mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
+    mkdir -p "$PENDING_DIR" 2>/dev/null || { live_tail; exit 0; }
     TREEOK=0 REFOK=0
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
@@ -379,7 +393,7 @@ case "$TOOL" in
       # unrecordable submit into a permanent nag with nothing to satisfy it.
       [ -n "$SESSION" ] && printf 'session:%s\n' "$SESSION"
       true
-    } > "$PENDING.tmp" 2>/dev/null || exit 0
+    } > "$PENDING.tmp" 2>/dev/null || { live_tail; exit 0; }
     if [ -s "$PENDING.tmp" ] && grep -qv '^session:' "$PENDING.tmp" 2>/dev/null; then
       mv "$PENDING.tmp" "$PENDING"
       # The dead ends are announced at SUBMIT time, to the agent (`say`) —
@@ -402,10 +416,7 @@ case "$TOOL" in
       # which is how the gate came to accuse work that had been reviewed.
       say "ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on (cwd $PWD), so this hunt cannot be recorded; the merge gate will not see it"
     fi
-    # The link, when no dead end carried it out already: the agent is asked to
-    # print it once, as a plain line, and told what it is — a capability. It
-    # must never land in a PR, an issue or a commit message.
-    [ -n "${LIVE_MSG:-}" ] && say "ohmybug: the person who started this hunt has a private live page for it — $LIVE_URL — print that link for them once, as a plain line, right now. It is a capability link (whoever holds it can read the findings for 6 hours after the result): never paste it into a PR, an issue, a commit or anything shared."
+    live_tail
     ;;
   get_findings|wait_review|confirm_findings)
     # get_findings and wait_review are polled while the review is still running
