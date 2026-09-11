@@ -498,6 +498,21 @@ here: this page once said "~15 min" while the protocol had grown to
 roughly six times that, and a number nobody updates is what taught a fleet
 of agents to read every honest run as hung.
 
+**The person's own window: `live_url`.** The submit answer (and every
+`get_findings` / `wait_review` body) carries `live_url` – a private page where
+the human who started the hunt can watch it without any tool call: the
+stages the sandbox passes, the findings once the result is in, the
+confirmation that the sandbox was destroyed, and a "Save as PDF" button. The
+plugin's hook shows the link to the user the moment the submit answer
+arrives; you print it once more, as a plain line, beside your terminal
+`done` / `failed` line, so they can save the report – **the link stops
+working 6 hours after the result** (the findings stay, in this chat). It is
+a capability link: whoever holds it reads the findings. Never paste it into
+a PR, an issue, a commit message, a comment or anything shared, and never
+poll it yourself – `status_url` is your door, `live_url` is theirs. An older
+server answers without the field: then there is no page, and you say
+nothing about one.
+
 Then ARM A BACKGROUND MONITOR – do not silently end your turn and wait to be
 prodded. The response carries `status_url` (plain HTTPS, no auth).
 

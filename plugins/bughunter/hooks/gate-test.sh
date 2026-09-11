@@ -446,6 +446,54 @@ print(json.dumps({
   said=$(postxo confirm_findings rev_x '{"confirmed":0,"billed_usd":0}' | ctx)
   [ -z "$said" ] || { echo "FAIL stamp: confirm after a refused hunt still talks: $said"; fails=$((fails + 1)); }
   t "$V" 2
+
+  # --- the person's live page -------------------------------------------------
+  # The submit answer names a private page for the hunt (`live_url`). It is the
+  # ONE thing this hook hands to the human rather than the agent: `systemMessage`
+  # carries the link to the user, additionalContext asks the agent to print it
+  # once and never to paste it anywhere shared. Mutations: drop the systemMessage
+  # key -> the first row goes red; take any string as the link -> the third does.
+  sysmsg() { # stdin: hook stdout -> the systemMessage text (empty if none)
+    python3 -c 'import json,sys
+for line in sys.stdin:
+    try: d=json.loads(line)
+    except Exception: continue
+    if isinstance(d.get("systemMessage"),str): print(d["systemMessage"]); break' 2>/dev/null
+  }
+  reset_state
+  out=$(postxo submit_review rev_live '{"status":"running","live_url":"https://example.invalid/live/0123456789abcdef0123456789abcdef0123456789abcdef"}')
+  case "$(printf '%s' "$out" | sysmsg)" in
+    *"https://example.invalid/live/0123456789abcdef0123456789abcdef0123456789abcdef"*"6 hours"*) ;;
+    *) echo "FAIL stamp: the live page was not handed to the user as a systemMessage: $out"; fails=$((fails + 1)) ;;
+  esac
+  case "$(printf '%s' "$out" | ctx)" in
+    *"https://example.invalid/live/0123456789abcdef0123456789abcdef0123456789abcdef"*"never paste"*) ;;
+    *) echo "FAIL stamp: the agent was not asked to print the live page once: $out"; fails=$((fails + 1)) ;;
+  esac
+  [ "$(printf '%s' "$out" | grep -c .)" = 1 ] || { echo "FAIL stamp: a hook run must print exactly one JSON object, got: $out"; fails=$((fails + 1)); }
+  [ -s "$(ohmybug_hunt_dir).pending/rev_live" ] || { echo "FAIL stamp: the submit with a live page left no pending record"; fails=$((fails + 1)); }
+  # No live_url on the body (an older server): nothing is said to the user, and
+  # the happy path stays as silent as before.
+  reset_state
+  out=$(postxo submit_review rev_x '{"status":"running"}')
+  [ -z "$out" ] || { echo "FAIL stamp: a submit answer without live_url must say nothing, got: $out"; fails=$((fails + 1)); }
+  # A link that is not an https URL is not a link this hook shows a person.
+  reset_state
+  out=$(postxo submit_review rev_x '{"status":"running","live_url":"javascript:alert(1) open me"}')
+  [ -z "$(printf '%s' "$out" | sysmsg)" ] || { echo "FAIL stamp: a non-https live_url reached the user: $out"; fails=$((fails + 1)); }
+  # ...and the link rides along with a dead-end sentence in the SAME object: a
+  # payload that matches no tree still gets its page shown, once, beside the
+  # warning — never as a second JSON line, which neither client would parse.
+  reset_state
+  out=$(python3 -c "import json,sys
+print(json.dumps({'tool_name':'mcp__plugin_bughunter_ohmybug__submit_review','hook_event_name':'PostToolUse',
+  'tool_input':{'diff':'diff --git a/nowhere b/nowhere\n+not this tree\n'},
+  'tool_response':{'content':[{'type':'text','text':json.dumps({'review_id':'rev_live2','status':'running','live_url':'https://example.invalid/live/abc'})}]},
+  'cwd':sys.argv[1]}))" "$PWD" | bash "$G/stamp-hunt.sh" 2>/dev/null)
+  [ "$(printf '%s' "$out" | grep -c .)" = 1 ] || { echo "FAIL stamp: a dead end plus a live page must still be ONE JSON object, got: $out"; fails=$((fails + 1)); }
+  case "$(printf '%s' "$out" | ctx)" in *"does not match this working tree"*) ;; *) echo "FAIL stamp: the dead end was lost beside the live page: $out"; fails=$((fails + 1)) ;; esac
+  case "$(printf '%s' "$out" | sysmsg)" in *"https://example.invalid/live/abc"*) ;; *) echo "FAIL stamp: the live page was lost beside the dead end: $out"; fails=$((fails + 1)) ;; esac
+  t "$V" 2
   # The server says yes — in either polling tool.
   for tool in get_findings wait_review; do
     reset_state; post submit_review 0
