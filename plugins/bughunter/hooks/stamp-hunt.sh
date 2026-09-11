@@ -166,9 +166,20 @@ def one_line(v):
 # a session, and /mcp on the server is stateless, so "whose run is this" is not
 # answerable there at any price. Appended after the original nine, so a reader
 # that splits by position keeps reading the same lines it always did.
+# The window the PERSON gets into the hunt: the server mints a private page per
+# review and names it `live_url` on the submit answer. Only a URL-shaped https
+# string is taken — this string is shown to a human, so a body that did not
+# come from the server must not be able to put arbitrary text in front of them.
+# The shape is the whole check (found in review): printable ASCII with no
+# whitespace of any kind, bounded in length — a guard that rejected only the
+# space let a newline- or tab-joined second sentence through, and one_line()
+# then folded it into an innocent-looking single line. (No apostrophes in this
+# block: it is a single-quoted shell string.)
+live = body.get("live_url")
+live = live if isinstance(live, str) and len(live) <= 512 and re.fullmatch(r"https://[!-~]+", live) else ""
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
       pre, failed, upload, one_line(d.get("session_id")), record, readable,
-      errored, one_line(body.get("gate_note")), sep="\n")
+      errored, one_line(body.get("gate_note")), one_line(live), sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -192,6 +203,7 @@ RECORD=$(printf '%s' "$FIELDS" | sed -n 11p)
 READABLE=$(printf '%s' "$FIELDS" | sed -n 12p)
 ERRORED=$(printf '%s' "$FIELDS" | sed -n 13p)
 GATE_NOTE=$(printf '%s' "$FIELDS" | sed -n 14p)
+LIVE_URL=$(printf '%s' "$FIELDS" | sed -n 15p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -207,9 +219,30 @@ GATE_NOTE=$(printf '%s' "$FIELDS" | sed -n 14p)
 # context beside the result, the result untouched. Plain text on stdout at
 # exit 0 reaches only the transcript, which is how these diagnostics went a
 # year unseen (plugin#2) — so it is JSON, always, or exit 2 never.
-say() { # sentence -> the agent, result intact
+# ...and `systemMessage` beside it, for the ONE thing a hook here has to hand
+# to the PERSON rather than the agent: the private page of the hunt they just
+# started (`live_url`). Claude Code shows that field to the user; a client that
+# does not know it ignores it, and the additionalContext still asks the agent
+# to print the link. One JSON object per hook run, so the message rides along
+# with whatever sentence is being said and is cleared once it has gone out.
+LIVE_MSG=
+say() { # sentence -> the agent, result intact (+ the live page to the user, once)
   python3 -c 'import json, sys
-print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": sys.argv[1]}}))' "$1" 2>/dev/null
+out = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": sys.argv[1]}}
+if sys.argv[2]:
+    out["systemMessage"] = sys.argv[2]
+print(json.dumps(out))' "$1" "${LIVE_MSG:-}" 2>/dev/null
+  LIVE_MSG=
+}
+# The link, when no other sentence carried it out already: the agent is asked
+# to print it once, as a plain line, and told what it is — a capability. It
+# must never land in a PR, an issue or a commit message. Called at the end of
+# the submit arm AND on the two paths that leave it early because the record
+# could not be written (found in review): the page is the person's whatever
+# happens to the record.
+live_tail() {
+  [ -n "${LIVE_MSG:-}" ] && say "ohmybug: the person who started this hunt has a private live page for it — ${LIVE_URL:-} — print that link for them now, as a plain line, and once more beside your terminal done/failed line so they can save the report. It is a capability link (whoever holds it can read the findings for 6 hours after the result): never paste it into a PR, an issue, a commit or anything shared."
+  return 0
 }
 
 . "$(dirname "$0")/diff-id.sh" 2>/dev/null || exit 0
@@ -286,6 +319,9 @@ case "$TOOL" in
     # already tells the agent why; the attempt record above is cleared all the
     # same, because the environment did allow the call.
     [ "${ERRORED:-0}" = '1' ] && exit 0
+    # The page is the person's whatever happens to the record below: an
+    # unrecordable submit is still a running hunt they can watch.
+    [ -n "${LIVE_URL:-}" ] && LIVE_MSG="OhMyBug: watch this hunt live — $LIVE_URL (a private link for you; it stops working 6 hours after the result. Save the report as PDF from the page before then.)"
     # No id the SERVER minted could be read out of the answer: nothing to file
     # the diff under. Silent, this was indistinguishable from a hunt that never
     # ran; said, the agent can poll from this checkout or submit again.
@@ -297,7 +333,7 @@ case "$TOOL" in
     # The sent bytes first, because that one is true from any directory; the
     # working-tree ids only when the payload proves to BE this tree; the ref
     # last, for the no-payload path where there are no bytes to hash.
-    mkdir -p "$PENDING_DIR" 2>/dev/null || exit 0
+    mkdir -p "$PENDING_DIR" 2>/dev/null || { live_tail; exit 0; }
     TREEOK=0 REFOK=0
     {
       [ -n "$SENT" ] && printf '%s\n' "$SENT"
@@ -357,7 +393,7 @@ case "$TOOL" in
       # unrecordable submit into a permanent nag with nothing to satisfy it.
       [ -n "$SESSION" ] && printf 'session:%s\n' "$SESSION"
       true
-    } > "$PENDING.tmp" 2>/dev/null || exit 0
+    } > "$PENDING.tmp" 2>/dev/null || { live_tail; exit 0; }
     if [ -s "$PENDING.tmp" ] && grep -qv '^session:' "$PENDING.tmp" 2>/dev/null; then
       mv "$PENDING.tmp" "$PENDING"
       # The dead ends are announced at SUBMIT time, to the agent (`say`) —
@@ -380,6 +416,7 @@ case "$TOOL" in
       # which is how the gate came to accuse work that had been reviewed.
       say "ohmybug: submit carried no diff, and no meta.ref spelled as a commit sha this repository is checked out on (cwd $PWD), so this hunt cannot be recorded; the merge gate will not see it"
     fi
+    live_tail
     ;;
   get_findings|wait_review|confirm_findings)
     # get_findings and wait_review are polled while the review is still running
