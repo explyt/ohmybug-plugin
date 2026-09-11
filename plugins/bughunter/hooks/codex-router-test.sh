@@ -407,6 +407,7 @@ assert "Retire a heartbeat older than 180 minutes" in router_text, "ROUTING must
 # Said at the start of every session: a session that began without the tools
 # never gets them, and the merge gate is too late to learn it.
 assert "confirm the ohmybug MCP tools are present" in router_text, "ROUTING must ask for the tools-present check at session start"
+assert "tell the user once" in router_text and "go on with what they asked" in router_text, "the tools check is one notice and the user's decision, never a refusal of their task"
 # The deep wake reads status_url, so the agent must be told to copy the URL into
 # the heartbeat and to poll it once per wake — or the rule names a read it was
 # never handed, on the longest hunt there is.

@@ -2028,12 +2028,15 @@ mkdir -p "$FR/.claude"
 printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
 [ -z "$(say)" ] || { printf 'FAIL first-run: nagged a user who had already decided\n'; fails=$((fails + 1)); }
 
-# --- the tools-present check speaks EVERY session, to the assistant only ------
+# --- the tools-present check speaks at every session START, to the assistant --
 # A session whose handshake failed has no tools and no way back; the model has
 # to learn that at the start, not at the merge gate. So: said on a fresh
 # install and again on the next session, never as a systemMessage, never to
-# Codex (codex-router.js carries its own sentence), and it leaves no state
-# behind that could ever make it fall silent.
+# Codex (codex-router.js carries its own sentence), it leaves no state behind
+# that could ever make it fall silent — and it asks for ONE notice and the
+# user's decision, never a refusal of the user's own task: the tools can be
+# absent for reasons a restart cannot change. No python3: it stands down, like
+# every hook here, instead of failing the session start.
 TC=$(mktemp -d)
 tcsay() { OMB_STATE_DIR="$TC/state" HOME="$TC" bash "$G/tools-check.sh"; }
 [ -z "$(PLUGIN_DATA=/x tcsay)" ] || { printf 'FAIL tools-check: said something to Codex\n'; fails=$((fails + 1)); }
@@ -2043,11 +2046,18 @@ for turn in 1 2; do
 import json, sys
 d = json.loads(sys.argv[1])
 ctx = d.get('hookSpecificOutput', {}).get('additionalContext', '')
-sys.exit(0 if 'confirm the OhMyBug MCP tools (mcp__plugin_bughunter_ohmybug__*) are present' in ctx and 'restart the session' in ctx and 'systemMessage' not in d else 1)
-" "$tc" || { printf 'FAIL tools-check: session %s did not get the tools-present check in additionalContext only\n' "$turn"; fails=$((fails + 1)); }
+ok = ('confirm the OhMyBug MCP tools (mcp__plugin_bughunter_ohmybug__*) are present' in ctx
+      and 'tell the user once' in ctx and 'go on with what they asked' in ctx
+      and 'do not start' not in ctx and 'systemMessage' not in d)
+sys.exit(0 if ok else 1)
+" "$tc" || { printf 'FAIL tools-check: session %s did not get a one-notice, non-blocking tools check in additionalContext only\n' "$turn"; fails=$((fails + 1)); }
 done
 [ ! -e "$TC/state" ] || { printf 'FAIL tools-check: wrote state — a mark is how a per-session notice falls silent\n'; fails=$((fails + 1)); }
-rm -rf "$TC"
+NOPY3=$(mktemp -d)
+printf '#!/bin/sh\nexit 1\n' > "$NOPY3/python3"; chmod +x "$NOPY3/python3"
+tcnopy=$(PATH="$NOPY3:$PATH" tcsay 2>&1; echo "rc=$?")
+[ "$tcnopy" = "rc=0" ] || { printf 'FAIL tools-check: a broken python3 did not stand down silently (%s)\n' "$tcnopy"; fails=$((fails + 1)); }
+rm -rf "$NOPY3" "$TC"
 rm -rf "$FR"
 
 # --- the one model-authored string that becomes a path ------------------------
@@ -2496,10 +2506,15 @@ if not any("pending-nudge.sh" in k.get("command", "")
     bad.append("Stop: pending-nudge.sh not wired")
 # Same shape for SessionStart: the tools-present check is a separate file, so
 # the one line that installs it is the one line whose loss the file's own
-# tests cannot see.
-if not any("tools-check.sh" in k.get("command", "")
-           for e in h.get("SessionStart", []) for k in e.get("hooks", [])):
+# tests cannot see. And it is wired to `startup` ONLY: a SessionStart entry
+# without a matcher fires on compact and resume too, which would put "first
+# thing this session" into the middle of an in-flight task.
+tc = [e for e in h.get("SessionStart", [])
+      if any("tools-check.sh" in k.get("command", "") for k in e.get("hooks", []))]
+if not tc:
     bad.append("SessionStart: tools-check.sh not wired")
+elif any(e.get("matcher") != "startup" for e in tc):
+    bad.append("SessionStart: tools-check.sh must be wired with matcher 'startup', not every SessionStart")
 if bad:
     print("FAIL hooks.json wiring: " + "; ".join(bad))
     sys.exit(1)
