@@ -54,6 +54,15 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*ohmybug.*__(submit_review|confirm_findings|get_balance)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bugarium-notice.sh"
+          }
+        ]
       }
     ],
     "Stop": [
