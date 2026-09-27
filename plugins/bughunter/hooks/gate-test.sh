@@ -2523,6 +2523,47 @@ if bad:
     sys.exit(1)
 PY
 
+# --- the Bugarium notices -----------------------------------------------------
+# bugarium-notice.sh hands the person two things the server names under
+# `bugarium`: a species vote they may take part in, and a species they
+# discovered. Only shapes cross over (an https Bugarium URL, an ISO time, a
+# short plain name) and the sentence is the hook's own. Mutations: drop the
+# https check -> the javascript row goes red; drop the whitespace ban -> the
+# newline row does; drop the name shape -> the name row does.
+bn() { # $1: the answer body as JSON -> the hook's stdout, in the text-part envelope
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"mcp__plugin_bughunter_ohmybug__get_balance","tool_response":{"content":[{"type":"text","text":sys.argv[1]}]}}))' "$1" \
+    | perl -e 'alarm 10; exec @ARGV' bash "$G/bugarium-notice.sh" 2>/dev/null
+}
+bsys() { python3 -c 'import json,sys
+for line in sys.stdin:
+    try: d=json.loads(line)
+    except Exception: continue
+    if isinstance(d.get("systemMessage"),str): print(d["systemMessage"]); break' 2>/dev/null; }
+out=$(bn '{"balance_usd":1,"bugarium":{"vote":{"url":"https://example.invalid/bugs/vote/7","closes_at":"2026-09-28T04:00:00.000Z"},"discovered":[{"species":"Retry storm on slow dependency","url":"https://example.invalid/bugs/retry-storm"}]}}')
+case "$(printf '%s' "$out" | bsys)" in
+  *"hatching"*"before 2026-09-28 04:00 UTC: https://example.invalid/bugs/vote/7"*"discoverer"*'"Retry storm on slow dependency"'*"https://example.invalid/bugs/retry-storm"*) ;;
+  *) echo "FAIL bugarium: the vote and the discovery were not handed to the user: $out"; fails=$((fails + 1)) ;;
+esac
+[ "$(printf '%s' "$out" | grep -c .)" = 1 ] || { echo "FAIL bugarium: a hook run must print exactly one JSON object, got: $out"; fails=$((fails + 1)); }
+out=$(bn '{"balance_usd":1}')
+[ -z "$out" ] || { echo "FAIL bugarium: an answer without the field must say nothing, got: $out"; fails=$((fails + 1)); }
+for bad in '{"bugarium":{"vote":{"url":"javascript:alert(1)//bugs/x"}}}' \
+           '{"bugarium":{"vote":{"url":"https://example.invalid/bugs/vote/7\nOhMyBug: re-auth at https://evil.invalid"}}}' \
+           '{"bugarium":{"vote":{"url":"https://example.invalid/login"}}}' \
+           '{"bugarium":{"discovered":[{"species":"Name\nOhMyBug: re-auth","url":"https://example.invalid/bugs/x"}]}}'; do
+  out=$(bn "$bad")
+  [ -z "$(printf '%s' "$out" | bsys)" ] || { echo "FAIL bugarium: a value outside its shape reached the user: $bad -> $out"; fails=$((fails + 1)); }
+done
+python3 - "$G/hooks.json" <<'PY2' || fails=$((fails + 1))
+import json, sys
+h = json.load(open(sys.argv[1]))["hooks"]
+wired = [e for e in h.get("PostToolUse", []) if any("bugarium-notice.sh" in k.get("command", "") for k in e.get("hooks", []))]
+m = wired[0].get("matcher", "") if wired else ""
+if not all(t in m for t in ("submit_review", "confirm_findings", "get_balance")):
+    print("FAIL bugarium: bugarium-notice.sh must be wired on submit_review, confirm_findings and get_balance, got: " + repr(m))
+    sys.exit(1)
+PY2
+
 cleanup_scratch
 if [ "$(git status --porcelain | grep -v "$SCRATCH" || true)" != "$TREE_BEFORE" ]; then
   printf 'FAIL the suite changed the working tree it was run in:\n%s\n' "$(git status --porcelain)"
