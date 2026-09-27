@@ -513,6 +513,15 @@ or anything shared, and never poll it yourself – `status_url` is your door,
 `live_url` is theirs. An older server answers without the field: then there
 is no page, and you say nothing about one.
 
+**Bugarium notices: `bugarium`.** `submit_review`, `confirm_findings` and
+`get_balance` may carry a `bugarium` object. `vote`: a new bug species is
+hatching from stories this person published, and until `closes_at` they may
+pick its name and its mascot on that page. `discovered`: a species they are a
+discoverer of, said once. Pass each `text` on to the person in one plain line.
+The vote needs their own GitHub sign-in on that page: never vote for them and
+never open the link yourself. The plugin's hook also shows these lines to the
+person directly. No field, nothing to say.
+
 Then ARM A BACKGROUND MONITOR – do not silently end your turn and wait to be
 prodded. The response carries `status_url` (plain HTTPS, no auth).
 
