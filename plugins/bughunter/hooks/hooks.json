@@ -5,11 +5,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/first-run.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/first-run.sh",
+            "commandWindows": "exit 0"
           },
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/version-check.sh",
+            "commandWindows": "exit 0",
             "timeout": 5,
             "statusMessage": "Checking OhMyBug plugin updates..."
           }
@@ -20,7 +22,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/tools-check.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/tools-check.sh",
+            "commandWindows": "exit 0"
           }
         ]
       }
@@ -31,7 +34,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-pr-gate.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-pr-gate.sh",
+            "commandWindows": "exit 0"
           }
         ]
       },
@@ -40,7 +44,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh",
+            "commandWindows": "exit 0"
           }
         ]
       }
@@ -51,7 +56,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh",
+            "commandWindows": "exit 0"
           }
         ]
       },
@@ -60,7 +66,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bugarium-notice.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bugarium-notice.sh",
+            "commandWindows": "exit 0"
           }
         ]
       }
@@ -70,7 +77,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pending-nudge.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pending-nudge.sh",
+            "commandWindows": "exit 0"
           }
         ]
       }
