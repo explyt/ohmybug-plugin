@@ -13,6 +13,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/version-check.sh",
+            "commandWindows": "exit 0",
             "timeout": 5,
             "statusMessage": "Checking OhMyBug plugin updates..."
           }

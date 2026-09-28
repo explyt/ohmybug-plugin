@@ -2484,6 +2484,15 @@ codex = codex if isinstance(codex, list) else [codex]
 for f in ("./hooks/hooks.json", "./hooks/claude-codex-hooks.json"):
     if f not in codex:
         bad.append(f"codex manifest hooks: {f} not listed")
+# Codex on Windows runs a hook as `cmd /C <command>`, and cmd hands a bare .sh
+# to the file association: a Git Bash window per hook, or an "open with" dialog
+# where there is none — on every turn (Stop) and every shell call (PreToolUse).
+# So every .sh hook in a file Codex loads carries a commandWindows that runs no .sh.
+for f in codex:
+    for event, groups in json.load(open(os.path.join(root, f)))["hooks"].items():
+        for k in (k for g in groups for k in g.get("hooks", [])):
+            if re.search(r"\.sh\b", k.get("command", "")) and re.search(r"\.sh\b", k.get("commandWindows", ".sh")):
+                bad.append(f"{f} {event}: {k['command']} runs as a .sh on Windows (no commandWindows)")
 # One offer, one sentence. The marketplace card once quoted a different number while
 # the server, README and skill said "first review free".
 # The whole tree, not a list of places: the second marketplace card lives
