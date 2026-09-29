@@ -67,7 +67,13 @@ install. Codex uses the same GitHub OAuth flow as Claude Code:
 codex plugin marketplace add explyt/ohmybug-plugin
 codex plugin add bughunter@ohmybug
 codex mcp login ohmybug
+codex update
 ```
+
+The last line brings Codex itself up to date, and it stays last: where Codex
+cannot tell how it was installed (for example, bundled inside another app) it
+exits with an error, and by then the plugin, the MCP server and the sign-in are
+already in place. Update that Codex the way it was installed.
 
 Open `/hooks` once after installation, review and trust the OhMyBug hook
 definition, then start a new Codex thread. Codex skips non-managed plugin hooks
