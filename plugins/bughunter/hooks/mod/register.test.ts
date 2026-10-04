@@ -12,9 +12,25 @@ const VIEW = { scroll: { top: 0, bodyRows: 10 }, view: {} }
 /** The texts a component draws, as the person would read them. */
 async function drawn($: Dollar, component: string, props: Record<string, unknown>, requestId = 'x') {
   const ui = await $.ui.mount({ plugin: 'bughunter', surface: 'terminal', component, requestId, props } as never)
-  return (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
+  await ui.unmount()
+  return texts
 }
-const band = ($: Dollar) => drawn($, 'AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, ...VIEW })
+const BAND = { plugin: 'bughunter', surface: 'terminal', component: 'AbovePrompt', requestId: 'x',
+  props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, ...VIEW } }
+const band = ($: Dollar) => drawn($, 'AbovePrompt', BAND.props)
+/** The keys of the Buttons the band draws. */
+async function buttons($: Dollar) {
+  const ui = await $.ui.mount(BAND as never)
+  const keys = (await ui.findAll({ type: 'Button' })).map(b => String(b.key))
+  await ui.unmount()
+  return keys
+}
+async function press($: Dollar, key: string) {
+  const ui = await $.ui.mount(BAND as never)
+  await ui.press({ key })
+  await ui.unmount()
+}
 const pane = ($: Dollar) => drawn($, 'Pane', { title: 'OhMyBug hunts', isFocused: false, bodyColumns: 60, placement: 'dock', ...VIEW }, 'bughunter-hunts')
 
 const submitted = JSON.stringify({ review_id: 'rev_1', status: 'running', mode: 'fast',
@@ -31,6 +47,8 @@ function engine(on: On) {
   on('session.start', async ($, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: '/repo' }) as never)
   on('command.register', async () => ({ value: undefined }) as never)
+  on('turn.complete', async ($, e) => ({ text: e.answer }))
+  on('turn.start', async () => ({ turnId: 't1' }) as never)
   on('ui.render', async ($, e) => { const { Text } = $.ui.resolve(e); return Text({ children: 'engine drawing' } as never) })
 }
 
@@ -49,7 +67,7 @@ function world(on: On, status: string | null | string[] | (() => Promise<string>
   return seen
 }
 
-test('a hunt that finishes raises a toast and nothing else: no band, no turn', async ($, on) => {
+test('a hunt that finishes raises a toast and a band, and starts no turn by itself', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, {})
@@ -60,8 +78,81 @@ test('a hunt that finishes raises a toast and nothing else: no band, no turn', a
 
   await clock.advance(75_000)
   expect(seen.toasts.join('\n')).toContain('rev_1 is done · 2 findings')
-  expect(await band($)).toBe('engine drawing')
+  expect(await band($)).toContain('Hunt rev_1 is done · 2 findings.')
+  expect(await buttons($)).toEqual(['go', 'later'])
+  // Without OHMYBUG_AUTO_RESUME nothing is sent, not even when a turn ends idle.
+  await drawn($, 'PromptHint', { isDraft: false, isWorking: false, hint: '' })
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
   expect(seen.prompts).toHaveLength(0)
+})
+
+test('Continue sends the step for the hunt it names, by id', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  await press($, 'go')
+  expect(seen.prompts).toEqual(['The OhMyBug hunt rev_1 is done. Read it with get_findings (review_id rev_1) and continue the bughunter flow.'])
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('a hunt the agent has read since loses its Continue', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  expect(await buttons($)).toContain('go')
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await buttons($)).toEqual([])
+  expect(seen.prompts).toHaveLength(0)
+})
+
+test('with OHMYBUG_AUTO_RESUME=1, a finished hunt resumes an idle session with its id', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { OHMYBUG_AUTO_RESUME: '1' })
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await drawn($, 'PromptHint', { isDraft: false, isWorking: false, hint: '' })
+  await clock.advance(75_000)
+  expect(seen.prompts.join('\n')).toContain('get_findings (review_id rev_1)')
+})
+
+test('without OHMYBUG_AUTO_RESUME an idle session gets no prompt when a hunt finishes', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await drawn($, 'PromptHint', { isDraft: false, isWorking: false, hint: '' })
+  await clock.advance(75_000)
+  expect(seen.prompts).toHaveLength(0)
+})
+
+test('a submit answered already_running keeps the one record and its start time', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  engine(on)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  on('http.fetch', async () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ status: 'running' }) } }) as never)
+  const replies = [submitted, JSON.stringify({ ...JSON.parse(submitted), already_running: true })]
+  on('tool.call', { tool: SUBMIT }, async () => ({ result: { content: [] }, text: replies.shift()! }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(5 * 60_000)
+  await $.tool.call({ tool: SUBMIT } as never)
+  const list = await pane($)
+  expect(list.match(/rev_1/g)).toHaveLength(1)
+  expect(list).toContain('5 min ago')
 })
 
 test('files served and the hunt running again is not announced as done', async ($, on) => {
@@ -134,16 +225,95 @@ test('reading the result itself marks the hunt read', async ($, on) => {
   expect(list).not.toContain('not read yet')
 })
 
-test('a merge the gate refused is left to the gate: the mod draws and sends nothing', async ($, on) => {
+const RUNNING = 'OhMyBug: a hunt is RUNNING for this diff and has not returned yet. Poll get_findings until it says done, then merge.'
+const UNHUNTED = 'OhMyBug: the current diff has not been hunted, or has CHANGED since the hunt (fixes count — re-hunt them).'
+
+test('the gate\'s RUNNING refusal with a tracked open hunt offers Poll for that id and nothing else', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   mock.env(on, {})
   const seen = world(on, JSON.stringify({ status: 'running' }))
-  on('tool.call', { tool: 'Bash' }, async () => ({ deny: 'OhMyBug: a hunt is RUNNING for this diff and has not returned yet.' }))
+  on('tool.call', { tool: 'Bash' }, async () => ({ deny: RUNNING }))
   await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
   await $.tool.call({ tool: 'Bash', command: 'gh pr merge 12 --squash' } as never)
-  expect(await band($)).toBe('engine drawing')
+  expect(await band($)).toContain('Merge blocked: a hunt is RUNNING for this diff')
+  expect(await buttons($)).toEqual(['gate-poll'])
+  await press($, 'gate-poll')
+  expect(seen.prompts).toEqual(['Poll the OhMyBug hunt rev_1: call get_findings with review_id rev_1.'])
+})
+
+for (const [kind, reason] of [['RUNNING', RUNNING], ['unhunted', UNHUNTED]] as const) {
+  test(`a ${kind} gate refusal without a tracked hunt shows its text and no button`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    mock.env(on, {})
+    const seen = world(on, JSON.stringify({ status: 'running' }))
+    on('tool.call', { tool: 'Bash' }, async () => ({ deny: reason }))
+    await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'gh pr merge 12 --squash' } as never)
+    expect(await band($)).toContain(`Merge blocked: ${reason.replace('OhMyBug: ', '')}`)
+    expect(await buttons($)).toEqual([])
+    expect(seen.prompts).toHaveLength(0)
+  })
+}
+
+test('a gate refusal after the tracked hunt finished offers no button', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  on('tool.call', { tool: 'Bash' }, async () => ({ deny: UNHUNTED }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr merge 12' } as never)
+  expect(await buttons($)).toEqual([])
+})
+
+const findingsWith = (extra: Record<string, unknown>) => JSON.stringify({ ...JSON.parse(done), ...extra })
+
+test('the deep hunt buttons come only with deep_offer, and Not now sends nothing', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const answers = [done, findingsWith({ deep_offer: { pitch: 'A deep hunt reads the whole repository.' } })]
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: answers.shift()! }))
+  const seen = world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await buttons($)).not.toContain('deep-yes')
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await band($)).toContain('Deep hunt offered for rev_1: A deep hunt reads the whole repository.')
+  expect(await buttons($)).toEqual(['deep-yes', 'deep-no'])
+  await press($, 'deep-no')
   expect(seen.prompts).toHaveLength(0)
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('Run deep hunt sends the consent for the offered id', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: findingsWith({ deep_offer: { pitch: 'Go deep.' } }) }))
+  const seen = world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  await press($, 'deep-yes')
+  expect(seen.prompts).toEqual(['Yes, run the deep hunt for rev_1.'])
+})
+
+test('a deep_offer for a hunt the mod does not track draws no band', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: findingsWith({ review_id: 'rev_x', deep_offer: { pitch: 'Go deep.' } }) }))
+  world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_x' } as never)
+  expect(await buttons($)).toEqual([])
 })
 
 test('a status URL the network refuses is said in the status line, not hidden', async ($, on) => {
@@ -208,6 +378,35 @@ test('a read hunt without verdicts is named in the prompt and the status line un
   await $.tool.call({ tool: CONFIRM, review_id: 'rev_1' } as never)
   expect(await nextStep($)).toBe('')
   expect(seen.status.at(-1)).toBeUndefined()
+})
+
+test('a read hunt with 0 findings is told to confirm with an empty verdict list', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  composeBeneath(on)
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: JSON.stringify({ review_id: 'rev_1', status: 'done', findings: [] }) }))
+  world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await nextStep($)).toBe('OhMyBug hunt rev_1 is done with 0 findings and is not confirmed yet. Next: confirm_findings for rev_1 with verdicts: [].')
+})
+
+test('a running hunt wins the status line over an earlier one without verdicts', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const ids = ['rev_a', 'rev_b']
+  on('tool.call', { tool: SUBMIT }, async () => ({ result: { content: [] }, text: JSON.stringify({ ...JSON.parse(submitted), review_id: ids.shift() }) }))
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: findingsWith({ review_id: 'rev_a' }) }))
+  const seen = world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_a' } as never)
+  expect(seen.status.at(-1)).toBe('bughunt rev_a · verdicts not sent')
+  await $.tool.call({ tool: SUBMIT } as never)
+  expect(seen.status.at(-1)).toMatch(/^bughunt fast 0/)
 })
 
 test('of two read hunts only the one without verdicts is named', async ($, on) => {
