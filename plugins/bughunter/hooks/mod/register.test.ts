@@ -181,6 +181,70 @@ test('a species without lessons draws no field-note lines', async ($, on) => {
   expect(texts).not.toContain('    · ')
 })
 
+/** The prompt text the mod adds, as the model would read it. */
+async function nextStep($: Dollar) {
+  const { sections } = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+  return sections.filter(x => x.id === 'bughunter:next-step').map(x => x.text).join('\n')
+}
+const composeBeneath = (on: On) =>
+  on('prompt.compose', async () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' as const }] }))
+const confirmed = (id: string) => JSON.stringify({ review_id: id, confirmed: 1 })
+
+test('a read hunt without verdicts is named in the prompt and the status line until confirm', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  composeBeneath(on)
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  on('tool.call', { tool: CONFIRM }, async () => ({ result: { content: [] }, text: confirmed('rev_1') }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  expect(await nextStep($)).toBe('')
+  await clock.advance(75_000)
+  expect(await nextStep($)).toBe('')
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await nextStep($)).toBe('OhMyBug hunt rev_1 is done and its verdicts are not sent. Next: verify each finding, then confirm_findings for rev_1.')
+  expect(seen.status.at(-1)).toBe('bughunt rev_1 · verdicts not sent')
+  await $.tool.call({ tool: CONFIRM, review_id: 'rev_1' } as never)
+  expect(await nextStep($)).toBe('')
+  expect(seen.status.at(-1)).toBeUndefined()
+})
+
+test('of two read hunts only the one without verdicts is named', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  composeBeneath(on)
+  engine(on)
+  const answer = (id: string) => JSON.stringify({ review_id: id, status: 'done', mode: 'fast',
+    status_url: `https://status.test/r/${id}/status` })
+  const ids = ['rev_a', 'rev_b']
+  on('tool.call', { tool: SUBMIT }, async () => ({ result: { content: [] }, text: answer(ids.shift()!) }))
+  on('tool.call', { tool: CONFIRM }, async () => ({ result: { content: [] }, text: confirmed('rev_a') }))
+  on('ui.status', async () => ({ value: undefined }) as never)
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: CONFIRM, review_id: 'rev_a' } as never)
+  const text = await nextStep($)
+  expect(text).toContain('hunt rev_b is done')
+  expect(text).not.toContain('rev_a')
+})
+
+test('OHMYBUG_STATUS=0 keeps the status line clear and the prompt line out', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { OHMYBUG_STATUS: '0' })
+  composeBeneath(on)
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(seen.status).toHaveLength(0)
+  expect(await nextStep($)).toBe('')
+})
+
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`the findings card lists findings by severity on ${surface}`, async ($, on) => {
     mock.store(on)
