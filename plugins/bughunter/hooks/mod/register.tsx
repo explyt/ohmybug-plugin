@@ -10,6 +10,8 @@
 //
 // Quiet: a status-line entry while a hunt runs, a toast when one changes to
 // something the agent has not read yet. No band, no sound, no turn of its own.
+// The one line it adds to the system prompt (a read hunt whose verdicts are not
+// sent) the status line shows the person in the same words.
 
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
@@ -27,6 +29,8 @@ type BughunterHunt = {
   findings?: number
   /** The agent has read the terminal result itself (get_findings or wait_review). */
   seen: boolean
+  /** confirm_findings for this hunt's id answered with the verdicts recorded. */
+  judged?: boolean
   nextAt: number
 }
 
@@ -46,6 +50,9 @@ const SEVERITY = ['critical', 'high', 'medium', 'low']
 const COLOR: Record<string, string> = { critical: 'red', high: 'red', medium: 'yellow' }
 
 const isOpen = (h: BughunterHunt) => h.state === 'running' || h.state === 'needs_files'
+/** Done, read by the agent, and no verdicts seen for it: the one next step left. */
+const awaitsVerdicts = (h: BughunterHunt, cwd: string, now: number) =>
+  h.cwd === cwd && h.state === 'done' && h.seen && !h.judged && now - h.startedAt < STALE_MS
 
 function news(h: BughunterHunt): string {
   if (h.state === 'needs_files') return `Reviewers of hunt ${h.id} asked for files.`
@@ -64,7 +71,10 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
   if (!body) return
   const id = str(body.review_id) ?? str(input.review_id)
   if (!id) return
+  // Every await before the snapshot: a tool result read meanwhile must not be
+  // undone by a stale copy of the list.
   const now = await $.clock.now()
+  const cwd = await $.session.cwd()
   const list = [...huntList]
   const at = list.findIndex(h => h.id === id)
 
@@ -73,7 +83,7 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
     if (!statusUrl) return
     const done = str(body.status) === 'done'
     const h: BughunterHunt = { id, mode: str(body.mode) ?? 'fast', state: done ? 'done' : 'running', statusUrl,
-      cwd: await $.session.cwd(), startedAt: now, median: num(body.recent_median_minutes), seen: done,
+      cwd, startedAt: now, median: num(body.recent_median_minutes), seen: done,
       nextAt: now + 60_000 }
     if (at >= 0) list[at] = h; else list.push(h)
   } else if (at >= 0 && (kind === 'get_findings' || kind === 'wait_review')) {
@@ -81,6 +91,8 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
     const terminal = state === 'done' || state === 'failed'
     list[at] = { ...list[at]!, state, seen: terminal || list[at]!.seen,
       findings: state === 'done' ? findingsOf(body).length : list[at]!.findings }
+  } else if (at >= 0 && kind === 'confirm_findings' && num(body.confirmed) !== undefined) {
+    list[at] = { ...list[at]!, judged: true }
   } else {
     return
   }
@@ -99,10 +111,12 @@ async function refreshStatus($: Engine) {
   const now = await $.clock.now()
   const mine = huntList.filter(h => h.cwd === cwd)
   const unread = mine.find(h => !h.seen && !isOpen(h))
+  const unjudged = mine.find(h => awaitsVerdicts(h, cwd, now))
   const running = mine.filter(isOpen)
   let text: string | undefined
   if (ctx.blocked && running.length) text = 'bughunt: status unreachable here, the agent polls instead'
   else if (unread) text = `bughunt ${unread.id} ${unread.state}${unread.findings === undefined ? '' : ` · ${unread.findings} found`}`
+  else if (unjudged) text = `bughunt ${unjudged.id} · verdicts not sent`
   else if (running.length === 1) {
     const h = running[0]!
     text = `bughunt ${h.mode} ${minutes(now - h.startedAt)}${h.median ? `/~${h.median}` : ''} min${h.state === 'needs_files' ? ' · files asked' : ''}`
@@ -197,6 +211,25 @@ export const register: Register = on => {
       // The call already happened; a bookkeeping slip must not touch its result.
     }
     return ran
+  })
+
+  // The one thing the mod tells the agent, and the status line tells the person
+  // the same: a hunt it read whose verdicts it has not sent. Keyed by hunt id,
+  // gone once confirm_findings for that id is seen or the hunt is 6 hours old.
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+    // Shown to the person or not told to the agent: OHMYBUG_STATUS=0 drops both.
+    if (!ctx.showStatus) return composed
+    try {
+      const cwd = await $.session.cwd()
+      const now = await $.clock.now()
+      const ids = huntList.filter(h => awaitsVerdicts(h, cwd, now)).map(h => h.id)
+      if (!ids.length) return composed
+      const text = ids.map(id => `OhMyBug hunt ${id} is done and its verdicts are not sent. Next: verify each finding, then confirm_findings for ${id}.`).join('\n')
+      return { sections: [...composed.sections, { id: 'bughunter:next-step', text, scope: 'session' as const }] }
+    } catch {
+      return composed
+    }
   })
 
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {

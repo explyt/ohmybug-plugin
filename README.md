@@ -137,9 +137,12 @@ sends a prompt or starts a turn.
 | Hunt status in the status line, a toast when a hunt finishes or asks for files | yes | — | — |
 | Findings drawn as a card (`show the raw answer` keeps the original) | yes | — | — |
 | `/hunts` pane | yes | — | — |
+| A hunt read but not confirmed: one line in the system prompt and the same in the status line (`bughunt <id> · verdicts not sent`) until `confirm_findings` for that id | yes | — | — |
 
 Set `OHMYBUG_STATUS=0` (in the `env` block of `settings.json`, or managed
-settings for a team) to keep the status line clear. Turn the mod off with
+settings for a team) to keep the status line clear; the prompt line goes with it, so the agent
+is never told what the person cannot see.
+Turn the mod off with
 `/plugin` like any built-in mod; the shell hooks stay.
 
 ## MCP contract (server: https://mcp.ohmybug.ai/mcp)
