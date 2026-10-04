@@ -32,12 +32,30 @@ jobs:
       # Claude Code runs it in on macOS – and fails, not skips, without it.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
       - run: bash plugins/bughunter/hooks/codex-router-test.sh
+      - run: bash plugins/bughunter/hooks/secret-scan-test.sh
       - run: bash plugins/bughunter/hooks/version-check-test.sh
       - run: bash scripts/version.sh --self-test
       # The manifest carries the version a marketplace reads, so it is the one
       # thing here that is wrong silently: nothing breaks, the plugin just
       # never appears to update.
       - run: bash scripts/version.sh --check
+
+  mod:
+    name: Claude Code mod
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned: the mod API is early access and moves between releases, so a
+      # new release is a deliberate bump here, not a surprise on a Tuesday.
+      - run: npm install -g @anthropic-ai/claude-code@2.1.288
+      - run: claude plugin validate plugins/bughunter
+      - run: claude plugin test plugins/bughunter
+      # Older clients validate plugin.json strictly; a key they do not know
+      # refuses the whole plugin, shell gate included.
+      - run: npx -y @anthropic-ai/claude-code@2.1.140 plugin validate plugins/bughunter
 
   hygiene:
     name: Public-repo hygiene

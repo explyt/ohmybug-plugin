@@ -44,6 +44,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/secret-scan.sh",
+            "commandWindows": "exit 0"
+          },
+          {
+            "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh",
             "commandWindows": "exit 0"
           }
