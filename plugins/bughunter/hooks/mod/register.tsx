@@ -217,15 +217,25 @@ export const register: Register = on => {
       const pending = num(body.species_pending) ?? 0
       const confirmed = num(body.confirmed)
       if (confirmed === undefined) return next(e)
+      // Field notes: other hunters' lessons about the species, already in the
+      // agent's context through the answer itself. Shown, never sent anywhere.
+      const lessonsOf = (s: Record<string, unknown>) =>
+        Array.isArray(s.lessons) ? s.lessons.flatMap(l => str(l) ?? []) : []
+      const notes = species.reduce((n, s) => n + lessonsOf(s).length, 0)
       rows = [
         <Text>verdicts recorded · {confirmed} confirmed{num(body.minor_confirmed) ? ` · ${body.minor_confirmed} minor` : ''}</Text>,
         ...species.map(s => (
-          <Text>
-            <Text dimColor>{str(s.finding_id) ?? '?'} →</Text> {str(s.name) ?? str(s.slug) ?? '?'}
-            {s.confidence === 'medium' ? <Text dimColor> (likely)</Text> : null}
-          </Text>
+          <Box flexDirection="column">
+            <Text>
+              <Text dimColor>{str(s.finding_id) ?? '?'} →</Text> {str(s.name) ?? str(s.slug) ?? '?'}
+              {s.confidence === 'medium' ? <Text dimColor> (likely)</Text> : null}
+            </Text>
+            {str(s.url) ? <Text dimColor>{'    '}{str(s.url)}</Text> : null}
+            {lessonsOf(s).map(l => <Text dimColor>{'    '}· {l.slice(0, 240)}</Text>)}
+          </Box>
         )),
         pending ? <Text dimColor>{pending} still being matched to a bug species</Text> : null,
+        notes ? <Text dimColor>{notes} field note{notes === 1 ? '' : 's'} from other hunters {notes === 1 ? 'is' : 'are'} in the agent's context</Text> : null,
       ]
     } else {
       const state = pollState(body)

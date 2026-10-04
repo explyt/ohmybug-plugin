@@ -157,6 +157,30 @@ test('a status URL the network refuses is said in the status line, not hidden', 
   expect(seen.status.at(-1)).toContain('status unreachable here')
 })
 
+const CONFIRM = 'mcp__plugin_bughunter_ohmybug__confirm_findings'
+const confirmCard = async ($: Dollar, species: unknown[]) => drawn($, 'ToolResult', { tool_use_id: 'c1', tool: CONFIRM,
+  output: JSON.stringify({ confirmed: 1, species }), isErrored: false }, 'c1')
+
+test('the confirm card shows each species with its page and field notes', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  const texts = await confirmCard($, [{ finding_id: 'f_1', slug: 'retry-twice', name: 'Retry twice',
+    url: 'https://bugs.test/retry-twice', lessons: ['Make the retry idempotent.', 'Key the write by request id.'] }])
+  expect(texts).toContain('Retry twice')
+  expect(texts).toContain('https://bugs.test/retry-twice')
+  expect(texts).toContain('    · Make the retry idempotent.')
+  expect(texts).toContain('2 field notes from other hunters are in the agent\'s context')
+})
+
+test('a species without lessons draws no field-note lines', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  const texts = await confirmCard($, [{ finding_id: 'f_1', slug: 'retry-twice', name: 'Retry twice' }])
+  expect(texts).toContain('Retry twice')
+  expect(texts).not.toContain('field note')
+  expect(texts).not.toContain('    · ')
+})
+
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`the findings card lists findings by severity on ${surface}`, async ($, on) => {
     mock.store(on)

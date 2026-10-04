@@ -2123,20 +2123,20 @@ n 'a promotion tombstone is silent'            0 0
 n 'a legacy in-place tombstone is silent'      0 0
 rm -f "$(ohmybug_hunt_dir).pending/rev_legacy.promoted"
 # ...and silent for a session still running the hooks it started with. Sessions
-# keep their plugin version until restart; the nudge at 9de61cb (the 0.67–0.69
+# keep their plugin version until restart; the nudge at a469a0b (the 0.67–0.69
 # line, three sessions on one machine on 2026-09-07) globs every file in
 # `.pending`, so a tombstone written THERE was "an unread hunt, owner unknown,
 # so mine" on every Stop (#58). Pin: the old script, the new tombstone,
 # nothing said. Writing the tombstone back beside the record reddens this row.
 OLDH=$(mktemp -d)
 for f in pending-nudge.sh diff-id.sh; do
-  git -C "$G" show "9de61cb:plugins/bughunter/hooks/$f" > "$OLDH/$f" 2>/dev/null \
-    || { echo "FAIL nudge: cannot read the 9de61cb hooks from git history"; fails=$((fails + 1)); }
+  git -C "$G" show "a469a0b:plugins/bughunter/hooks/$f" > "$OLDH/$f" 2>/dev/null \
+    || { echo "FAIL nudge: cannot read the a469a0b hooks from git history"; fails=$((fails + 1)); }
 done
-grep -q "'\*.promoted'" "$OLDH/pending-nudge.sh" && { echo "FAIL nudge: the 9de61cb fixture already knows the tombstone suffix"; fails=$((fails + 1)); }
+grep -q "'\*.promoted'" "$OLDH/pending-nudge.sh" && { echo "FAIL nudge: the a469a0b fixture already knows the tombstone suffix"; fails=$((fails + 1)); }
 oldrc=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'Stop','stop_hook_active':False,'cwd':sys.argv[1]}))" "$PWD" \
   | perl -e 'alarm 10; exec @ARGV' bash "$OLDH/pending-nudge.sh" >/dev/null 2>&1; echo $?)
-[ "$oldrc" = 0 ] || { echo "FAIL nudge: a pre-tombstone nudge (9de61cb) still sees the tombstone as an unread hunt: rc=$oldrc"; fails=$((fails + 1)); }
+[ "$oldrc" = 0 ] || { echo "FAIL nudge: a pre-tombstone nudge (a469a0b) still sees the tombstone as an unread hunt: rc=$oldrc"; fails=$((fails + 1)); }
 rm -rf "$OLDH"
 
 # Six unread hunts, five named: the cap is fine, hiding the remainder is not.
