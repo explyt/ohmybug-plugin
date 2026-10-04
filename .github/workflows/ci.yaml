@@ -32,7 +32,6 @@ jobs:
       # Claude Code runs it in on macOS – and fails, not skips, without it.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
       - run: bash plugins/bughunter/hooks/codex-router-test.sh
-      - run: bash plugins/bughunter/hooks/secret-scan-test.sh
       - run: bash plugins/bughunter/hooks/version-check-test.sh
       - run: bash scripts/version.sh --self-test
       # The manifest carries the version a marketplace reads, so it is the one

@@ -1,7 +1,7 @@
 // The bughunter mod: Claude Code's view of an OhMyBug hunt.
 //
 // It shows and offers; it never refuses. Every rule that blocks something (the
-// merge gate, the secret scan) lives in the shell hooks, which Codex and older
+// merge gate) lives in the shell hooks, which Codex and older
 // Claude Code run too — a rule only some clients enforce is a rule the others
 // silently lack. If this module fails to load, the plugin behaves exactly as it
 // did before it existed.
@@ -187,11 +187,17 @@ async function pollDue($: Engine) {
     try { body = res.ok ? JSON.parse(res.text) : undefined } catch { body = undefined }
     const state = body && typeof body === 'object' ? pollState(body) : undefined
     const wait = Math.min(240, Math.max(30, num(body?.next_poll_after_s) ?? 60))
-    const next = await apply($, h.id, cur => (state && state !== cur.state
-      ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings }
-      : { nextAt: now + wait * 1000 }))
+    // Judged against the hunt as apply() finds it, not the copy taken before the
+    // fetch: a tool result read meanwhile may already have moved it there.
+    let moved = false
+    const next = await apply($, h.id, cur => {
+      moved = !!state && state !== cur.state
+      return moved
+        ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings }
+        : { nextAt: now + wait * 1000 }
+    })
     // Back to running (files served) is news to nobody; only these ask for an act.
-    if (next && state && state !== h.state && state !== 'running') await announce($, next)
+    if (next && moved && state !== 'running') await announce($, next)
   }
   await refreshStatus($)
 }
