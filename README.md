@@ -136,20 +136,33 @@ Authorization header disables the OAuth flow.)
 ### What runs where
 
 Everything that blocks or refuses lives in shell hooks, so it behaves the same
-in every client. The Claude Code mod only shows; it never refuses, and it never
-sends a prompt or starts a turn.
+in every client. The Claude Code mod shows and offers; it never refuses. A
+button acts only on a hunt the mod tracks by its id, in a state it saw that hunt
+reach, and never on the wording of a refusal.
 
 | | Claude Code 2.1.287+ | older Claude Code | Codex |
 |---|---|---|---|
 | Merge gate, secret scan, hunt records | yes | yes | yes |
 | Hunt status in the status line, a toast when a hunt finishes or asks for files | yes | — | — |
+| Band above the prompt when a tracked hunt finishes, fails or asks for files: **Continue** sends the next step for that hunt's id, **Later** closes it | yes | — | — |
+| Deep-hunt offer (the `deep_offer` of a tracked hunt's `get_findings`) as **Run deep hunt** — pressing it is your consent — and **Not now**, which sends nothing | yes | — | — |
+| A merge the gate refused: the gate's own words in the band, and **Poll &lt;id&gt;** only while a tracked hunt of this repository is open; no other button | yes | — | — |
 | Findings drawn as a card (`show the raw answer` keeps the original) | yes | — | — |
 | `/hunts` pane | yes | — | — |
 | A hunt read but not confirmed: one line in the system prompt and the same in the status line (`bughunt <id> · verdicts not sent`) until `confirm_findings` for that id | yes | — | — |
 
-Set `OHMYBUG_STATUS=0` (in the `env` block of `settings.json`, or managed
-settings for a team) to keep the status line clear; the prompt line goes with it, so the agent
-is never told what the person cannot see.
+The mod never starts a turn on its own unless you opt in. Two environment
+variables tune it (in the `env` block of `settings.json`, or managed settings
+for a team):
+
+- `OHMYBUG_AUTO_RESUME=1` — when a tracked hunt finishes, fails or asks for
+  files and the session is idle, send that hunt's next step instead of showing
+  the band. Off by default.
+- `OHMYBUG_STATUS=0` — keep the status line clear; the prompt line goes with
+  it, so the agent is never told what the person cannot see.
+
+The VS Code extension has no band above the prompt; there the toast and the
+status line carry it.
 Turn the mod off with
 `/plugin` like any built-in mod; the shell hooks stay.
 
