@@ -33,10 +33,12 @@ function engine(on: On) {
   on('ui.render', async ($, e) => { const { Text } = $.ui.resolve(e); return Text({ children: 'engine drawing' } as never) })
 }
 
-function world(on: On, status: string | null) {
+function world(on: On, status: string | null | string[]) {
+  const replies = Array.isArray(status) ? [...status] : null
   const seen = { toasts: [] as string[], status: [] as (string | undefined)[], prompts: [] as string[] }
   engine(on)
-  on('http.fetch', async () => (status === null ? { deny: 'refused by policy' } : { value: { status: 200, ok: true, headers: {}, text: status } }) as never)
+  on('http.fetch', async () => (status === null ? { deny: 'refused by policy' }
+    : { value: { status: 200, ok: true, headers: {}, text: replies ? (replies.length > 1 ? replies.shift()! : replies[0]!) : status } }) as never)
   on('ui.toast', async ($, e) => { seen.toasts.push(e.text); return { value: undefined } as never })
   on('ui.status', async ($, e) => { seen.status.push(e.text); return { value: undefined } as never })
   on('prompt.submit', async ($, e) => { seen.prompts.push(e.text); return { text: e.text } })
@@ -58,6 +60,20 @@ test('a hunt that finishes raises a toast and a band, and starts no turn by itse
   expect(seen.toasts.join('\n')).toContain('rev_1 is done · 2 findings')
   expect(await band($)).toContain('Hunt rev_1 is done · 2 findings.')
   expect(seen.prompts).toHaveLength(0)
+})
+
+test('files served and the hunt running again is not announced as done', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, [JSON.stringify({ status: 'running', files_requested: true, next_poll_after_s: 30 }),
+    JSON.stringify({ status: 'running', files_requested: false, next_poll_after_s: 30 })])
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  expect(seen.toasts.join('\n')).toContain('asked for files')
+  await clock.advance(45_000)
+  expect(seen.toasts.join('\n')).not.toContain('is done')
 })
 
 test('reading the result itself marks the hunt read and clears the band', async ($, on) => {

@@ -13,15 +13,26 @@
 # The message masks every value. It reaches the model's context, and printing
 # the secret to say we did not send it would be a leak of its own.
 #
-# Nothing to scan on the repo+ref path (the server fetches the commit, nothing
-# leaves this machine) or with upload=true (the bytes go out of band later).
-# ponytail: the out-of-band upload is not scanned; scan the upload file in the Bash step if that path grows.
+# It reads whatever payload the call carries: submit_review's diff and files,
+# provide_files' files. A repo+ref submit carries none, so nothing is read.
+# ponytail: the out-of-band upload (upload=true, bytes POSTed by a script later) is not scanned here.
+#
+# It is the ONE PreToolUse hook on submit_review, and it hands the call on to
+# stamp-hunt.sh only when it lets the call through. Two hooks in parallel would
+# let stamp-hunt record an attempt for a call this scan refuses; nothing clears
+# that record, and the merge gate reads a lone attempt as "the environment
+# refused the hunt" and warns the merge through.
 set -u
 
 INPUT=$(cat 2>/dev/null) || exit 0
+STAMP=${OHMYBUG_TEST_STAMP:-$(dirname "$0")/stamp-hunt.sh}
+pass() { # the call goes on: a submit is recorded exactly as before
+  case "$INPUT" in *'__submit_review"'*) printf '%s' "$INPUT" | exec bash "$STAMP" ;; esac
+  exit 0
+}
 command -v python3 >/dev/null 2>&1 || {
   printf '%s\n' '{"systemMessage":"OhMyBug: secret scan skipped before this upload (python3 not found)."}'
-  exit 0
+  pass
 }
 
 OUT=$(printf '%s' "$INPUT" | python3 -c '
@@ -31,7 +42,7 @@ try:
 except Exception:
     sys.exit(0)
 ti = d.get("tool_input") or {}
-if not isinstance(ti, dict) or ti.get("upload") is True:
+if not isinstance(ti, dict):
     sys.exit(0)
 
 SHAPES = [
@@ -63,9 +74,33 @@ def scan(where, text):
                     continue
                 hits.append("%s:%d %s (%s)" % (where, no, kind, mask(m.group(0))))
 
+HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)")
+def scan_diff(diff):
+    # Name the file and its line, not the line of the diff text.
+    path, new = "diff", 0
+    for raw in diff.splitlines():
+        if raw.startswith("+++ "):
+            path = raw[6:].strip() if raw.startswith("+++ b/") else raw[4:].strip()
+            continue
+        if raw.startswith("--- ") or raw.startswith("diff ") or raw.startswith("index "):
+            continue
+        h = HUNK.match(raw)
+        if h:
+            new = int(h.group(1))
+            continue
+        if raw.startswith("-"):
+            where = "%s (a removed line)" % path
+        else:
+            where = "%s:%d" % (path, new)
+            new += 1
+        for kind, rx in SHAPES:
+            for m in rx.finditer(raw):
+                if not PLACEHOLDER.search(m.group(0)):
+                    hits.append("%s %s (%s)" % (where, kind, mask(m.group(0))))
+
 diff = ti.get("diff")
 if isinstance(diff, str) and diff:
-    scan("diff", diff)
+    scan_diff(diff)
     for m in re.finditer(r"^\+\+\+ b/(.+)$", diff, re.M):
         if KEY_FILE.search(m.group(1).strip()):
             hits.append("diff changes %s, a file that holds keys" % m.group(1).strip())
@@ -81,9 +116,9 @@ for f in ti.get("files") or []:
 if hits:
     shown = hits[:12] + (["… and %d more" % (len(hits) - 12)] if len(hits) > 12 else [])
     print("\n".join(shown))
-' 2>/dev/null) || exit 0
+' 2>/dev/null) || pass
 
-[ -n "$OUT" ] || exit 0
+[ -n "$OUT" ] || pass
 {
   echo "OhMyBug: this upload carries what looks like credentials, so it was NOT sent:"
   printf '%s\n' "$OUT" | sed 's/^/  - /'

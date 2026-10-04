@@ -194,7 +194,8 @@ async function pollDue($: Engine) {
     if (state && state !== h.state) {
       next.state = state
       next.findings = num(body.findings) ?? h.findings
-      await announce($, next)
+      // Back to running (files served) is news to nobody; only these ask for an act.
+      if (state !== 'running') await announce($, next)
     }
     list[i] = next
     changed = true

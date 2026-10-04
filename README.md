@@ -124,10 +124,11 @@ Authorization header disables the OAuth flow.)
 - Billing: $10 flat per review with confirmed real bugs — one or ten, same
   price. Minor findings, review runs, false positives, unclear — $0.
 - `/bughunter:stats` shows your record: bugs found, reviews run, balance.
-- Before an upload leaves your machine, a secret scan refuses a payload that
-  carries a credential (vendor-prefixed tokens, private keys, key files) and
-  says which file and line, with the value masked. Submits that send no payload
-  (repo + ref) have nothing to scan.
+- Before a diff or file contents leave your machine (`submit_review`,
+  `provide_files`), a secret scan refuses a payload that carries a credential
+  (vendor-prefixed tokens, private keys, key files) and says which file and
+  line, with the value masked. Submits that send no payload (repo + ref) have
+  nothing to scan; the out-of-band upload for very large diffs is not scanned.
 
 ### What runs where
 
