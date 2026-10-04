@@ -10,6 +10,13 @@ fails=0
 AWS="AKIA""QWERTYUIOPASDFGH"
 GHP="ghp_""$(printf 'a%.0s' $(seq 1 36))"
 PEM="-----BEGIN RSA ""PRIVATE KEY-----"
+PGP="-----BEGIN PGP ""PRIVATE KEY BLOCK-----"
+R=$(printf 'Ab1c%.0s' $(seq 1 10)) # 40 characters no placeholder rule reads as filler
+SLACK="xox""b-${R:0:24}"
+STRIPE="sk_""live_${R:0:24}"
+GOOGLE="AI""za${R:0:34}-" # ends in '-', where a \b never matches
+ANTHROPIC="sk-""ant-api03-${R:0:32}"
+OPENAI="sk-""proj-${R:0:40}"
 
 # stamp-hunt.sh is chained from the scan; a stub stands in for it and leaves a
 # mark, so a row can tell "recorded" from "refused before recording".
@@ -44,6 +51,14 @@ row "GitHub token in a context file"            2 "$(j "{'files':[{'path':'ci.sh
 row "private key block"                          2 "$(j "{'files':[{'path':'fixture.txt','content':'$PEM'}]}")" "private key"
 row "a whole .env attached as context"          2 "$(j "{'files':[{'path':'deploy/.env.staging','content':'PORT=3000'}]}")" ".env.staging is a file that holds keys"
 row "a diff touching a .pem file"               2 "$(j "{'diff':'+++ b/certs/server.pem\n+abc\n'}")" "server.pem"
+for shape in "Slack token:$SLACK" "Stripe live key:$STRIPE" "Google API key:$GOOGLE" "Anthropic key:$ANTHROPIC" "OpenAI key:$OPENAI" "private key:$PGP"; do
+  row "${shape%%:*} in a context file" 2 "$(j "{'files':[{'path':'ci.sh','content':'T=${shape#*:}'}]}")" "ci.sh:1 ${shape%%:*}"
+done
+for name in id_rsa id_dsa id_ecdsa id_ed25519 k.pem k.p12 k.pfx k.key .env; do
+  row "$name attached as context is refused" 2 "$(j "{'files':[{'path':'keys/$name','content':'x'}]}")" "keys/$name is a file that holds keys"
+done
+row "a secret in a deleted file names that file" 2 "$(j "{'diff':'--- a/old.py\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-k = \"$AWS\"\n'}")" "old.py (a removed line) AWS access key"
+row "a diff deleting a key file is refused"      2 "$(j "{'diff':'--- a/certs/old.pem\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-abc\n'}")" "diff changes certs/old.pem"
 row "AWS documentation placeholder passes"      0 "$(j "{'diff':'+k=\"AKIAIOSFODNN7EXAMPLE\"'}")"
 row ".env.example attached passes"              0 "$(j "{'files':[{'path':'.env.example','content':'PORT=3000'}]}")"
 row "a diff touching .env with no secret passes" 0 "$(j "{'diff':'+++ b/.env\n+PORT=3000\n'}")"

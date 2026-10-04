@@ -10,7 +10,8 @@
 // prompt when there is something to act on. No sound, no turn of its own unless
 // the person sets OHMYBUG_AUTO_RESUME=1. The one line it adds to the system
 // prompt (a read hunt whose verdicts are not sent) the status line shows the
-// person in the same words.
+// person in the same words, unless a hunt that runs or waits to be read holds
+// the status line; the line comes back when that one is read.
 //
 // The rule every action obeys: a button or an auto-resume acts only on a hunt
 // this mod tracks by review_id, in a state it saw that hunt move into itself.
@@ -282,7 +283,7 @@ export const register: Register = on => {
   })
 
   // The one thing the mod tells the agent, and the status line tells the person
-  // the same: a hunt it read whose verdicts it has not sent. Keyed by hunt id,
+  // the same once no newer hunt holds it: a hunt it read whose verdicts it has not sent. Keyed by hunt id,
   // gone once confirm_findings for that id is seen or the hunt is 6 hours old.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
@@ -435,7 +436,8 @@ export const register: Register = on => {
           )),
           found.length === 0 && str(body.summary) ? <Text>{str(body.summary)}</Text> : null,
           str(body.next_step) ? <Text dimColor>next: {str(body.next_step)!.slice(0, 240)}</Text> : null,
-          body.deep_offer ? <Text dimColor>a deep hunt is on offer (see above the prompt)</Text> : null,
+          // The band exists only for a tracked hunt's get_findings; point at it only then.
+          body.deep_offer ? <Text dimColor>a deep hunt is on offer{bandNow?.kind === 'deep' && bandNow.id === id ? ' (see above the prompt)' : ''}</Text> : null,
         ]
       }
     }
