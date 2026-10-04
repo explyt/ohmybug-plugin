@@ -81,7 +81,9 @@ self_test() {
   tmp=$(mktemp -d)
   # The positive control: each class of offence on its own line, each of which
   # MUST be named. A check that stays green here is not a check.
-  printf 'ordinary line\nоткрытый текст на кириллице\n' > "$tmp/cyr"
+  # A Cyrillic word built from its UTF-8 bytes, so this public file holds none.
+  local cyr; cyr=$(printf '\321\202\320\265\320\272\321\201\321\202')
+  printf 'ordinary line\n%s\n' "$cyr" > "$tmp/cyr"
   printf 'see rev_0123abcd for the trace\n' > "$tmp/rev"
   printf 'filed as some-org/OhMyBug#123\n' > "$tmp/xref"
   printf 'path was /Users/someone/src/x\n' > "$tmp/path"
@@ -105,7 +107,7 @@ self_test() {
     cd "$repo" && git config user.email t@t && git config user.name t
     printf 'a\n' > a && git add a && git commit -qm 'base'
     git branch -qM main
-    printf 'b\n' > a && git commit -qam 'починка: сообщение по-русски'
+    printf 'b\n' > a && git commit -qam "fix: $cyr"
   )
   if (cd "$repo" && check_commits main~1..main >/dev/null 2>&1); then
     printf 'FAIL (positive control commits): a Russian commit subject passed\n'; fails=$((fails + 1))
