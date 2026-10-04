@@ -39,6 +39,23 @@ jobs:
       # never appears to update.
       - run: bash scripts/version.sh --check
 
+  mod:
+    name: Claude Code mod
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned: the mod API is early access and moves between releases, so a
+      # new release is a deliberate bump here, not a surprise on a Tuesday.
+      - run: npm install -g @anthropic-ai/claude-code@2.1.288
+      - run: claude plugin validate plugins/bughunter
+      - run: claude plugin test plugins/bughunter
+      # Older clients validate plugin.json strictly; a key they do not know
+      # refuses the whole plugin, shell gate included.
+      - run: npx -y @anthropic-ai/claude-code@2.1.140 plugin validate plugins/bughunter
+
   hygiene:
     name: Public-repo hygiene
     runs-on: ubuntu-latest

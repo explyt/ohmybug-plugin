@@ -125,6 +125,23 @@ Authorization header disables the OAuth flow.)
   price. Minor findings, review runs, false positives, unclear — $0.
 - `/bughunter:stats` shows your record: bugs found, reviews run, balance.
 
+### What runs where
+
+Everything that blocks or refuses lives in shell hooks, so it behaves the same
+in every client. The Claude Code mod only shows; it never refuses, and it never
+sends a prompt or starts a turn.
+
+| | Claude Code 2.1.287+ | older Claude Code | Codex |
+|---|---|---|---|
+| Merge gate, hunt records | yes | yes | yes |
+| Hunt status in the status line, a toast when a hunt finishes or asks for files | yes | — | — |
+| Findings drawn as a card (`show the raw answer` keeps the original) | yes | — | — |
+| `/hunts` pane | yes | — | — |
+
+Set `OHMYBUG_STATUS=0` (in the `env` block of `settings.json`, or managed
+settings for a team) to keep the status line clear. Turn the mod off with
+`/plugin` like any built-in mod; the shell hooks stay.
+
 ## MCP contract (server: https://mcp.ohmybug.ai/mcp)
 
 | Tool | In | Out |
