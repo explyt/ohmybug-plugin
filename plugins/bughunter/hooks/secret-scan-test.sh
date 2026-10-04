@@ -37,7 +37,7 @@ row() { # name, want exit, tool_input JSON, [text the message must hold]
 j() { python3 -c "import json,sys; print(json.dumps(eval(sys.argv[1])))" "$1"; }
 
 row "AWS key in the diff names file and line"   2 "$(j "{'diff':'+++ b/app.py\n@@ -1,2 +1,3 @@\n x = 1\n+key = \"$AWS\"\n'}")" "app.py:2 AWS access key"
-row "the refusal masks the value"               2 "$(j "{'diff':'+k=\"$AWS\"'}")" "AKIA…GH"
+row "the refusal masks the value"               2 "$(j "{'diff':'+k=\"$AWS\"'}")" "AKIA...GH"
 row "GitHub token in a context file"            2 "$(j "{'files':[{'path':'ci.sh','content':'export T=$GHP'}]}")" "ci.sh:1 GitHub token"
 row "private key block"                          2 "$(j "{'files':[{'path':'fixture.txt','content':'$PEM'}]}")" "private key"
 row "a whole .env attached as context"          2 "$(j "{'files':[{'path':'deploy/.env.staging','content':'PORT=3000'}]}")" ".env.staging is a file that holds keys"
@@ -47,10 +47,12 @@ row ".env.example attached passes"              0 "$(j "{'files':[{'path':'.env.
 row "a diff touching .env with no secret passes" 0 "$(j "{'diff':'+++ b/.env\n+PORT=3000\n'}")"
 row "clean diff passes"                          0 "$(j "{'diff':'+++ b/a.py\n+print(1)\n'}")"
 row "repo+ref submit has nothing to scan"       0 "$(j "{'meta':{'repo':'o/r','ref':'abc','base_branch':'main'}}")"
+row "a removed '-- ' line inside a hunk is scanned" 2 "$(j "{'diff':'--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,1 @@\n--- key $AWS\n x\n'}")" "q.sql (a removed line) AWS access key"
 row "upload=true still reads an inline payload" 2 "$(j "{'upload':True,'diff':'+k=\"$AWS\"'}")" "AWS access key"
 row "upload=true with no payload passes"        0 "$(j "{'upload':True}")"
 TOOL=provide_files
 row "provide_files carrying a token is refused" 2 "$(j "{'review_id':'r','files':[{'path':'ci.sh','content':'T=$GHP'}]}")" "ci.sh:1 GitHub token"
+row "a refused provide_files is told to resend, not to hunt again" 2 "$(j "{'review_id':'r','files':[{'path':'ci.sh','content':'T=$GHP'}]}")" "Call provide_files again"
 TOOL=submit_review
 
 # A refused submit must leave no attempt behind: the gate reads a lone attempt
@@ -69,6 +71,10 @@ check "submit_review has one PreToolUse hook, the scan" "$wired" "secret-scan.sh
 
 full=$(hook "$(j "{'diff':'+k=\"$AWS\"'}")")
 if printf '%s' "$full" | grep -qF "$AWS"; then echo "FAIL the full key reached the message"; fails=$((fails + 1)); else echo "ok   the full key never reaches the message"; fi
+
+# The masked hit must print under any locale: a print that raises exits non-zero,
+# and the hook reads a failed scan as "nothing found".
+LC_ALL=en_US.ISO8859-1 LANG=en_US.ISO8859-1 PYTHONUTF8=0 row "a hit is refused under a latin-1 locale" 2 "$(j "{'diff':'+k=\"$AWS\"'}")" "AWS access key"
 
 rc=$(printf 'not json' | bash "$G/secret-scan.sh" >/dev/null 2>&1; echo $?)
 [ "$rc" = 0 ] && echo "ok   unreadable input stands down" || { echo "FAIL unreadable input exit $rc"; fails=$((fails + 1)); }

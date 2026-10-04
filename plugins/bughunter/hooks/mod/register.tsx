@@ -169,39 +169,41 @@ async function tick($: Engine) {
 async function pollDue($: Engine) {
   const cwd = await $.session.cwd()
   const now = await $.clock.now()
-  const list = [...huntList]
-  let changed = false
-  for (const [i, h] of list.entries()) {
-    if (h.cwd !== cwd || !isOpen(h) || !h.statusUrl || now < h.nextAt) continue
+  const due = huntList.filter(h => h.cwd === cwd && isOpen(h) && h.statusUrl && now >= h.nextAt)
+  for (const h of due) {
     let res
     try {
-      res = await $.http.fetch(h.statusUrl)
+      res = await $.http.fetch(h.statusUrl!)
     } catch {
       // A policy (sec-default, a proxy allowlist) refused the request. Say so
       // once in the status line rather than look like a hunt that never ends.
       ctx.blocked = true
-      list[i] = { ...h, nextAt: now + 240_000 }
-      changed = true
+      await apply($, h.id, () => ({ nextAt: now + 240_000 }))
       continue
     }
     ctx.blocked = false
-    if (res.status === 404) { list[i] = { ...h, state: 'failed', seen: true }; changed = true; continue }
+    if (res.status === 404) { await apply($, h.id, () => ({ state: 'failed', seen: true })); continue }
     let body
     try { body = res.ok ? JSON.parse(res.text) : undefined } catch { body = undefined }
     const state = body && typeof body === 'object' ? pollState(body) : undefined
     const wait = Math.min(240, Math.max(30, num(body?.next_poll_after_s) ?? 60))
-    const next: BughunterHunt = { ...h, nextAt: now + wait * 1000 }
-    if (state && state !== h.state) {
-      next.state = state
-      next.findings = num(body.findings) ?? h.findings
-      // Back to running (files served) is news to nobody; only these ask for an act.
-      if (state !== 'running') await announce($, next)
-    }
-    list[i] = next
-    changed = true
+    const next = await apply($, h.id, cur => (state && state !== cur.state
+      ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings }
+      : { nextAt: now + wait * 1000 }))
+    // Back to running (files served) is news to nobody; only these ask for an act.
+    if (next && state && state !== h.state && state !== 'running') await announce($, next)
   }
-  if (changed) await save($, list)
   await refreshStatus($)
+}
+
+/** Change one hunt as it stands NOW: the fetch awaited above may have let the
+ *  agent read it, or submit another, and a stale copy would undo both. */
+async function apply($: Engine, id: string, change: (cur: BughunterHunt) => Partial<BughunterHunt>) {
+  const cur = huntList.find(x => x.id === id)
+  if (!cur || !isOpen(cur)) return undefined
+  const next = { ...cur, ...change(cur) }
+  await save($, huntList.map(x => (x.id === id ? next : x)))
+  return next
 }
 
 export const register: Register = on => {

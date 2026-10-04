@@ -54,7 +54,8 @@ export function findingsOf(body: Body): Finding[] {
 export function pollState(body: Body): 'running' | 'needs_files' | 'done' | 'failed' | undefined {
   const s = str(body.status)
   if (s === 'done' || s === 'failed') return s
-  if (body.files_requested === true || s === 'needs_files') return 'needs_files'
+  // Either flag means reviewers wait on files; the status word stays 'running'.
+  if (body.files_requested === true || body.awaiting_client_files === true || s === 'needs_files') return 'needs_files'
   return s ? 'running' : undefined
 }
 
