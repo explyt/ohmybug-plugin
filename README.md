@@ -124,6 +124,36 @@ Authorization header disables the OAuth flow.)
 - Billing: $10 flat per review with confirmed real bugs — one or ten, same
   price. Minor findings, review runs, false positives, unclear — $0.
 - `/bughunter:stats` shows your record: bugs found, reviews run, balance.
+- Before an upload leaves your machine, a secret scan refuses a payload that
+  carries a credential (vendor-prefixed tokens, private keys, key files) and
+  says which file and line, with the value masked. Submits that send no payload
+  (repo + ref) have nothing to scan.
+
+### What runs where
+
+Everything that blocks or refuses lives in shell hooks, so it behaves the same
+in every client. The Claude Code mod only shows and offers; it never refuses.
+
+| | Claude Code 2.1.287+ | older Claude Code | Codex |
+|---|---|---|---|
+| Merge gate, secret scan, hunt records | yes | yes | yes |
+| Hunt status in the status line, a toast and a band when a hunt finishes | yes | — | — |
+| Findings drawn as a card (`show the raw answer` keeps the original) | yes | — | — |
+| Band with **Hunt now** when the gate refuses a merge | yes | — | — |
+| Deep-hunt offer as **Run deep hunt** / **Not now** buttons | yes | — | — |
+| `/hunts` pane | yes | — | — |
+
+The mod is quiet by default: no sound, nothing while you type, and it never
+starts a turn on its own. Two environment variables tune it (in the `env` block
+of `settings.json`, or managed settings for a team):
+
+- `OHMYBUG_AUTO_RESUME=1` — when a hunt finishes and the session is idle, start
+  the next turn instead of showing the band.
+- `OHMYBUG_STATUS=0` — keep the status line clear.
+
+Desktop and the terminal draw everything above; the VS Code extension has no
+band above the prompt, so there the toast and the status line carry it. Turn
+the mod off with `/plugin` like any built-in mod; the shell hooks stay.
 
 ## MCP contract (server: https://mcp.ohmybug.ai/mcp)
 
