@@ -20,7 +20,9 @@ TOOL=submit_review
 hook() { # tool_input JSON -> "<exit> <stderr>"; the tool is $TOOL
   local err rc
   rm -f "$MARK"
-  err=$(python3 -c "import json,sys; print(json.dumps({'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[2],'tool_input':json.loads(sys.argv[1])}))" "$1" "$TOOL" \
+  # Raw UTF-8 bytes, not \u escapes: that is what a client sends, and only raw
+  # bytes reach a stdin decoded in the locale codec.
+  err=$(python3 -c "import json,sys; sys.stdout.buffer.write(json.dumps({'tool_name':'mcp__plugin_bughunter_ohmybug__'+sys.argv[2],'tool_input':json.loads(sys.argv[1])}, ensure_ascii=False).encode('utf-8'))" "$1" "$TOOL" \
     | bash "$G/secret-scan.sh" 2>&1 >/dev/null); rc=$?
   printf '%s %s' "$rc" "$err"
 }
@@ -31,7 +33,7 @@ check() { # name, got, want
 row() { # name, want exit, tool_input JSON, [text the message must hold]
   local got; got=$(hook "$3")
   if [ "${got%% *}" != "$2" ]; then echo "FAIL $1: exit ${got%% *}, want $2 — ${got#* }"; fails=$((fails + 1)); return; fi
-  if [ -n "${4:-}" ] && ! printf '%s' "$got" | grep -qF -- "$4"; then echo "FAIL $1: message lacks '$4' — ${got#* }"; fails=$((fails + 1)); return; fi
+  if [ -n "${4:-}" ] && ! printf '%s' "$got" | LC_ALL=C grep -qF -- "$4"; then echo "FAIL $1: message lacks '$4' — ${got#* }"; fails=$((fails + 1)); return; fi
   echo "ok   $1"
 }
 j() { python3 -c "import json,sys; print(json.dumps(eval(sys.argv[1])))" "$1"; }
@@ -70,13 +72,34 @@ PY2
 check "submit_review has one PreToolUse hook, the scan" "$wired" "secret-scan.sh"
 
 full=$(hook "$(j "{'diff':'+k=\"$AWS\"'}")")
-if printf '%s' "$full" | grep -qF "$AWS"; then echo "FAIL the full key reached the message"; fails=$((fails + 1)); else echo "ok   the full key never reaches the message"; fi
+if printf '%s' "$full" | LC_ALL=C grep -qF "$AWS"; then echo "FAIL the full key reached the message"; fails=$((fails + 1)); else echo "ok   the full key never reaches the message"; fi
 
-# The masked hit must print under any locale: a print that raises exits non-zero,
-# and the hook reads a failed scan as "nothing found".
-LC_ALL=en_US.ISO8859-1 LANG=en_US.ISO8859-1 PYTHONUTF8=0 row "a hit is refused under a latin-1 locale" 2 "$(j "{'diff':'+k=\"$AWS\"'}")" "AWS access key"
+# The scan must read and report under any locale. Each of these once broke a
+# step (a print that raised, a stdin decoded in the locale codec), and the hook
+# then read its own failure as "nothing found". A locale the machine lacks is a
+# failure here, not a skip: CI generates them (see ci.yaml).
+for lc in en_US.ISO8859-1:iso8859-1 ja_JP.eucJP:euc_jp zh_CN.GBK:gbk; do
+  loc=${lc%:*}
+  # A missing locale falls back to C/UTF-8 and the row would pass for nothing.
+  got=$(LC_ALL=$loc PYTHONUTF8=0 python3 -c 'import codecs, locale; print(codecs.lookup(locale.getpreferredencoding(False)).name)' 2>/dev/null)
+  if [ "$got" != "${lc#*:}" ]; then
+    echo "FAIL locale $loc is not installed (python reads ${got:-nothing}), so its row cannot run"; fails=$((fails + 1)); continue
+  fi
+  LC_ALL=$loc LANG=$loc PYTHONUTF8=0 PYTHONIOENCODING= row "a key is refused under $loc, its file named" 2 "$(j "{'files':[{'path':'\u65e5.md','content':'\u65e5\u672c \u4e2d\u6587 k=$AWS'}]}")" ".md:1 AWS access key"
+done
 
+# A scan that fails refuses: it never lets through what it did not read.
+OHMYBUG_TEST_SCAN_RAISE=1 row "an error inside the scan refuses" 2 "$(j "{'diff':'+print(1)'}")" "could not scan this payload"
+OHMYBUG_TEST_SCAN_RAISE=1 hook "$(j "{'diff':'+print(1)'}")" >/dev/null; check "a scan that failed records nothing" "$(stamped)" no
+TOOL=provide_files
+OHMYBUG_TEST_SCAN_RAISE=1 row "a provide_files that could not be scanned is told to resend" 2 "$(j "{'files':[{'path':'a','content':'x'}]}")" "Call provide_files again"
+TOOL=submit_review
+row "a payload of an unexpected shape refuses"  2 "$(j "{'files':'not a list'}")" "could not scan"
 rc=$(printf 'not json' | bash "$G/secret-scan.sh" >/dev/null 2>&1; echo $?)
-[ "$rc" = 0 ] && echo "ok   unreadable input stands down" || { echo "FAIL unreadable input exit $rc"; fails=$((fails + 1)); }
+check "unreadable input refuses" "$rc" 2
+
+# The user's way out: the scan is off, the call goes through and is recorded.
+OHMYBUG_SECRET_SCAN=0 row "OHMYBUG_SECRET_SCAN=0 lets a key through" 0 "$(j "{'diff':'+k=\"$AWS\"'}")"
+OHMYBUG_SECRET_SCAN=0 hook "$(j "{'diff':'+k=\"$AWS\"'}")" >/dev/null; check "with the scan off a submit is still recorded" "$(stamped)" yes
 
 [ "$fails" = 0 ] && echo "secret-scan: all rows pass" || { echo "secret-scan: $fails failing"; exit 1; }
