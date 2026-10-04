@@ -127,9 +127,11 @@ Authorization header disables the OAuth flow.)
 - Before a diff or file contents leave your machine (`submit_review`,
   `provide_files`), a secret scan refuses a payload that carries a credential
   (vendor-prefixed tokens, private keys, key files) and says which file and
-  line, with the value masked. A payload it cannot read is refused too, never
-  passed unread. Submits that send no payload (repo + ref) have nothing to
-  scan; the out-of-band upload for very large diffs is not scanned. Set
+  line, with the value masked. A payload it cannot read is refused too. It
+  lets a payload through unscanned in four cases only: submits that send no
+  payload (repo + ref) have nothing to scan; without `python3` it cannot run,
+  and says so in a system message; it does not run on Windows; the out-of-band
+  upload for very large diffs is not scanned. Set
   `OHMYBUG_SECRET_SCAN=0` (in the `env` block of `settings.json`) to turn the
   scan off.
 
@@ -149,7 +151,7 @@ reach, and never on the wording of a refusal.
 | A merge the gate refused: the gate's own words in the band, and **Poll &lt;id&gt;** only while a tracked hunt of this repository is open; no other button | yes | — | — |
 | Findings drawn as a card (`show the raw answer` keeps the original) | yes | — | — |
 | `/hunts` pane | yes | — | — |
-| A hunt read but not confirmed: one line in the system prompt and the same in the status line (`bughunt <id> · verdicts not sent`) until `confirm_findings` for that id | yes | — | — |
+| A hunt read but not confirmed: one line in the system prompt and the same in the status line (`bughunt <id> · verdicts not sent`) until `confirm_findings` for that id; while another hunt runs or waits to be read, the status line shows that hunt instead | yes | — | — |
 
 The mod never starts a turn on its own unless you opt in. Two environment
 variables tune it (in the `env` block of `settings.json`, or managed settings

@@ -464,3 +464,51 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(texts).not.toContain('hunt')
   })
 }
+
+const card = ($: Dollar, output: string) => drawn($, 'ToolResult', { tool_use_id: 'g1', tool: GET, output, isErrored: false }, 'g1')
+
+test('the card points above the prompt only when the deep band is drawn for that hunt', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const offered = findingsWith({ deep_offer: { pitch: 'Go deep.' } })
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: offered }))
+  world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  // Untracked: no band, so nothing to point at.
+  expect(await card($, offered)).toContain('a deep hunt is on offer')
+  expect(await card($, offered)).not.toContain('see above the prompt')
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await card($, offered)).toContain('a deep hunt is on offer (see above the prompt)')
+})
+
+test('with OHMYBUG_AUTO_RESUME=1, a hunt that finishes during a turn resumes when the turn ends', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { OHMYBUG_AUTO_RESUME: '1' })
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await drawn($, 'PromptHint', { isDraft: false, isWorking: true, hint: '' })
+  await clock.advance(75_000)
+  expect(seen.prompts).toHaveLength(0)
+  expect(await buttons($)).toEqual(['go', 'later'])
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(seen.prompts).toEqual(['The OhMyBug hunt rev_1 is done. Read it with get_findings (review_id rev_1) and continue the bughunter flow.'])
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('with OHMYBUG_AUTO_RESUME=1, a draft in the prompt is never overrun', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { OHMYBUG_AUTO_RESUME: '1' })
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await drawn($, 'PromptHint', { isDraft: true, isWorking: false, hint: '' })
+  await clock.advance(75_000)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(seen.prompts).toHaveLength(0)
+  expect(await buttons($)).toEqual(['go', 'later'])
+})

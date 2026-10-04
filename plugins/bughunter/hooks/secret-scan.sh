@@ -56,11 +56,11 @@ if not isinstance(ti, dict):
 
 SHAPES = [
     ("AWS access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("private key", re.compile(r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----")),
+    ("private key", re.compile(r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?-----")),
     ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b")),
     ("Slack token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
     ("Stripe live key", re.compile(r"\b(?:sk|rk)_live_[A-Za-z0-9]{20,}")),
-    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")),
     ("Anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
     ("OpenAI key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}")),
 ]
@@ -87,13 +87,19 @@ HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 def scan_diff(diff):
     # Name the file and its line, not the line of the diff text. Headers are
     # read only between hunks: inside one, "--- x" is a removed "-- x" line.
-    path, new, old_left, new_left = "diff", 0, 0, 0
+    # The new side of a deleted file is /dev/null: name it by its old path.
+    path, gone, new, old_left, new_left = "diff", "diff", 0, 0, 0
     for raw in diff.splitlines():
         if old_left <= 0 and new_left <= 0:
+            if raw.startswith("--- "):
+                gone = raw[6:].strip() if raw.startswith("--- a/") else raw[4:].strip()
+                continue
             if raw.startswith("+++ "):
                 path = raw[6:].strip() if raw.startswith("+++ b/") else raw[4:].strip()
+                if path == "/dev/null":
+                    path = gone
                 continue
-            if raw.startswith("--- ") or raw.startswith("diff ") or raw.startswith("index "):
+            if raw.startswith("diff ") or raw.startswith("index "):
                 continue
             h = HUNK.match(raw)
             if h:
@@ -124,9 +130,10 @@ if diff is not None and not isinstance(diff, str):
     raise TypeError("diff")
 if diff:
     scan_diff(diff)
-    for m in re.finditer(r"^\+\+\+ b/(.+)$", diff, re.M):
-        if KEY_FILE.search(m.group(1).strip()):
-            hits.append("diff changes %s, a file that holds keys" % m.group(1).strip())
+    # The old side too: a diff that deletes a key file carries the key.
+    for name in dict.fromkeys(m.group(1).strip() for m in re.finditer(r"^(?:\+\+\+ b|--- a)/(.+)$", diff, re.M)):
+        if KEY_FILE.search(name):
+            hits.append("diff changes %s, a file that holds keys" % name)
 files = ti.get("files")
 if files is not None and not isinstance(files, list):
     raise TypeError("files")
