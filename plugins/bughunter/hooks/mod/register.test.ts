@@ -6,6 +6,7 @@ type On = Parameters<TestBody>[1]
 
 const SUBMIT = 'mcp__plugin_bughunter_ohmybug__submit_review'
 const GET = 'mcp__plugin_bughunter_ohmybug__get_findings'
+const WAIT = 'mcp__plugin_bughunter_ohmybug__wait_review'
 const VIEW = { scroll: { top: 0, bodyRows: 10 }, view: {} }
 
 /** The texts a component draws, as the person would read them. */
@@ -101,6 +102,22 @@ test('a hunt the agent read while the poll was in flight is not announced again'
   await clock.advance(75_000)
   expect(seen.toasts.join('\n')).not.toContain('is done')
   expect(await pane($)).not.toContain('not read yet')
+})
+
+test('a file request the agent read while the poll was in flight is not announced again', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const asked = JSON.stringify({ review_id: 'rev_1', status: 'running', files_requested: true })
+  on('tool.call', { tool: WAIT }, async () => ({ result: { content: [] }, text: asked }))
+  const seen = world(on, async () => {
+    await $.tool.call({ tool: WAIT, review_id: 'rev_1' } as never)
+    return asked
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  expect(seen.toasts.join('\n')).not.toContain('asked for files')
 })
 
 test('reading the result itself marks the hunt read and clears the band', async ($, on) => {
