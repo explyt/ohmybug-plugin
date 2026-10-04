@@ -3,3 +3,6 @@
 # Local scratch: per-branch worktrees and a session guide that is not the plugin's.
 .worktrees/
 CLAUDE.md
+
+# Laid by Claude Code when the plugin loads from this folder (--plugin-dir).
+plugins/bughunter/.claude-plugin/types/
