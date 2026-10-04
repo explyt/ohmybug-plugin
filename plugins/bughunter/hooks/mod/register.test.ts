@@ -49,7 +49,7 @@ function world(on: On, status: string | null | string[] | (() => Promise<string>
   return seen
 }
 
-test('a hunt that finishes raises a toast and a band, and starts no turn by itself', async ($, on) => {
+test('a hunt that finishes raises a toast and nothing else: no band, no turn', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, {})
@@ -60,7 +60,7 @@ test('a hunt that finishes raises a toast and a band, and starts no turn by itse
 
   await clock.advance(75_000)
   expect(seen.toasts.join('\n')).toContain('rev_1 is done · 2 findings')
-  expect(await band($)).toContain('Hunt rev_1 is done · 2 findings.')
+  expect(await band($)).toBe('engine drawing')
   expect(seen.prompts).toHaveLength(0)
 })
 
@@ -120,7 +120,7 @@ test('a file request the agent read while the poll was in flight is not announce
   expect(seen.toasts.join('\n')).not.toContain('asked for files')
 })
 
-test('reading the result itself marks the hunt read and clears the band', async ($, on) => {
+test('reading the result itself marks the hunt read', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, {})
@@ -129,33 +129,21 @@ test('reading the result itself marks the hunt read and clears the band', async 
   await $.tool.call({ tool: SUBMIT } as never)
   await clock.advance(75_000)
   await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
-  expect(await band($)).not.toContain('OhMyBug')
   const list = await pane($)
   expect(list).toContain('2 found')
   expect(list).not.toContain('not read yet')
 })
 
-test('with OHMYBUG_AUTO_RESUME=1, a finished hunt resumes an idle session', async ($, on) => {
-  const clock = mock.clock(on)
-  mock.store(on)
-  mock.env(on, { OHMYBUG_AUTO_RESUME: '1' })
-  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
-  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
-  await $.tool.call({ tool: SUBMIT } as never)
-  await drawn($, 'PromptHint', { isDraft: false, isWorking: false, hint: '' })
-  await clock.advance(75_000)
-  expect(seen.prompts.join('\n')).toContain('get_findings (review_id rev_1)')
-})
-
-test('a merge the gate refused raises a band with the gate\'s own reason', async ($, on) => {
+test('a merge the gate refused is left to the gate: the mod draws and sends nothing', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   mock.env(on, {})
-  engine(on)
+  const seen = world(on, JSON.stringify({ status: 'running' }))
   on('tool.call', { tool: 'Bash' }, async () => ({ deny: 'OhMyBug: a hunt is RUNNING for this diff and has not returned yet.' }))
   await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
   await $.tool.call({ tool: 'Bash', command: 'gh pr merge 12 --squash' } as never)
-  expect(await band($)).toContain('Merge blocked: a hunt is RUNNING for this diff and has not returned yet.')
+  expect(await band($)).toBe('engine drawing')
+  expect(seen.prompts).toHaveLength(0)
 })
 
 test('a status URL the network refuses is said in the status line, not hidden', async ($, on) => {

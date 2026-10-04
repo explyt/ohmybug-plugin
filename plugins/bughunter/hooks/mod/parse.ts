@@ -59,11 +59,4 @@ export function pollState(body: Body): 'running' | 'needs_files' | 'done' | 'fai
   return s ? 'running' : undefined
 }
 
-/** The merge gate's own reason, when a Bash call was refused by it. */
-export function gateReason(text: string | undefined): string | undefined {
-  if (!text) return undefined
-  const line = text.split('\n').find(l => /^OhMyBug(?: gate)?: /.test(l.trim()))
-  return line ? line.trim().replace(/^OhMyBug(?: gate)?: /, '') : undefined
-}
-
 export const minutes = (ms: number): number => Math.max(0, Math.round(ms / 60000))
