@@ -128,10 +128,10 @@ Authorization header disables the OAuth flow.)
   `provide_files`), a secret scan refuses a payload that carries a credential
   (vendor-prefixed tokens, private keys, key files) and says which file and
   line, with the value masked. A payload it cannot read is refused too. It
-  lets a payload through unscanned in three cases only: submits that send no
+  lets a payload through unscanned in four cases only: submits that send no
   payload (repo + ref) have nothing to scan; without `python3` it cannot run,
-  and says so in a system message; the out-of-band upload for very large diffs
-  is not scanned. Set
+  and says so in a system message; it does not run on Windows; the out-of-band
+  upload for very large diffs is not scanned. Set
   `OHMYBUG_SECRET_SCAN=0` (in the `env` block of `settings.json`) to turn the
   scan off.
 
