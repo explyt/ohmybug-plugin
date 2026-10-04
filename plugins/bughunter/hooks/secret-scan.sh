@@ -63,7 +63,9 @@ KEY_FILE = re.compile(r"(^|/)(id_(rsa|dsa|ecdsa|ed25519)|[^/]+\.(pem|p12|pfx|key
 ENV_FILE = re.compile(r"(^|/)\.env(\.(?!example$|sample$|template$|dist$)[^/]+)?$")
 
 def mask(v):
-    return v[:4] + "…" + v[-2:] if len(v) > 10 else v[:2] + "…"
+    # ASCII only: under a non-UTF-8 locale print() of a non-ASCII mark raises,
+    # python exits non-zero, and the caller reads that as "nothing found".
+    return v[:4] + "..." + v[-2:] if len(v) > 10 else v[:2] + "..."
 
 hits = []
 def scan(where, text):
@@ -74,20 +76,32 @@ def scan(where, text):
                     continue
                 hits.append("%s:%d %s (%s)" % (where, no, kind, mask(m.group(0))))
 
-HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)")
+HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 def scan_diff(diff):
-    # Name the file and its line, not the line of the diff text.
-    path, new = "diff", 0
+    # Name the file and its line, not the line of the diff text. Headers are
+    # read only between hunks: inside one, "--- x" is a removed "-- x" line.
+    path, new, old_left, new_left = "diff", 0, 0, 0
     for raw in diff.splitlines():
-        if raw.startswith("+++ "):
-            path = raw[6:].strip() if raw.startswith("+++ b/") else raw[4:].strip()
+        if old_left <= 0 and new_left <= 0:
+            if raw.startswith("+++ "):
+                path = raw[6:].strip() if raw.startswith("+++ b/") else raw[4:].strip()
+                continue
+            if raw.startswith("--- ") or raw.startswith("diff ") or raw.startswith("index "):
+                continue
+            h = HUNK.match(raw)
+            if h:
+                old_left = int(h.group(1) or 1)
+                new, new_left = int(h.group(2)), int(h.group(3) or 1)
+                continue
+        elif raw.startswith("\\"):
             continue
-        if raw.startswith("--- ") or raw.startswith("diff ") or raw.startswith("index "):
-            continue
-        h = HUNK.match(raw)
-        if h:
-            new = int(h.group(1))
-            continue
+        if raw.startswith("-"):
+            old_left -= 1
+        elif raw.startswith("+"):
+            new_left -= 1
+        else:
+            old_left -= 1
+            new_left -= 1
         if raw.startswith("-"):
             where = "%s (a removed line)" % path
         else:
@@ -114,7 +128,7 @@ for f in ti.get("files") or []:
         scan(path, f["content"])
 
 if hits:
-    shown = hits[:12] + (["… and %d more" % (len(hits) - 12)] if len(hits) > 12 else [])
+    shown = hits[:12] + (["... and %d more" % (len(hits) - 12)] if len(hits) > 12 else [])
     print("\n".join(shown))
 ' 2>/dev/null) || pass
 
@@ -122,6 +136,9 @@ if hits:
 {
   echo "OhMyBug: this upload carries what looks like credentials, so it was NOT sent:"
   printf '%s\n' "$OUT" | sed 's/^/  - /'
-  echo "Drop those files or replace each value with [REDACTED], then submit again. Or submit with meta.repo + meta.ref and no payload: the server reads the pushed commit and nothing leaves this machine."
+  case "$INPUT" in
+    *'__provide_files"'*) echo "Call provide_files again for the same review without those files (or with each value replaced by [REDACTED]); an empty list is a valid answer. Do not start a new hunt for this." ;;
+    *) echo "Drop those files or replace each value with [REDACTED], then submit again. Or submit with meta.repo + meta.ref and no payload: the server reads the pushed commit and nothing leaves this machine." ;;
+  esac
 } >&2
 exit 2
