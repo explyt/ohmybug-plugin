@@ -40,11 +40,11 @@
         ]
       },
       {
-        "matcher": "mcp__.*ohmybug.*__submit_review",
+        "matcher": "mcp__.*ohmybug.*__(submit_review|provide_files)",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stamp-hunt.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/secret-scan.sh",
             "commandWindows": "exit 0"
           }
         ]

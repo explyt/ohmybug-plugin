@@ -32,6 +32,13 @@ jobs:
       # Claude Code runs it in on macOS – and fails, not skips, without it.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
       - run: bash plugins/bughunter/hooks/codex-router-test.sh
+      # The scan must read a payload under a multibyte locale; its test fails,
+      # not skips, when a locale is missing, so generate the ones it runs under.
+      - run: |
+          sudo localedef -i ja_JP -f EUC-JP ja_JP.eucJP
+          sudo localedef -i zh_CN -f GBK zh_CN.GBK
+          sudo localedef -i en_US -f ISO-8859-1 en_US.ISO8859-1
+      - run: bash plugins/bughunter/hooks/secret-scan-test.sh
       - run: bash plugins/bughunter/hooks/version-check-test.sh
       - run: bash scripts/version.sh --self-test
       # The manifest carries the version a marketplace reads, so it is the one
