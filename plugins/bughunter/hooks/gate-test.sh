@@ -1719,7 +1719,7 @@ python3 -c "import json
 print(json.dumps({'tool_name':'mcp__plugin_bughunter_ohmybug__get_findings',
   'tool_input':{'review_id':'rev_scan1'},
   'tool_response':{'content':[{'type':'text','text':json.dumps({'review_id':'rev_scan1','status':'done','review_of_record':True,
-     'scan':{'repo':'x/y','days':30,'slices':4}})}]},
+     'scan':{'repo':'x/y','days':30,'files':4}})}]},
   'cwd':'$PWD'}))" | bash "$G/stamp-hunt.sh" >"$HOME/hook.out" 2>/dev/null; rc=$?
 [ "$rc" = 0 ] && [ -z "$(ctx <"$HOME/hook.out")" ] || { printf 'FAIL a scan poll spoke or blocked (rc=%s): %s\n' "$rc" "$(ctx <"$HOME/hook.out")"; fails=$((fails + 1)); }
 [ ! -e "$(ohmybug_hunt_dir).promoted/rev_scan1" ] || { printf 'FAIL a scan poll left a tombstone, as if it were a hunt\n'; fails=$((fails + 1)); }

@@ -15,5 +15,5 @@ it as a review of the current branch.
 Arguments: a number is the window in days (default 30, at most 90); anything
 else that looks like `owner/name` is the repository to scan instead of this
 checkout's `origin`. If the server refuses (`repo_required`, `scan_recent`,
-`scan_empty`, `scan_too_big`, `scan_disabled`), show its answer verbatim and
+`scan_empty`, `scan_too_big`, `scan_fetch_failed`, `scan_disabled`), show its answer verbatim and
 stop; never retry with a different window on your own.

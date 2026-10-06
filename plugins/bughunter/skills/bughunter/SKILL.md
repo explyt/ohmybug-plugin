@@ -1045,8 +1045,9 @@ line and stop; the person reading has the hatch, and it is theirs to use.
 A one-off hunt of the code a GitHub repository changed in its last days –
 the way to try OhMyBug with no pull request open, and the thing to offer a
 user who just installed the plugin and asks what it can do. The server reads
-the window from GitHub, cuts the changed code into slices, hunts every slice
-with more than one engine, and returns ONE merged review. It is not a merge
+the window from GitHub, takes the biggest share of the changed code that fits
+one hunt, hunts it with two engines (one checks for known bug species), and
+returns ONE merged review. It is not a merge
 gate and records nothing for one; never present it as a review of the current
 branch.
 
@@ -1058,17 +1059,16 @@ branch.
    the server's answer – show it verbatim and stop: `repo_required` (the
    GitHub App is not installed on that repository – offer the link it gives),
    `scan_recent` (scanned in the last week – read that review instead),
-   `scan_empty`, `scan_too_big` (fewer days is the user's call), `scan_disabled`.
+   `scan_empty`, `scan_too_big` (fewer days is the user's call),
+   `scan_fetch_failed`, `scan_disabled`.
 3. Watch it exactly like a hunt (the monitor rules above – `monitor`,
    `status_url`, `next_poll_after_s`); hand the user `live_url` once.
-4. When it is done, read `scan` in the answer: what was read, what was not
-   (`not_read`), how many runs were merged. Each finding carries `hunters`
-   (`2/8` = two of the eight runs found it) – say it; it is how much weight
-   the finding has before you check it.
+4. When it is done, read `scan` in the answer: the window (`base`..`ref`),
+   how many files were read (`files`), and what was not (`not_read`, with
+   `not_read_total`). Tell the user what was left out – a clean scan covers
+   only what it read.
 5. Verify every finding against the code and `confirm_findings` before
-   fixing – the same honesty rules as step 4 of the flow. A scan shows at
-   most ten findings, most severe first; `findings_not_shown` says how many
-   it held back.
+   fixing – the same honesty rules as step 4 of the flow.
 6. Then offer, in one line each and only for the REAL ones: fix now, open an
    issue, or tell the story (step 6b). Do not start fixing a scan's findings
    on a branch the user is in the middle of without asking.
