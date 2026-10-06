@@ -177,9 +177,12 @@ def one_line(v):
 # block: it is a single-quoted shell string.)
 live = body.get("live_url")
 live = live if isinstance(live, str) and len(live) <= 512 and re.fullmatch(r"https://[!-~]+", live) else ""
+# A repository scan answers with a `scan` object: it hunted no commit, so a poll
+# or a confirm of it has nothing to promote and nothing to say about the gate.
+scan = "1" if isinstance(body.get("scan"), dict) else "0"
 print(tool, done, one_line(d.get("cwd")), sent, one_line(ref), one_line(review),
       pre, failed, upload, one_line(d.get("session_id")), record, readable,
-      errored, one_line(body.get("gate_note")), one_line(live), sep="\n")
+      errored, one_line(body.get("gate_note")), one_line(live), scan, sep="\n")
 ' 2>/dev/null) || exit 0
 
 TOOL=$(printf '%s' "$FIELDS" | sed -n 1p)
@@ -204,6 +207,7 @@ READABLE=$(printf '%s' "$FIELDS" | sed -n 12p)
 ERRORED=$(printf '%s' "$FIELDS" | sed -n 13p)
 GATE_NOTE=$(printf '%s' "$FIELDS" | sed -n 14p)
 LIVE_URL=$(printf '%s' "$FIELDS" | sed -n 15p)
+SCAN=$(printf '%s' "$FIELDS" | sed -n 16p)
 
 [ -n "${TOOL:-}" ] || exit 0
 [ -n "${CWD:-}" ] && [ -d "$CWD" ] && cd "$CWD" 2>/dev/null
@@ -430,6 +434,10 @@ case "$TOOL" in
     live_tail
     ;;
   get_findings|wait_review|confirm_findings)
+    # A repository scan is not a hunt of any commit: nothing was recorded on
+    # submit (scan_repo is not submit_review), so nothing is promoted, and the
+    # "no rev-id record" paragraph below would be noise on every poll of it.
+    [ "${SCAN:-0}" = '1' ] && exit 0
     # get_findings and wait_review are polled while the review is still running
     # and answer with the same terminal body; confirm_findings only exists after
     # a done review, so it has no status to wait for — but it does have an

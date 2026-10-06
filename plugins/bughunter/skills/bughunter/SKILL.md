@@ -19,7 +19,9 @@ allowance.
 
 The MCP server `ohmybug` provides: `submit_review`, `get_findings`,
 `provide_files`, `confirm_findings`, `post_story`, `get_balance`,
-`redeem_code` (promo codes that raise the free-review allowance).
+`redeem_code` (promo codes that raise the free-review allowance), and
+`scan_repo` (a one-off hunt of the code a repository changed recently – see
+"Repository scan" below).
 
 **The server's own words outrank this file.** A tool result carrying
 `next_step`, `share.ask_user` or `deep_offer.how` is the current instruction;
@@ -1037,6 +1039,39 @@ line and stop; the person reading has the hatch, and it is theirs to use.
   page manages only its own.
 - The first bug-finding review is free; no card is required until it is
   used. A promo code can raise that allowance (see above). `/bughunter:stats` (or `get_balance`) shows the full hunting record.
+
+## Repository scan (`scan_repo`, `/bughunter:scan`)
+
+A one-off hunt of the code a GitHub repository changed in its last days –
+the way to try OhMyBug with no pull request open, and the thing to offer a
+user who just installed the plugin and asks what it can do. The server reads
+the window from GitHub, cuts the changed code into slices, hunts every slice
+with more than one engine, and returns ONE merged review. It is not a merge
+gate and records nothing for one; never present it as a review of the current
+branch.
+
+1. **Ask once, in one line**: which repository (default: this checkout's
+   `origin`, as `owner/name`) and how many days (default 30). A scan sends
+   nothing from this machine – the server reads GitHub – but it does hunt the
+   user's code, so it starts on their word, never on yours.
+2. Call `scan_repo` with `repo` (and `days` if they named one). A refusal is
+   the server's answer – show it verbatim and stop: `repo_required` (the
+   GitHub App is not installed on that repository – offer the link it gives),
+   `scan_recent` (scanned in the last week – read that review instead),
+   `scan_empty`, `scan_too_big` (fewer days is the user's call), `scan_disabled`.
+3. Watch it exactly like a hunt (the monitor rules above – `monitor`,
+   `status_url`, `next_poll_after_s`); hand the user `live_url` once.
+4. When it is done, read `scan` in the answer: what was read, what was not
+   (`not_read`), how many runs were merged. Each finding carries `hunters`
+   (`2/8` = two of the eight runs found it) – say it; it is how much weight
+   the finding has before you check it.
+5. Verify every finding against the code and `confirm_findings` before
+   fixing – the same honesty rules as step 4 of the flow. A scan shows at
+   most ten findings, most severe first; `findings_not_shown` says how many
+   it held back.
+6. Then offer, in one line each and only for the REAL ones: fix now, open an
+   issue, or tell the story (step 6b). Do not start fixing a scan's findings
+   on a branch the user is in the middle of without asking.
 
 ## Privacy
 

@@ -1710,6 +1710,19 @@ case "$out" in
     printf 'FAIL the promote miss still passes a verdict on the merge gate: %s\n' "$out"
     fails=$((fails + 1)) ;;
 esac
+# A repository scan is the same poll of a review with no record here — and it
+# is supposed to have none: it hunted no commit. The answer carries a `scan`
+# object, and the hook says nothing and writes nothing. The control is the
+# case above: the same call without `scan` speaks.
+reset_state
+python3 -c "import json
+print(json.dumps({'tool_name':'mcp__plugin_bughunter_ohmybug__get_findings',
+  'tool_input':{'review_id':'rev_scan1'},
+  'tool_response':{'content':[{'type':'text','text':json.dumps({'review_id':'rev_scan1','status':'done','review_of_record':True,
+     'scan':{'repo':'x/y','days':30,'slices':4}})}]},
+  'cwd':'$PWD'}))" | bash "$G/stamp-hunt.sh" >"$HOME/hook.out" 2>/dev/null; rc=$?
+[ "$rc" = 0 ] && [ -z "$(ctx <"$HOME/hook.out")" ] || { printf 'FAIL a scan poll spoke or blocked (rc=%s): %s\n' "$rc" "$(ctx <"$HOME/hook.out")"; fails=$((fails + 1)); }
+[ ! -e "$(ohmybug_hunt_dir).promoted/rev_scan1" ] || { printf 'FAIL a scan poll left a tombstone, as if it were a hunt\n'; fails=$((fails + 1)); }
 case "$out" in
   *"five keys"*"pull request the merge command names"*) ;;
   *) printf 'FAIL the promote miss does not say what the gate actually reads: %s\n' "$out"
@@ -2027,6 +2040,18 @@ rm -rf "$FR/state"
 mkdir -p "$FR/.claude"
 printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
 [ -z "$(say)" ] || { printf 'FAIL first-run: nagged a user who had already decided\n'; fails=$((fails + 1)); }
+
+# --- the scan hint: once per machine, Claude Code only, a suggestion ----------
+SH=$(mktemp -d)
+hint() { OMB_STATE_DIR="$SH/state" HOME="$SH" bash "$G/scan-hint.sh"; }
+[ -z "$(PLUGIN_DATA=/x hint)" ] || { printf 'FAIL scan-hint: spoke to Codex, which has no /bughunter:scan\n'; fails=$((fails + 1)); }
+[ ! -e "$SH/state/scan-hint-v1" ] || { printf 'FAIL scan-hint: Codex consumed the once-per-machine mark\n'; fails=$((fails + 1)); }
+case "$(hint)" in
+  *'/bughunter:scan'*'"additionalContext"'*) ;;
+  *) printf 'FAIL scan-hint: the first session did not name the command to the user and the assistant\n'; fails=$((fails + 1)) ;;
+esac
+[ -z "$(hint)" ] || { printf 'FAIL scan-hint: said it twice\n'; fails=$((fails + 1)); }
+rm -rf "$SH"
 
 # --- the tools-present check speaks at every session START, to the assistant --
 # A session whose handshake failed has no tools and no way back; the model has

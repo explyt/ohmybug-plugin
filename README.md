@@ -109,6 +109,17 @@ codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp \
 --header "Authorization: Bearer $OHMYBUG_API_KEY"` — an explicit
 Authorization header disables the OAuth flow.)
 
+## First run: no pull request needed
+
+`/bughunter:scan` hunts the code this repository changed in the last 30 days
+(`/bughunter:scan 14` for two weeks). The server reads the history from
+GitHub — nothing is uploaded from your machine — splits the changed code into
+slices and hunts each with more than one engine, then hands back one merged
+review: at most ten findings, most severe first, each saying how many of the
+hunters found it. Your agent verifies them like any hunt, and the same price
+applies. It needs the OhMyBug GitHub App on that repository, runs once per
+repository per week, and is not a merge gate.
+
 ## What it does
 
 - Before every `gh pr merge`, a gate checks the FINAL diff was hunted —
