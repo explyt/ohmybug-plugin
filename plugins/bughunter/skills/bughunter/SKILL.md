@@ -413,16 +413,22 @@ the out-of-band flow instead:
    diff itself it ignores `upload` and just starts, and you never touch the
    upload at all. A `review_id` with `status: running` instead of
    `awaiting_upload` means exactly that – nothing to upload, go monitor.
-2. Build the payload with a script, reading straight from disk:
+2. Build the payload with a script, reading straight from disk, in a private
+   directory of its own – never a fixed path in `/tmp`: on a shared machine
+   every other user can read a file left there, and two reviews running at
+   once overwrite one fixed name. Run the block as it stands: the subshell
+   makes the directory readable by you alone and removes it on any exit.
 
 ```bash
-git diff "$BASE" > /tmp/omb-diff.patch
-python3 - <<'PY'
-import json
+(umask 077; d=$(mktemp -d) || exit 1; trap 'rm -rf "$d"' EXIT
+git diff "$BASE" > "$d/diff.patch"
+python3 - "$d" <<'PY'
+import json, sys
+d = sys.argv[1]
 files = []  # [{'path': p, 'content': open(p).read()} for p in <your context list>]
-json.dump({'diff': open('/tmp/omb-diff.patch').read(), 'files': files}, open('/tmp/omb-payload.json', 'w'))
+json.dump({'diff': open(d + '/diff.patch').read(), 'files': files}, open(d + '/payload.json', 'w'))
 PY
-curl -sf -X POST -H 'content-type: application/json' --data-binary @/tmp/omb-payload.json '<upload_url>'
+curl -fsS -X POST -H 'content-type: application/json' --data-binary @"$d/payload.json" '<upload_url>')
 ```
 
 3. The review starts on upload – arm the background monitor on `status_url`
