@@ -2576,6 +2576,62 @@ if not all(t in m for t in ("submit_review", "confirm_findings", "get_balance"))
     sys.exit(1)
 PY2
 
+# THE UPLOAD RECIPE, RUN — not read. It used to write the diff and the payload
+# to fixed names in /tmp: on a shared machine any other user could read them
+# (the file mode follows the umask, usually 0644), and two reviews at once
+# overwrote each other. The block in SKILL.md is executed here with a curl stub
+# that reports the payload's path and modes; it must be a private 0700
+# directory of its own, a file nobody else can read, gone after the run, and a
+# different directory each time.
+UP=$(mktemp -d)
+mkdir -p "$UP/bin" "$UP/repo"
+cat > "$UP/bin/curl" <<'SH'
+#!/bin/sh
+for a; do case $a in @*) f=${a#@} ;; esac; done
+python3 - "$f" >> "$UPLOG" <<'PY'
+import os, stat, sys
+f = sys.argv[1]
+print(f"{oct(stat.S_IMODE(os.stat(os.path.dirname(f)).st_mode))} {oct(stat.S_IMODE(os.stat(f).st_mode))} {os.path.dirname(f)}")
+PY
+cp "$f" "$UPLOG.payload"
+echo '{"ok":true}'
+SH
+chmod +x "$UP/bin/curl"
+git -C "$UP/repo" init -q && printf 'a\n' > "$UP/repo/a.txt" && git -C "$UP/repo" add a.txt \
+  && git -C "$UP/repo" -c user.email=t@t -c user.name=t commit -qm base && printf 'b\n' >> "$UP/repo/a.txt"
+RECIPE=$(python3 - plugins/bughunter/skills/bughunter/SKILL.md <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"Build the payload with a script.*?```bash\n(.*?)```", s, re.S)
+print(m.group(1).replace("<upload_url>", "http://upload.invalid/u/tok") if m else "")
+PY
+)
+if [ -z "$RECIPE" ]; then
+  echo "FAIL upload recipe: the bash block after 'Build the payload with a script' is gone from SKILL.md"; fails=$((fails + 1))
+else
+  for run in 1 2; do
+    (cd "$UP/repo" && BASE=HEAD UPLOG="$UP/log" PATH="$UP/bin:$PATH" bash -c "$RECIPE") > /dev/null 2>&1 \
+      || { echo "FAIL upload recipe: run $run exited non-zero"; fails=$((fails + 1)); }
+  done
+  python3 - "$UP/log" <<'PY' || fails=$((fails + 1))
+import json, os, sys
+log = sys.argv[1]
+rows = [l.split(" ", 2) for l in open(log).read().splitlines()] if os.path.exists(log) else []
+bad = []
+if len(rows) != 2: bad.append(f"curl saw {len(rows)} uploads, want 2")
+for dmode, fmode, d in rows:
+    if dmode != "0o700": bad.append(f"payload directory mode {dmode}, want 0o700")
+    if int(fmode, 8) & 0o077: bad.append(f"payload file mode {fmode} is readable by others")
+    if os.path.exists(d): bad.append(f"payload directory {d} left behind")
+if len(rows) == 2 and rows[0][2] == rows[1][2]: bad.append("two runs shared one payload directory")
+p = json.load(open(log + ".payload")) if os.path.exists(log + ".payload") else {}
+if "+b" not in p.get("diff", ""): bad.append("the payload does not carry the working diff")
+for b in bad: print("FAIL upload recipe: " + b)
+sys.exit(1 if bad else 0)
+PY
+fi
+rm -rf "$UP"
+
 cleanup_scratch
 if [ "$(git status --porcelain | grep -v "$SCRATCH" || true)" != "$TREE_BEFORE" ]; then
   printf 'FAIL the suite changed the working tree it was run in:\n%s\n' "$(git status --porcelain)"
