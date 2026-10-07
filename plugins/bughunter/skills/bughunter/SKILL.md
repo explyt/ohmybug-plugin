@@ -303,26 +303,48 @@ the code lives only on the laptop, or the folder is not a git repository at
 all. That is not a reason to stop – the server reviews any unified diff, and
 brand-new code is just a diff against nothing. When the default scope above
 is empty or cannot be computed (no `origin`, no merge base, HEAD equals the
-base), work down this list and stop at the first rung that yields code:
+base), take the ladder below.
 
-1. **The user named files, a folder or "the last N commits"** – that, always.
-2. **Uncommitted work** – `git add -N . && git diff HEAD` (intent-to-add
-   puts new untracked files into the diff without staging their content;
-   undo with `git reset -q` afterwards only if nothing was staged before).
-   In a repository with no commit yet there is no `HEAD`: diff against the
-   empty tree instead, `git diff $(git hash-object -t tree /dev/null)`.
-3. **Recent commits on this branch** – `git diff HEAD~N HEAD`, N = 10 by
-   default or what the user said; with fewer commits than that, the whole
-   history: `git diff $(git hash-object -t tree /dev/null) HEAD`.
+Every rung sends only what step 2's privacy rules allow – these rungs reach
+files no branch diff ever did (untracked ones, the whole history), and the
+secret scan before a submit recognises a `.env` by name only among attached
+files, not inside a diff. So every git rung carries the same exclusions as
+pathspecs, and the user's own index is never touched:
+
+```bash
+X=(':!*.env' ':!*.env.*' ':!*secret*' ':!*credential*' ':!*.pem' ':!*.key' ':!*id_rsa*')
+EMPTY=$(git hash-object -t tree /dev/null)
+```
+
+Work down the list and stop at the first rung that yields code:
+
+1. **The user named files, a folder or "the last N commits"** – that, always
+   (with `-- <paths> "${X[@]}"`).
+2. **Uncommitted work, new files included** – in a throwaway copy of the
+   index, so nothing is left behind in the user's:
+
+   ```bash
+   T=$(mktemp); cp "$(git rev-parse --git-path index)" "$T" 2>/dev/null || rm -f "$T"
+   GIT_INDEX_FILE=$T git add -N -- . "${X[@]}"
+   GIT_INDEX_FILE=$T git diff "$(git rev-parse -q --verify HEAD || echo "$EMPTY")" -- . "${X[@]}"
+   rm -f "$T"
+   ```
+
+   (`git add -N` puts untracked files into the diff without staging their
+   content; the empty tree stands in for `HEAD` before the first commit.)
+3. **Recent commits** – N = 10 by default or what the user said. `HEAD~N`
+   exists only with more than N commits, so ask first:
+   `git diff "$(git rev-parse -q --verify "HEAD~$N" || echo "$EMPTY")" HEAD -- . "${X[@]}"`.
 4. **Not a git repository** – the folder as new code, one file at a time:
    `git diff --no-index -- /dev/null <file>` for every source file
    (`git diff --no-index` exits 1 when files differ – that is success here).
-   Skip what is generated, vendored, binary, lock files, and everything the
-   privacy rules in step 2 exclude.
+   Skip what is generated, vendored, binary, lock files, and every path the
+   exclusions above name.
 
-Say in one line which rung you took and how big it is ("no branch here –
-hunting your uncommitted changes, 4 files, 380 lines"), so the user can
-redirect before anything is sent. The payload limit is 2 MB of diff: if a
+Say in one line which rung you took and how big it is, and list the file
+names ("no branch here – hunting your uncommitted changes: src/solver.py,
+src/io.py, tests/test_solver.py – 380 lines"), so the user can redirect or
+drop a file before anything is sent. The payload limit is 2 MB of diff: if a
 rung is larger, ask which part matters (a folder, a feature) rather than
 cutting silently.
 
