@@ -17,7 +17,7 @@ MARK=$STATE/scan-hint-v1
 [ -f "$MARK" ] && exit 0
 mkdir -p "$STATE" && : > "$MARK"
 
-NOTE='OhMyBug: no pull request needed to try it — /bughunter:scan hunts the code this repository changed in the last 30 days (two engines, findings merged). It starts only when you run it.'
+NOTE='OhMyBug: no pull request needed to try it — /bughunter:scan hunts the code this repository changed in the last 30 days (a deep hunt of about an hour, two engines, findings merged). It starts only when you run it.'
 python3 - "$NOTE" <<'PY'
 import json, sys
 note = sys.argv[1]

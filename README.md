@@ -113,11 +113,11 @@ Authorization header disables the OAuth flow.)
 
 `/bughunter:scan` hunts the code this repository changed in the last 30 days
 (`/bughunter:scan 14` for two weeks). The server reads the history from
-GitHub — nothing is uploaded from your machine — takes the biggest share of
-the changed code that fits one hunt, and hunts it with two engines (one of
-them checking for known bug species), then hands back one merged review that
-lists what it did not read. Your agent verifies the findings like any hunt,
-and the same price applies. It needs the OhMyBug GitHub App on that repository, runs once per
+GitHub and clones the repository on its side — nothing is uploaded from your
+machine — then runs a deep hunt (about an hour) over the window's changed
+code with two engines, and hands back one merged review that lists anything
+it did not read. Your agent verifies the findings like any hunt, and the same
+price applies. It needs the OhMyBug GitHub App on that repository, runs once per
 repository per week, and is not a merge gate.
 
 ## What it does
