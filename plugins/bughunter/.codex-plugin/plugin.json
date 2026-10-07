@@ -1,6 +1,6 @@
 {
   "name": "bughunter",
-  "version": "0.112.0",
+  "version": "0.113.0",
   "description": "OhMyBug cloud bug hunt as the last merge gate, with Codex-native MCP routing.",
   "author": {
     "name": "OhMyBug",
@@ -26,6 +26,7 @@
     "termsOfServiceURL": "https://ohmybug.ai/terms",
     "defaultPrompt": [
       "Run the OhMyBug cloud hunt on this diff.",
+      "Hunt bugs in my code – no pull request, just what is here.",
       "Check this PR for real bugs before merge.",
       "Show the verified findings and merge gate evidence."
     ],

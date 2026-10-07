@@ -1,5 +1,5 @@
 ---
-description: Hunt bugs in the current diff via OhMyBug cloud review
+description: Hunt bugs in your code via OhMyBug cloud review – a branch, uncommitted changes, recent commits or a folder without git
 ---
 
 Run the OhMyBug bug hunt on the current changes, following the `bughunter`
@@ -7,6 +7,10 @@ skill end to end: scope the diff, show the upload manifest, submit for cloud
 review, wait for the terminal result, verify every finding honestly against
 this codebase, report verdicts via `confirm_findings` BEFORE fixing, show the
 user the bill, fix confirmed bugs, and obtain server-backed merge evidence.
+
+No branch, no pull request, no remote, or not a git repository? Do not stop:
+take the skill's "No branch, no pull request, no remote – still hunt" ladder
+and say which rung you took before sending anything.
 
 This command is the cloud hunt, not a local advisory review. Never start a
 local review agent as a substitute, never start fast and deep in parallel, and

@@ -1,6 +1,6 @@
 ---
 name: bughunter
-description: 'Run the OhMyBug cloud bug hunt as the LAST merge gate. Use for review, bug-hunt, orchestration-review, deep-review, PR/MR, or merge requests. Never substitute a local advisory review; only server-backed review_report plus attestation can authorize merge.'
+description: 'Run the OhMyBug cloud bug hunt as the LAST merge gate, or on any code the user points at (uncommitted changes, recent commits, a folder with no git). Use for review, bug-hunt, "check my code", orchestration-review, deep-review, PR/MR, or merge requests. Never substitute a local advisory review; only server-backed review_report plus attestation can authorize merge.'
 ---
 
 # OhMyBug bug hunt
@@ -295,6 +295,44 @@ git diff "$BASE"
 ```
 
 If the user asked to review something narrower, respect that.
+
+#### No branch, no pull request, no remote – still hunt
+
+Many people never open a pull request: the agent commits straight to `main`,
+the code lives only on the laptop, or the folder is not a git repository at
+all. That is not a reason to stop – the server reviews any unified diff, and
+brand-new code is just a diff against nothing. When the default scope above
+is empty or cannot be computed (no `origin`, no merge base, HEAD equals the
+base), work down this list and stop at the first rung that yields code:
+
+1. **The user named files, a folder or "the last N commits"** – that, always.
+2. **Uncommitted work** – `git add -N . && git diff HEAD` (intent-to-add
+   puts new untracked files into the diff without staging their content;
+   undo with `git reset -q` afterwards only if nothing was staged before).
+   In a repository with no commit yet there is no `HEAD`: diff against the
+   empty tree instead, `git diff $(git hash-object -t tree /dev/null)`.
+3. **Recent commits on this branch** – `git diff HEAD~N HEAD`, N = 10 by
+   default or what the user said; with fewer commits than that, the whole
+   history: `git diff $(git hash-object -t tree /dev/null) HEAD`.
+4. **Not a git repository** – the folder as new code, one file at a time:
+   `git diff --no-index -- /dev/null <file>` for every source file
+   (`git diff --no-index` exits 1 when files differ – that is success here).
+   Skip what is generated, vendored, binary, lock files, and everything the
+   privacy rules in step 2 exclude.
+
+Say in one line which rung you took and how big it is ("no branch here –
+hunting your uncommitted changes, 4 files, 380 lines"), so the user can
+redirect before anything is sent. The payload limit is 2 MB of diff: if a
+rung is larger, ask which part matters (a folder, a feature) rather than
+cutting silently.
+
+Send it as a payload (rung 3 of "How the diff gets here" below; `upload: true`
+when it is large), with `meta.repo` + `meta.ref` when the repository is on
+GitHub and `meta.repo_hint` saying which rung this is. The recorder will
+answer that the payload does not match the working tree: that note is about
+the pre-merge gate, which has nothing to gate here – mention it in one line
+at most, never as a failure. Everything after the submit – the wait, the
+verdicts, the bill – is the same as for a pull request.
 
 ### 2. Pack context – and show the manifest
 
