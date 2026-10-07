@@ -4,7 +4,8 @@ description: Hunt the code this repository changed recently (one-off scan, no PR
 
 Run a one-off OhMyBug scan of this repository, following the "Repository scan"
 section of the `bughunter` skill: confirm the repository and the window with
-the user in one line, call `scan_repo`, watch it like any hunt, verify every
+the user in one line, call `scan_repo`, tell them it is a deep hunt of about
+an hour, watch it like any hunt, verify every
 finding against this codebase, report verdicts via `confirm_findings` BEFORE
 fixing, show the user the bill, then offer what to do with what was found.
 

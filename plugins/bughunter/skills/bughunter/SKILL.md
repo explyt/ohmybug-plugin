@@ -1045,8 +1045,8 @@ line and stop; the person reading has the hatch, and it is theirs to use.
 A one-off hunt of the code a GitHub repository changed in its last days –
 the way to try OhMyBug with no pull request open, and the thing to offer a
 user who just installed the plugin and asks what it can do. The server reads
-the window from GitHub, takes the biggest share of the changed code that fits
-one hunt, hunts it with two engines (one checks for known bug species), and
+the window from GitHub, clones the repository on its side, runs a deep hunt
+over the window's changed code with two engines – about an hour – and
 returns ONE merged review. It is not a merge
 gate and records nothing for one; never present it as a review of the current
 branch.
@@ -1059,10 +1059,13 @@ branch.
    the server's answer – show it verbatim and stop: `repo_required` (the
    GitHub App is not installed on that repository – offer the link it gives),
    `scan_recent` (scanned in the last week – read that review instead),
-   `scan_empty`, `scan_too_big` (fewer days is the user's call),
+   `scan_empty`, `scan_too_big` (fewer days is the user's call; a repository
+   too large to clone is refused the same way – then a pull request is the way),
    `scan_fetch_failed`, `scan_disabled`.
-3. Watch it exactly like a hunt (the monitor rules above – `monitor`,
-   `status_url`, `next_poll_after_s`); hand the user `live_url` once.
+3. Tell the user once that it takes about an hour and they need not wait
+   at the terminal. Watch it exactly like a deep hunt (the monitor rules
+   above – `monitor`, `status_url`, `next_poll_after_s`); hand the user
+   `live_url` once.
 4. When it is done, read `scan` in the answer: the window (`base`..`ref`),
    how many files were read (`files`), and what was not (`not_read`, with
    `not_read_total`). Tell the user what was left out – a clean scan covers
