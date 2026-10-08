@@ -2701,7 +2701,13 @@ else
     echo "accent=$(omb_diff HEAD | grep -c "^+r$")"
     [ "$before" = "$(git status --porcelain)" ] && echo "index=same" || echo "index=moved"
     # The last N commits are commits only: the dirty a.py, sub/new.py and résumé.py stay out.
-    echo "commits1=$(omb_commits 1 | names)"
+    # Two commits on top of base, made in a clone so this tree stays dirty as it is: N=1
+    # is the last one, N=2 both, and N past the history is all of it.
+    git clone -q . ../h && (cd ../h && printf "c1\n" > c1.py && git add c1.py && git commit -qm c1 \
+      && printf "c2\n" > src/solver/c2.py && git add src/solver/c2.py && git commit -qm c2 \
+      && printf "dirty\n" >> c1.py && printf "u\n" > untracked.py \
+      && echo "last1=$(omb_commits 1 | names)" && echo "last2=$(omb_commits 2 | names)" \
+      && echo "last9=$(omb_commits 9 | names)")
     echo "commits9=$(omb_commits 9 | names)"
     # From a subdirectory, with NEW secrets in the root and in other folders: only `top`
     # keeps them out of a whole-repo rung run from src/.
@@ -2712,7 +2718,8 @@ else
     echo "nogit=$(omb_nogit | names)"; [ -e .git ] && echo "nogit=left .git" || true
   ' 2>&1)
   for want in "unborn=a.py src/solver/m.py " "folder=src/solver/m.py " "rung2=a.py sub/new.py " \
-              "accent=1" "index=same" "commits1=a.py src/solver/m.py " "commits9=a.py src/solver/m.py " \
+              "accent=1" "index=same" "last1=src/solver/c2.py " "last2=c1.py src/solver/c2.py " \
+              "last9=a.py c1.py src/solver/c2.py src/solver/m.py " "commits9=a.py src/solver/m.py " \
               "sub2=a.py sub/new.py " "subroot=a.py src/solver/m.py sub/new.py " \
               "subfolder=src/solver/m.py " "nogit=q.py "; do
     printf '%s\n' "$OUT" | grep -qxF "$want" || { echo "FAIL ladder: want [$want] in: $(printf '%s' "$OUT" | tr '\n' '|')"; fails=$((fails + 1)); }
