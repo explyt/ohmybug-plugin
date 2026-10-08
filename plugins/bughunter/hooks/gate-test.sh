@@ -2671,11 +2671,11 @@ import re, sys
 s = open(sys.argv[1]).read()
 i = s.find("#### No branch, no pull request")
 m = re.search(r"```bash\n(.*?)```", s[i:], re.S) if i >= 0 else None
-print(m.group(1) if m and "omb_nogit" in m.group(1) else "")
+print(m.group(1) if m and "omb_nogit" in m.group(1) and "omb_commits" in m.group(1) else "")
 PY
 )
 if [ -z "$LADDER" ]; then
-  echo "FAIL ladder: the no-branch ladder's bash block (omb_diff/omb_nogit) is gone from SKILL.md"; fails=$((fails + 1))
+  echo "FAIL ladder: the no-branch ladder's bash block (omb_diff/omb_commits/omb_nogit) is gone from SKILL.md"; fails=$((fails + 1))
 else
   printf '%s\n' "$LADDER" > "$LD/ladder.sh"
   OUT=$(cd "$LD" && mkdir r ng && cd r && bash -c '
@@ -2696,16 +2696,25 @@ else
     echo "rung2=$(omb_diff HEAD | names)"
     echo "accent=$(omb_diff HEAD | grep -c "^+r$")"
     [ "$before" = "$(git status --porcelain)" ] && echo "index=same" || echo "index=moved"
-    echo "rung3=$(omb_diff "$(git rev-parse -q --verify HEAD~10 || echo "$EMPTY")" | names)"
-    cd src && echo "sub2=$(omb_diff HEAD | names)" && echo "subfolder=$(omb_diff "$EMPTY" solver/ | names)" && cd ..
+    # The last N commits are commits only: the dirty a.py, sub/new.py and résumé.py stay out.
+    echo "commits1=$(omb_commits 1 | names)"
+    echo "commits9=$(omb_commits 9 | names)"
+    # From a subdirectory, with NEW secrets in the root and in other folders: only `top`
+    # keeps them out of a whole-repo rung run from src/.
+    printf "s\n" > .env.new && printf "s\n" > secrets/new.yml && printf "s\n" > sub/id_rsa
+    cd src && echo "sub2=$(omb_diff HEAD | names)" && echo "subroot=$(omb_diff "$EMPTY" | names)" \
+      && echo "subfolder=$(omb_diff "$EMPTY" solver/ | names)" && cd ..
     cd ../ng && mkdir k && printf "q\n" > q.py && printf "s\n" > .env && printf "s\n" > k/a.pem
     echo "nogit=$(omb_nogit | names)"; [ -e .git ] && echo "nogit=left .git" || true
   ' 2>&1)
   for want in "unborn=a.py src/solver/m.py " "folder=src/solver/m.py " "rung2=a.py sub/new.py " \
-              "accent=1" "index=same" "rung3=a.py src/solver/m.py sub/new.py " \
-              "sub2=a.py sub/new.py " "subfolder=src/solver/m.py " "nogit=q.py "; do
+              "accent=1" "index=same" "commits1=a.py src/solver/m.py " "commits9=a.py src/solver/m.py " \
+              "sub2=a.py sub/new.py " "subroot=a.py src/solver/m.py sub/new.py " \
+              "subfolder=src/solver/m.py " "nogit=q.py "; do
     printf '%s\n' "$OUT" | grep -qxF "$want" || { echo "FAIL ladder: want [$want] in: $(printf '%s' "$OUT" | tr '\n' '|')"; fails=$((fails + 1)); }
   done
+  grep -qF '3. **Recent commits** – `omb_commits 10`' plugins/bughunter/skills/bughunter/SKILL.md \
+    || { echo "FAIL ladder: SKILL.md rung 3 no longer calls omb_commits (the function that falls back to the whole history)"; fails=$((fails + 1)); }
   printf '%s\n' "$OUT" | grep -q 'left .git' && { echo "FAIL ladder: omb_nogit left a .git behind"; fails=$((fails + 1)); }
 fi
 rm -rf "$LD"

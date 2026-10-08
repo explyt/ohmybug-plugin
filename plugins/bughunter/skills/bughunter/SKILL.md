@@ -313,7 +313,9 @@ ONE `git diff` whose secret filter is git's own exclude pathspecs: a path is
 dropped when any of its segments is a secret name – `secrets/config.yml` as
 much as `.env` – at any depth, in any case, from any directory, and file
 names never pass through the shell. The diff runs on a throwaway copy of the
-index, never the user's own. Define it once, as it stands:
+index, never the user's own. Each agent shell call starts a fresh process,
+so paste this block, as it stands, at the top of EVERY command that calls a
+rung – the upload script included:
 
 ```bash
 EMPTY=$(git hash-object -t tree /dev/null)
@@ -327,6 +329,13 @@ omb_diff() {
   GIT_INDEX_FILE=$T git add -N -- :/ && GIT_INDEX_FILE=$T git diff "$base" -- "${@:-:/}" "${x[@]}"
   rc=$?; rm -f "$T"; return $rc
 }
+# omb_commits <N>: the last N commits only – commit to commit, nothing from the working
+# tree; with N or fewer commits, the whole history. Secrets excluded the same way.
+omb_commits() {
+  local p x=()
+  for p in "${OMB_SECRETS[@]}"; do x+=(":(exclude,top,icase,glob)**/$p" ":(exclude,top,icase,glob)**/$p/**"); done
+  git diff "$(git rev-parse -q --verify "HEAD~$1" || echo "$EMPTY")" HEAD -- :/ "${x[@]}"
+}
 # omb_nogit [paths...]: a folder that is not a git repository, as new code. The git
 # directory is a throwaway one outside the folder; nothing is left behind.
 omb_nogit() {
@@ -339,13 +348,12 @@ omb_nogit() {
 Work down the list and stop at the first rung that yields code:
 
 1. **The user named files or a folder** – the whole of it, committed or not:
-   `omb_diff "$EMPTY" src/solver/`. **"The last N commits"** – `omb_diff HEAD~N`.
+   `omb_diff "$EMPTY" src/solver/`. **"The last N commits"** – `omb_commits N`.
 2. **Uncommitted work, new files included** – `omb_diff HEAD`, or
    `omb_diff "$EMPTY"` before the first commit (`git add -N` on the index copy
    makes untracked files part of the diff without staging them).
-3. **Recent commits** – the last 10 (or the N the user said); with 10 or
-   fewer commits it is the whole history:
-   `omb_diff "$(git rev-parse -q --verify HEAD~10 || echo "$EMPTY")"`.
+3. **Recent commits** – `omb_commits 10`; with 10 or fewer commits it is
+   the whole history.
 4. **Not a git repository** – `omb_nogit`, run in the folder. Pass only the
    source folders when it also holds generated, vendored or binary files
    (`omb_nogit src/ lib/`).
@@ -488,7 +496,8 @@ the out-of-band flow instead:
    upload at all. **Except a no-branch ladder payload:** leave `base_branch`
    out there (the server would review its own empty merge-base diff instead),
    and in the script below write the chosen rung's output (`omb_diff HEAD`,
-   `omb_nogit`, …) to `diff.patch` instead of `git diff "$BASE"`.
+   `omb_commits 10`, `omb_nogit`, …) to `diff.patch`, with the ladder block
+   pasted above it in the same command instead of `git diff "$BASE"`.
    A `review_id` with `status: running` instead of
    `awaiting_upload` means exactly that – nothing to upload, go monitor.
 2. Build the payload with a script, reading straight from disk, in a private
@@ -1118,9 +1127,11 @@ line and stop; the person reading has the hatch, and it is theirs to use.
 
 ## Repository scan (`scan_repo`, `/bughunter:scan`)
 
-A one-off hunt of the code a GitHub repository changed in its last days –
-the way to try OhMyBug with no pull request open, and the thing to offer a
-user who just installed the plugin and asks what it can do. The server reads
+A one-off hunt of the code a GitHub repository changed in its last days.
+For a user who just installed the plugin and asks what it can do, offer
+`/bughunter:review` first – it hunts whatever is here, with no pull request,
+no GitHub and no git (the ladder in step 1) – and this scan as the option for
+a GitHub repository with the App installed. The server reads
 the window from GitHub, clones the repository on its side, runs a deep hunt
 over the window's changed code with two engines – about an hour – and
 returns ONE merged review. It is not a merge
