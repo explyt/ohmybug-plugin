@@ -26,7 +26,17 @@ def run(event, payload=None):
     )
     return json.loads(proc.stdout or "{}")
 
+import os, tempfile
+# The welcome is once per machine: a fresh state dir gets it, with the routing
+# still in front and the assistant asked to say it; the second session is plain.
+os.environ["OMB_STATE_DIR"] = tempfile.mkdtemp()
+first = run("session")
+assert "OhMyBug is installed" in first["systemMessage"], first
+first_text = first["hookSpecificOutput"]["additionalContext"]
+assert first_text.startswith("OhMyBug is the authoritative review"), first_text[:80]
+assert "in your first reply" in first_text and "Run the OhMyBug cloud hunt on my code" in first_text
 session = run("session")
+assert "OhMyBug is installed" not in session["systemMessage"], session
 assert session["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 session_text = session["hookSpecificOutput"]["additionalContext"]
 # One cadence (#67): the automation fires once per interval_s and a wake is ONE
