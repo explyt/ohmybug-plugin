@@ -308,50 +308,47 @@ base), take the ladder below.
 Every rung sends only what step 2's privacy rules allow. These rungs reach
 files no branch diff ever did (untracked ones, the whole history), and the
 secret scan before a submit recognises a `.env` by name only among attached
-files, not inside a diff, and does not see uploads at all. So the rungs go
-through one filter that drops a path when ANY of its segments is a secret
-name – `secrets/config.yml` as much as `.env` – and never touch the user's
-own index. Define it once, as it stands:
+files, not inside a diff, and does not see uploads at all. So every rung is
+ONE `git diff` whose secret filter is git's own exclude pathspecs: a path is
+dropped when any of its segments is a secret name – `secrets/config.yml` as
+much as `.env` – at any depth, in any case, from any directory, and file
+names never pass through the shell. The diff runs on a throwaway copy of the
+index, never the user's own. Define it once, as it stands:
 
 ```bash
-# A path is a secret when ANY of its segments is one: `secrets/x.yml` as much as `.env`.
-omb_secret() {
-  printf '%s\n' "$1" | tr '/' '\n' | grep -qiE '^\.env|secret|credential|^id_(rsa|dsa|ecdsa|ed25519)|\.(pem|key|p12|pfx)$'
-}
-# `git diff <args>` without the secret paths; args as for git diff (revisions, then `-- <paths>`).
-omb_diff_clean() {
-  local p revs=() keep=()
-  while [ $# -gt 0 ] && [ "$1" != -- ]; do revs+=("$1"); shift; done
-  while IFS= read -r p; do omb_secret "$p" || keep+=("$p"); done < <(git diff --name-only "${revs[@]}" "$@")
-  [ ${#keep[@]} -eq 0 ] || git diff "${revs[@]}" -- "${keep[@]}"
-}
 EMPTY=$(git hash-object -t tree /dev/null)
-# Rung 2: uncommitted work, new files included, in a throwaway copy of the index.
-omb_rung2() {
-  local T rc; T=$(mktemp); cp "$(git rev-parse --git-path index)" "$T" 2>/dev/null || rm -f "$T"
-  GIT_INDEX_FILE=$T git add -N -- . && GIT_INDEX_FILE=$T omb_diff_clean "$(git rev-parse -q --verify HEAD || echo "$EMPTY")"
+OMB_SECRETS=('.env*' '*secret*' '*credential*' 'id_rsa*' 'id_dsa*' 'id_ecdsa*' 'id_ed25519*' '*.pem' '*.key' '*.p12' '*.pfx')
+# omb_diff <base> [paths...]: everything from <base> to the working tree, new files
+# included, secrets excluded. Paths are relative to where you stand; none = the whole repo.
+omb_diff() {
+  local base=$1 T rc p x=(); shift
+  for p in "${OMB_SECRETS[@]}"; do x+=(":(exclude,top,icase,glob)**/$p" ":(exclude,top,icase,glob)**/$p/**"); done
+  T=$(mktemp); cp "$(git rev-parse --git-path index)" "$T" 2>/dev/null || rm -f "$T"
+  GIT_INDEX_FILE=$T git add -N -- :/ && GIT_INDEX_FILE=$T git diff "$base" -- "${@:-:/}" "${x[@]}"
   rc=$?; rm -f "$T"; return $rc
 }
-# Rung 3: the last N commits (default 10); HEAD~N exists only with more than N.
-omb_rung3() {
-  omb_diff_clean "$(git rev-parse -q --verify "HEAD~${1:-10}" || echo "$EMPTY")" HEAD
+# omb_nogit [paths...]: a folder that is not a git repository, as new code. The git
+# directory is a throwaway one outside the folder; nothing is left behind.
+omb_nogit() {
+  local G rc; G=$(mktemp -d)
+  git --git-dir="$G" --work-tree=. init -q && GIT_DIR=$G GIT_WORK_TREE=. omb_diff "$EMPTY" "$@"
+  rc=$?; rm -rf "$G"; return $rc
 }
 ```
 
 Work down the list and stop at the first rung that yields code:
 
-1. **The user named files, a folder or "the last N commits"** – that, always,
-   through the filter: `omb_diff_clean HEAD~3 HEAD`, `omb_diff_clean HEAD -- src/solver/`.
-2. **Uncommitted work, new files included** – `omb_rung2`. It works on a copy
-   of the index (`git add -N` makes untracked files part of the diff without
-   staging them) and diffs against the empty tree before the first commit.
-3. **Recent commits** – `omb_rung3 10` (or the N the user said); with N or
-   fewer commits it is the whole history.
-4. **Not a git repository** – the folder as new code, one file at a time:
-   `git diff --no-index -- /dev/null <file>` for every source file for which
-   `omb_secret` is false (`git diff --no-index` exits 1 when files differ –
-   that is success here). Skip what is generated, vendored, binary and lock
-   files too.
+1. **The user named files or a folder** – the whole of it, committed or not:
+   `omb_diff "$EMPTY" src/solver/`. **"The last N commits"** – `omb_diff HEAD~N`.
+2. **Uncommitted work, new files included** – `omb_diff HEAD`, or
+   `omb_diff "$EMPTY"` before the first commit (`git add -N` on the index copy
+   makes untracked files part of the diff without staging them).
+3. **Recent commits** – the last 10 (or the N the user said); with 10 or
+   fewer commits it is the whole history:
+   `omb_diff "$(git rev-parse -q --verify HEAD~10 || echo "$EMPTY")"`.
+4. **Not a git repository** – `omb_nogit`, run in the folder. Pass only the
+   source folders when it also holds generated, vendored or binary files
+   (`omb_nogit src/ lib/`).
 
 Say in one line which rung you took and how big it is, and list the file
 names ("no branch here – hunting your uncommitted changes: src/solver.py,
@@ -490,8 +487,8 @@ the out-of-band flow instead:
    diff itself it ignores `upload` and just starts, and you never touch the
    upload at all. **Except a no-branch ladder payload:** leave `base_branch`
    out there (the server would review its own empty merge-base diff instead),
-   and in the script below write the chosen rung's output (`omb_rung2`,
-   `omb_rung3 N`) to `diff.patch` instead of `git diff "$BASE"`.
+   and in the script below write the chosen rung's output (`omb_diff HEAD`,
+   `omb_nogit`, …) to `diff.patch` instead of `git diff "$BASE"`.
    A `review_id` with `status: running` instead of
    `awaiting_upload` means exactly that – nothing to upload, go monitor.
 2. Build the payload with a script, reading straight from disk, in a private
