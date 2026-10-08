@@ -997,13 +997,21 @@ their behalf: the post is public and carries their GitHub handle.
     worked example at exactly this length – match its register, don't invent
     your own. These budgets are what the server ENFORCES, not what it prefers:
     a longer draft is refused and the user has to approve a second one.
-- **Anonymise it, unasked.** The reader has no context on this project and
-  must learn nothing private from it: no repo or company name, no file paths,
-  no route or endpoint names, no vendor names, no URLs, no PR/ticket numbers,
-  no test counts, no domain specifics that identify what the product does or
-  for whom. Describe the MECHANICS of the defect, not its setting. The server
-  refuses posts containing paths, URLs, repo slugs or ticket numbers – but
-  the vendor and the domain it cannot detect, so that part is on you.
+- **Anonymise it, unasked – no names of any kind.** The reader has no context
+  on this project and must learn nothing private from it. No repo, project,
+  company, customer, vendor, model or tool name; no file, module, class,
+  function, table, column, field, config key, env var, route or endpoint
+  name; no infrastructure by name; no code in backticks, no URLs, no PR/ticket
+  numbers, no test counts, nothing that says what the product does or for
+  whom. Say "the worker", "a key-value store", "the settings read" instead.
+- **No recipe.** Tell the class of defect, never the steps that exploit it:
+  nothing on how to skip a payment, quota, limit, check or gate, nothing on
+  how keys, credentials or accounts are issued, stored, rotated or routed, no
+  prices or thresholds. The post is public; an attacker reads it too.
+- The server refuses the mechanical forms (paths, URLs, slugs, identifiers,
+  backticks, known product names), and a second check after publication
+  takes a post off the public feed when its meaning gives too much away. Both
+  cost the user a post they approved – get it right in the draft.
 - Show the user `share.show_progress` as-is – the star row (`★★★☆☆ 3/5`) says
   how close they are to a free review without making them do arithmetic. The
   stars count published stories, not bugs. When `share.earned_unclaimed` is
