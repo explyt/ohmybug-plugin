@@ -2658,36 +2658,45 @@ fi
 rm -rf "$UP"
 
 # THE NO-BRANCH LADDER, RUN — not read. Its rungs reach files no branch diff
-# ever did (untracked ones, the whole history), so the exclusions and the
-# throwaway index are guards: SKILL.md's own bash runs here on a repo holding
-# every secret name step 2 and secret-scan.sh's KEY_FILE know, with a file
-# already staged, and must send none of them nor touch the user's index.
+# ever did (untracked ones, the whole history), so the secret filter and the
+# throwaway index are guards: SKILL.md's own bash block is sourced here and
+# rungs 1-3 run on a repo holding secret names at every depth — `.env`
+# variants, the key files secret-scan.sh's KEY_FILE names, and directories
+# named for secrets — with a file already staged. None may be sent, and the
+# user's index must not move.
 LD=$(mktemp -d)
-git -C "$LD" init -q && printf 'a\n' > "$LD/a.py" && git -C "$LD" add a.py \
-  && git -C "$LD" -c user.email=t@t -c user.name=t commit -qm base
-mkdir -p "$LD/deploy" "$LD/sub"
-for f in .env .env.local .envrc .env-production .env_local sub/.ENV id_rsa id_dsa id_ecdsa id_ed25519 \
-         deploy/id_ed25519 cert.pem server.KEY cert.p12 cert.pfx API_SECRETS.txt aws_credentials; do
-  printf 's\n' > "$LD/$f"
-done
-printf 'b\n' >> "$LD/a.py" && git -C "$LD" add a.py && printf 'new\n' > "$LD/sub/new.py"
 LADDER=$(python3 - plugins/bughunter/skills/bughunter/SKILL.md <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
 i = s.find("#### No branch, no pull request")
-sec = s[i:] if i >= 0 else ""
-blocks = re.findall(r"```bash\n(.*?)```", sec[:sec.find("Say in one line")] if sec else "", re.S)
-# the X/EMPTY block, then rung 2's block with its list-item indent removed
-print("\n".join([blocks[0], re.sub(r"(?m)^   ", "", blocks[1])]) if len(blocks) >= 2 else "")
+m = re.search(r"```bash\n(.*?)```", s[i:], re.S) if i >= 0 else None
+print(m.group(1) if m and "omb_rung2" in m.group(1) else "")
 PY
 )
 if [ -z "$LADDER" ]; then
-  echo "FAIL ladder: the no-branch ladder's bash blocks are gone from SKILL.md"; fails=$((fails + 1))
+  echo "FAIL ladder: the no-branch ladder's bash block (omb_rung2/omb_rung3) is gone from SKILL.md"; fails=$((fails + 1))
 else
-  BEFORE=$(git -C "$LD" status --porcelain)
-  SENT=$(cd "$LD" && bash -c "$LADDER" 2>/dev/null | sed -n 's|^diff --git a/\(.*\) b/.*|\1|p' | sort | tr '\n' ' ')
-  [ "$SENT" = "a.py sub/new.py " ] || { echo "FAIL ladder: rung 2 sent [$SENT], want [a.py sub/new.py ]"; fails=$((fails + 1)); }
-  [ "$(git -C "$LD" status --porcelain)" = "$BEFORE" ] || { echo "FAIL ladder: rung 2 changed the user's index"; fails=$((fails + 1)); }
+  printf '%s\n' "$LADDER" > "$LD/ladder.sh"
+  OUT=$(cd "$LD" && mkdir r && cd r && bash -c '
+    set -u; export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q . && . ../ladder.sh
+    mkdir -p deploy sub secrets config/credentials src
+    for f in .env .env.local .envrc .env-production sub/.ENV id_rsa id_dsa id_ecdsa id_ed25519 deploy/id_ed25519 \
+             cert.pem server.KEY cert.p12 cert.pfx API_SECRETS.txt aws_credentials secrets/config.yml \
+             config/credentials/gcp.json src/.env; do printf "s\n" > "$f"; done
+    printf "a\n" > a.py; printf "m\n" > src/m.py
+    names() { sed -n "s|^diff --git a/\(.*\) b/.*|\1|p" | sort | tr "\n" " "; }
+    echo "unborn2=$(omb_rung2 | names)"
+    git add -A && git commit -qm base && printf "b\n" >> a.py && git add a.py && printf "n\n" > sub/new.py
+    before=$(git status --porcelain)
+    echo "rung2=$(omb_rung2 | names)"
+    [ "$before" = "$(git status --porcelain)" ] && echo "index=same" || echo "index=moved"
+    echo "rung3=$(omb_rung3 | names)"
+    echo "rung1=$(omb_diff_clean "$EMPTY" HEAD -- src/ | names)"
+  ' 2>&1)
+  for want in "unborn2=a.py src/m.py " "rung2=a.py sub/new.py " "index=same" "rung3=a.py src/m.py " "rung1=src/m.py "; do
+    printf '%s\n' "$OUT" | grep -qxF "$want" || { echo "FAIL ladder: want [$want] in: $(printf '%s' "$OUT" | tr '\n' '|')"; fails=$((fails + 1)); }
+  done
 fi
 rm -rf "$LD"
 
