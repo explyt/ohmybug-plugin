@@ -2046,10 +2046,14 @@ SH=$(mktemp -d)
 hint() { OMB_STATE_DIR="$SH/state" HOME="$SH" bash "$G/scan-hint.sh"; }
 [ -z "$(PLUGIN_DATA=/x hint)" ] || { printf 'FAIL scan-hint: spoke to Codex, which has no /bughunter:scan\n'; fails=$((fails + 1)); }
 [ ! -e "$SH/state/scan-hint-v1" ] || { printf 'FAIL scan-hint: Codex consumed the once-per-machine mark\n'; fails=$((fails + 1)); }
-case "$(hint)" in
-  *'/bughunter:scan'*'"additionalContext"'*) ;;
-  *) printf 'FAIL scan-hint: the first session did not name the command to the user and the assistant\n'; fails=$((fails + 1)) ;;
+HINT=$(hint)
+case "$HINT" in
+  *'/bughunter:review'*'/bughunter:scan'*'/bughunter:stats'*'"additionalContext"'*) ;;
+  *) printf 'FAIL scan-hint: the first session did not name the commands to the user and the assistant\n'; fails=$((fails + 1)) ;;
 esac
+# The welcome is the assistant's to say: a systemMessage alone is small print the user scrolls past.
+printf '%s' "$HINT" | python3 -c 'import sys,json; c=json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"]; sys.exit(0 if "in your first reply" in c and "/bughunter:review" in c else 1)' \
+  || { printf 'FAIL scan-hint: the assistant is not told to introduce OhMyBug in its first reply\n'; fails=$((fails + 1)); }
 [ -z "$(hint)" ] || { printf 'FAIL scan-hint: said it twice\n'; fails=$((fails + 1)); }
 rm -rf "$SH"
 
