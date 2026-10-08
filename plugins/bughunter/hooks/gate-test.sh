@@ -2657,6 +2657,40 @@ PY
 fi
 rm -rf "$UP"
 
+# THE NO-BRANCH LADDER, RUN — not read. Its rungs reach files no branch diff
+# ever did (untracked ones, the whole history), so the exclusions and the
+# throwaway index are guards: SKILL.md's own bash runs here on a repo holding
+# every secret name step 2 and secret-scan.sh's KEY_FILE know, with a file
+# already staged, and must send none of them nor touch the user's index.
+LD=$(mktemp -d)
+git -C "$LD" init -q && printf 'a\n' > "$LD/a.py" && git -C "$LD" add a.py \
+  && git -C "$LD" -c user.email=t@t -c user.name=t commit -qm base
+mkdir -p "$LD/deploy" "$LD/sub"
+for f in .env .env.local .envrc .env-production .env_local sub/.ENV id_rsa id_dsa id_ecdsa id_ed25519 \
+         deploy/id_ed25519 cert.pem server.KEY cert.p12 cert.pfx API_SECRETS.txt aws_credentials; do
+  printf 's\n' > "$LD/$f"
+done
+printf 'b\n' >> "$LD/a.py" && git -C "$LD" add a.py && printf 'new\n' > "$LD/sub/new.py"
+LADDER=$(python3 - plugins/bughunter/skills/bughunter/SKILL.md <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+i = s.find("#### No branch, no pull request")
+sec = s[i:] if i >= 0 else ""
+blocks = re.findall(r"```bash\n(.*?)```", sec[:sec.find("Say in one line")] if sec else "", re.S)
+# the X/EMPTY block, then rung 2's block with its list-item indent removed
+print("\n".join([blocks[0], re.sub(r"(?m)^   ", "", blocks[1])]) if len(blocks) >= 2 else "")
+PY
+)
+if [ -z "$LADDER" ]; then
+  echo "FAIL ladder: the no-branch ladder's bash blocks are gone from SKILL.md"; fails=$((fails + 1))
+else
+  BEFORE=$(git -C "$LD" status --porcelain)
+  SENT=$(cd "$LD" && bash -c "$LADDER" 2>/dev/null | sed -n 's|^diff --git a/\(.*\) b/.*|\1|p' | sort | tr '\n' ' ')
+  [ "$SENT" = "a.py sub/new.py " ] || { echo "FAIL ladder: rung 2 sent [$SENT], want [a.py sub/new.py ]"; fails=$((fails + 1)); }
+  [ "$(git -C "$LD" status --porcelain)" = "$BEFORE" ] || { echo "FAIL ladder: rung 2 changed the user's index"; fails=$((fails + 1)); }
+fi
+rm -rf "$LD"
+
 cleanup_scratch
 if [ "$(git status --porcelain | grep -v "$SCRATCH" || true)" != "$TREE_BEFORE" ]; then
   printf 'FAIL the suite changed the working tree it was run in:\n%s\n' "$(git status --porcelain)"

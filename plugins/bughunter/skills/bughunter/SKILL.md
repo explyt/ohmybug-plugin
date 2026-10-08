@@ -308,11 +308,15 @@ base), take the ladder below.
 Every rung sends only what step 2's privacy rules allow – these rungs reach
 files no branch diff ever did (untracked ones, the whole history), and the
 secret scan before a submit recognises a `.env` by name only among attached
-files, not inside a diff. So every git rung carries the same exclusions as
-pathspecs, and the user's own index is never touched:
+files, not inside a diff. So every git rung carries step 2's exclusions as
+pathspecs – `.env*` and the key files the secret scan itself names – and the
+user's own index is never touched:
 
 ```bash
-X=(':!*.env' ':!*.env.*' ':!*secret*' ':!*credential*' ':!*.pem' ':!*.key' ':!*id_rsa*')
+X=(':(exclude,icase,glob)**/.env*' ':(exclude,icase,glob)**/*secret*' ':(exclude,icase,glob)**/*credential*'
+   ':(exclude,icase,glob)**/id_rsa*' ':(exclude,icase,glob)**/id_dsa*' ':(exclude,icase,glob)**/id_ecdsa*'
+   ':(exclude,icase,glob)**/id_ed25519*' ':(exclude,icase,glob)**/*.pem' ':(exclude,icase,glob)**/*.key'
+   ':(exclude,icase,glob)**/*.p12' ':(exclude,icase,glob)**/*.pfx')
 EMPTY=$(git hash-object -t tree /dev/null)
 ```
 
@@ -349,8 +353,11 @@ rung is larger, ask which part matters (a folder, a feature) rather than
 cutting silently.
 
 Send it as a payload (rung 3 of "How the diff gets here" below; `upload: true`
-when it is large), with `meta.repo` + `meta.ref` when the repository is on
-GitHub and `meta.repo_hint` saying which rung this is. The recorder will
+when it is large) with `meta.repo_hint` saying which rung this is, and
+**without `meta.base_branch`**: repo + ref + base_branch tell the server it
+can fetch the merge-base diff itself, and it then reviews that instead of
+your payload – on a `main` whose head is its own base, an empty diff.
+`meta.repo` and `meta.ref` alone are fine (they let reviewers read files). The recorder will
 answer that the payload does not match the working tree: that note is about
 the pre-merge gate, which has nothing to gate here – mention it in one line
 at most, never as a failure. Everything after the submit – the wait, the
