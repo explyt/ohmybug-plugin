@@ -2657,6 +2657,68 @@ PY
 fi
 rm -rf "$UP"
 
+# THE NO-BRANCH LADDER, RUN — not read. Its rungs reach files no branch diff
+# ever did (untracked ones, the whole history), so the secret filter and the
+# throwaway index are guards: SKILL.md's own bash block is sourced here and
+# every rung runs on a repo holding secret names at every depth — `.env`
+# variants, the key files secret-scan.sh's KEY_FILE names, and directories
+# named for secrets — with a file already staged, a non-ASCII name, from the
+# root AND from a subdirectory, and on a folder with no git. None of the
+# secrets may be sent, and the user's index must not move.
+LD=$(mktemp -d)
+LADDER=$(python3 - plugins/bughunter/skills/bughunter/SKILL.md <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+i = s.find("#### No branch, no pull request")
+m = re.search(r"```bash\n(.*?)```", s[i:], re.S) if i >= 0 else None
+print(m.group(1) if m and "omb_nogit" in m.group(1) and "omb_commits" in m.group(1) else "")
+PY
+)
+if [ -z "$LADDER" ]; then
+  echo "FAIL ladder: the no-branch ladder's bash block (omb_diff/omb_commits/omb_nogit) is gone from SKILL.md"; fails=$((fails + 1))
+else
+  printf '%s\n' "$LADDER" > "$LD/ladder.sh"
+  OUT=$(cd "$LD" && mkdir r ng && cd r && bash -c '
+    set -u; export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q . && . ../ladder.sh
+    mkdir -p deploy sub secrets config/credentials src/solver
+    for f in .env .env.local .envrc .env-production sub/.ENV id_rsa id_dsa id_ecdsa id_ed25519 deploy/id_ed25519 \
+             cert.pem server.KEY cert.p12 cert.pfx API_SECRETS.txt aws_credentials secrets/config.yml \
+             config/credentials/gcp.json src/.env; do printf "s\n" > "$f"; done
+    printf "a\n" > a.py; printf "m\n" > src/solver/m.py
+    # git quotes a non-ASCII name in the header: names() skips it, and its + line is the proof it was sent.
+    names() { sed -n "s|^diff --git a/\([^ ]*\) .*|\1|p" | sort | tr "\n" " "; }
+    echo "unborn=$(omb_diff "$EMPTY" | names)"
+    git add -A && git commit -qm base
+    echo "folder=$(omb_diff "$EMPTY" src/solver/ | names)"
+    printf "b\n" >> a.py && git add a.py && printf "n\n" > sub/new.py && printf "r\n" > "résumé.py"
+    before=$(git status --porcelain)
+    echo "rung2=$(omb_diff HEAD | names)"
+    echo "accent=$(omb_diff HEAD | grep -c "^+r$")"
+    [ "$before" = "$(git status --porcelain)" ] && echo "index=same" || echo "index=moved"
+    # The last N commits are commits only: the dirty a.py, sub/new.py and résumé.py stay out.
+    echo "commits1=$(omb_commits 1 | names)"
+    echo "commits9=$(omb_commits 9 | names)"
+    # From a subdirectory, with NEW secrets in the root and in other folders: only `top`
+    # keeps them out of a whole-repo rung run from src/.
+    printf "s\n" > .env.new && printf "s\n" > secrets/new.yml && printf "s\n" > sub/id_rsa
+    cd src && echo "sub2=$(omb_diff HEAD | names)" && echo "subroot=$(omb_diff "$EMPTY" | names)" \
+      && echo "subfolder=$(omb_diff "$EMPTY" solver/ | names)" && cd ..
+    cd ../ng && mkdir k && printf "q\n" > q.py && printf "s\n" > .env && printf "s\n" > k/a.pem
+    echo "nogit=$(omb_nogit | names)"; [ -e .git ] && echo "nogit=left .git" || true
+  ' 2>&1)
+  for want in "unborn=a.py src/solver/m.py " "folder=src/solver/m.py " "rung2=a.py sub/new.py " \
+              "accent=1" "index=same" "commits1=a.py src/solver/m.py " "commits9=a.py src/solver/m.py " \
+              "sub2=a.py sub/new.py " "subroot=a.py src/solver/m.py sub/new.py " \
+              "subfolder=src/solver/m.py " "nogit=q.py "; do
+    printf '%s\n' "$OUT" | grep -qxF "$want" || { echo "FAIL ladder: want [$want] in: $(printf '%s' "$OUT" | tr '\n' '|')"; fails=$((fails + 1)); }
+  done
+  grep -qF '3. **Recent commits** – `omb_commits 10`' plugins/bughunter/skills/bughunter/SKILL.md \
+    || { echo "FAIL ladder: SKILL.md rung 3 no longer calls omb_commits (the function that falls back to the whole history)"; fails=$((fails + 1)); }
+  printf '%s\n' "$OUT" | grep -q 'left .git' && { echo "FAIL ladder: omb_nogit left a .git behind"; fails=$((fails + 1)); }
+fi
+rm -rf "$LD"
+
 cleanup_scratch
 if [ "$(git status --porcelain | grep -v "$SCRATCH" || true)" != "$TREE_BEFORE" ]; then
   printf 'FAIL the suite changed the working tree it was run in:\n%s\n' "$(git status --porcelain)"

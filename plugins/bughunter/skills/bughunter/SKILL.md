@@ -1,6 +1,6 @@
 ---
 name: bughunter
-description: 'Run the OhMyBug cloud bug hunt as the LAST merge gate. Use for review, bug-hunt, orchestration-review, deep-review, PR/MR, or merge requests. Never substitute a local advisory review; only server-backed review_report plus attestation can authorize merge.'
+description: 'Run the OhMyBug cloud bug hunt as the LAST merge gate, or on any code the user points at (uncommitted changes, recent commits, a folder with no git). Use for review, bug-hunt, "check my code", orchestration-review, deep-review, PR/MR, or merge requests. Never substitute a local advisory review; only server-backed review_report plus attestation can authorize merge.'
 ---
 
 # OhMyBug bug hunt
@@ -296,6 +296,86 @@ git diff "$BASE"
 
 If the user asked to review something narrower, respect that.
 
+#### No branch, no pull request, no remote – still hunt
+
+Many people never open a pull request: the agent commits straight to `main`,
+the code lives only on the laptop, or the folder is not a git repository at
+all. That is not a reason to stop – the server reviews any unified diff, and
+brand-new code is just a diff against nothing. When the default scope above
+is empty or cannot be computed (no `origin`, no merge base, HEAD equals the
+base), take the ladder below.
+
+Every rung sends only what step 2's privacy rules allow. These rungs reach
+files no branch diff ever did (untracked ones, the whole history), and the
+secret scan before a submit recognises a `.env` by name only among attached
+files, not inside a diff, and does not see uploads at all. So every rung is
+ONE `git diff` whose secret filter is git's own exclude pathspecs: a path is
+dropped when any of its segments is a secret name – `secrets/config.yml` as
+much as `.env` – at any depth, in any case, from any directory, and file
+names never pass through the shell. The diff runs on a throwaway copy of the
+index, never the user's own. Each agent shell call starts a fresh process,
+so paste this block, as it stands, at the top of EVERY command that calls a
+rung – the upload script included:
+
+```bash
+EMPTY=$(git hash-object -t tree /dev/null)
+OMB_SECRETS=('.env*' '*secret*' '*credential*' 'id_rsa*' 'id_dsa*' 'id_ecdsa*' 'id_ed25519*' '*.pem' '*.key' '*.p12' '*.pfx')
+# omb_diff <base> [paths...]: everything from <base> to the working tree, new files
+# included, secrets excluded. Paths are relative to where you stand; none = the whole repo.
+omb_diff() {
+  local base=$1 T rc p x=(); shift
+  for p in "${OMB_SECRETS[@]}"; do x+=(":(exclude,top,icase,glob)**/$p" ":(exclude,top,icase,glob)**/$p/**"); done
+  T=$(mktemp); cp "$(git rev-parse --git-path index)" "$T" 2>/dev/null || rm -f "$T"
+  GIT_INDEX_FILE=$T git add -N -- :/ && GIT_INDEX_FILE=$T git diff "$base" -- "${@:-:/}" "${x[@]}"
+  rc=$?; rm -f "$T"; return $rc
+}
+# omb_commits <N>: the last N commits only – commit to commit, nothing from the working
+# tree; with N or fewer commits, the whole history. Secrets excluded the same way.
+omb_commits() {
+  local p x=()
+  for p in "${OMB_SECRETS[@]}"; do x+=(":(exclude,top,icase,glob)**/$p" ":(exclude,top,icase,glob)**/$p/**"); done
+  git diff "$(git rev-parse -q --verify "HEAD~$1" || echo "$EMPTY")" HEAD -- :/ "${x[@]}"
+}
+# omb_nogit [paths...]: a folder that is not a git repository, as new code. The git
+# directory is a throwaway one outside the folder; nothing is left behind.
+omb_nogit() {
+  local G rc; G=$(mktemp -d)
+  git --git-dir="$G" --work-tree=. init -q && GIT_DIR=$G GIT_WORK_TREE=. omb_diff "$EMPTY" "$@"
+  rc=$?; rm -rf "$G"; return $rc
+}
+```
+
+Work down the list and stop at the first rung that yields code:
+
+1. **The user named files or a folder** – the whole of it, committed or not:
+   `omb_diff "$EMPTY" src/solver/`. **"The last N commits"** – `omb_commits N`.
+2. **Uncommitted work, new files included** – `omb_diff HEAD`, or
+   `omb_diff "$EMPTY"` before the first commit (`git add -N` on the index copy
+   makes untracked files part of the diff without staging them).
+3. **Recent commits** – `omb_commits 10`; with 10 or fewer commits it is
+   the whole history.
+4. **Not a git repository** – `omb_nogit`, run in the folder. Pass only the
+   source folders when it also holds generated, vendored or binary files
+   (`omb_nogit src/ lib/`).
+
+Say in one line which rung you took and how big it is, and list the file
+names ("no branch here – hunting your uncommitted changes: src/solver.py,
+src/io.py, tests/test_solver.py – 380 lines"), so the user can redirect or
+drop a file before anything is sent. The payload limit is 2 MB of diff: if a
+rung is larger, ask which part matters (a folder, a feature) rather than
+cutting silently.
+
+Send it as a payload (rung 3 of "How the diff gets here" below; `upload: true`
+when it is large) with `meta.repo_hint` saying which rung this is, and
+**without `meta.base_branch`**: repo + ref + base_branch tell the server it
+can fetch the merge-base diff itself, and it then reviews that instead of
+your payload – on a `main` whose head is its own base, an empty diff.
+`meta.repo` and `meta.ref` alone are fine (they let reviewers read files). The recorder will
+answer that the payload does not match the working tree: that note is about
+the pre-merge gate, which has nothing to gate here – mention it in one line
+at most, never as a failure. Everything after the submit – the wait, the
+verdicts, the bill – is the same as for a pull request.
+
 ### 2. Pack context – and show the manifest
 
 Select context files the reviewers will need: direct callers of changed
@@ -413,7 +493,12 @@ the out-of-band flow instead:
    it returns `upload_url` (one-time) + `review_id` + `status_url`. Always send
    `meta.repo` + `ref` + `base_branch` anyway: when the server can fetch the
    diff itself it ignores `upload` and just starts, and you never touch the
-   upload at all. A `review_id` with `status: running` instead of
+   upload at all. **Except a no-branch ladder payload:** leave `base_branch`
+   out there (the server would review its own empty merge-base diff instead),
+   and in the script below write the chosen rung's output (`omb_diff HEAD`,
+   `omb_commits 10`, `omb_nogit`, …) to `diff.patch`, with the ladder block
+   pasted above it in the same command instead of `git diff "$BASE"`.
+   A `review_id` with `status: running` instead of
    `awaiting_upload` means exactly that – nothing to upload, go monitor.
 2. Build the payload with a script, reading straight from disk, in a private
    directory of its own – never a fixed path in `/tmp`: on a shared machine
@@ -1042,9 +1127,11 @@ line and stop; the person reading has the hatch, and it is theirs to use.
 
 ## Repository scan (`scan_repo`, `/bughunter:scan`)
 
-A one-off hunt of the code a GitHub repository changed in its last days –
-the way to try OhMyBug with no pull request open, and the thing to offer a
-user who just installed the plugin and asks what it can do. The server reads
+A one-off hunt of the code a GitHub repository changed in its last days.
+For a user who just installed the plugin and asks what it can do, offer
+`/bughunter:review` first – it hunts whatever is here, with no pull request,
+no GitHub and no git (the ladder in step 1) – and this scan as the option for
+a GitHub repository with the App installed. The server reads
 the window from GitHub, clones the repository on its side, runs a deep hunt
 over the window's changed code with two engines – about an hour – and
 returns ONE merged review. It is not a merge

@@ -111,7 +111,14 @@ Authorization header disables the OAuth flow.)
 
 ## First run: no pull request needed
 
-`/bughunter:scan` hunts the code this repository changed in the last 30 days
+Open your agent in the project and run `/bughunter:review` (or say "hunt
+bugs in my code"). It hunts whatever is there: a branch against `main`,
+uncommitted changes, the last commits, or – in a folder that is not a git
+repository at all – the files themselves as new code. It says which one it
+picked before anything is sent, and you can point it elsewhere ("hunt
+`src/solver/`", "the last 3 commits").
+
+On a GitHub repository, `/bughunter:scan` hunts the code this repository changed in the last 30 days
 (`/bughunter:scan 14` for two weeks). The server reads the history from
 GitHub and clones the repository on its side — nothing is uploaded from your
 machine — then runs a deep hunt (about an hour) over the window's changed
