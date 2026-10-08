@@ -22,8 +22,25 @@ function emit(context, hookEventName) {
   }));
 }
 
+// Once per machine, the first Codex session after install: what to say to try it.
+// Codex has no slash commands, so the welcome names phrases, and asks the assistant
+// to pass them on, since a systemMessage alone is small print.
+const WELCOME = 'OhMyBug is installed: a cloud bug hunt for your code, $10 flat only when a real bug is found (the first is free). No pull request needed. Ask Codex: "Run the OhMyBug cloud hunt on my code" (your branch, uncommitted changes, recent commits, or a folder with no git), "Run an OhMyBug scan of this repository" (a GitHub repository, everything changed in the last 30 days, about an hour), or "Show my OhMyBug balance and record". Nothing starts until you ask.';
+
+function firstSession() {
+  const fs = require('fs'), path = require('path'), os = require('os');
+  const dir = process.env.OMB_STATE_DIR || path.join(os.homedir(), '.ohmybug');
+  const mark = path.join(dir, 'codex-welcome-v1');
+  try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(mark, '', { flag: 'wx' }); return true; } catch (_) { return false; }
+}
+
 if (event === 'session') {
-  emit(ROUTING, 'SessionStart');
+  if (firstSession()) {
+    process.stdout.write(JSON.stringify({
+      systemMessage: WELCOME,
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `${ROUTING} ${WELCOME} (For the assistant: in your first reply this session, tell the user in two or three plain lines that OhMyBug is installed and what to ask first, before you answer what they asked. Say it once; do not start a hunt.)` }
+    }));
+  } else emit(ROUTING, 'SessionStart');
   process.exit(0);
 }
 
