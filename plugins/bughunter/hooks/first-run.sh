@@ -1,9 +1,12 @@
 #!/bin/bash
 # Say the one thing a new install cannot discover by itself: in auto mode the
-# permission classifier refuses these tools, because sending a diff to a cloud
-# service is exactly what it is built to stop. The refusal is correct. It is
-# also silent from the user's side — the session simply stalls with "denied by
-# the classifier", and the rule that fixes it is not guessable.
+# permission classifier reviews every call these tools make, because sending
+# code to a cloud service is exactly what it is built to watch. Measured on
+# Claude Code 2.1.293: it let a hunt start (a payload submit and a repo+ref one
+# alike), let small file answers through, and refused a large one outright
+# ("too long for the classifier") — so without the rule the reviewers can lose
+# the files they asked for mid-run, and the refusal is silent from the user's
+# side. The rule that fixes it is not guessable.
 #
 # Claude Code gives a plugin NO way to ship a permission rule or to ask for one
 # at install time, and that is deliberate: a plugin that widens its own
@@ -52,15 +55,13 @@ fi
 mkdir -p "$STATE" && : > "$MARK"
 
 read -r -d '' NOTE <<'EOF' || true
-OhMyBug: the hunt runs in our cloud, so its tools send a diff off this machine.
-In auto mode the permission classifier refuses that by default and the hunt
-never starts. One rule fixes it, and only you can add it — /permissions -> Add
-rule -> mcp__plugin_bughunter_ohmybug__* (or just
-mcp__plugin_bughunter_ohmybug__submit_review). Nothing will add it for you, and
-without it nothing else helps: the classifier reads the tool's schema, so even
-the mode that sends no bytes at all is refused the same way. Until you add it,
-the merge gate stands down rather than trapping you: it says the hunt could not
-run and lets the merge through.
+OhMyBug: the hunt runs in our cloud, so its tools send code off this machine.
+In auto mode the permission classifier reviews each of those calls: it may
+refuse the files the reviewers ask for mid-run (a large file is refused
+outright), and the hunt then goes on without them. One rule lets the OhMyBug
+tools through, and only you can add it — /permissions -> Add rule ->
+mcp__plugin_bughunter_ohmybug__* . Nothing will add it for you. With it, the
+files go through the plugin, read from disk; no shell command uploads them.
 EOF
 
 # systemMessage is what the USER reads; additionalContext is what the assistant

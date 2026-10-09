@@ -15,6 +15,17 @@
 #
 # It reads whatever payload the call carries: submit_review's diff and files,
 # provide_files' files. A repo+ref submit carries none, so nothing is read.
+#
+# It also FILLS provide_files' `paths`: the agent names the requested files,
+# and this hook reads them from disk and hands the call on with their contents
+# (updatedInput). In auto mode the classifier refuses a shell POST of repo
+# files as data exfiltration, and the permission rule the first-run notice
+# suggests covers MCP tools only; this keeps the answer an MCP call that rule
+# covers, with no bytes through the model's context. It never decides a
+# permission: it only rewrites the call the user already allowed. The bytes it
+# reads are scanned below like any other payload. Not under Codex (it sets
+# PLUGIN_DATA): there the paths reach the server, which refuses them and points
+# at its own door.
 # ponytail: the out-of-band upload (upload=true, bytes POSTed by a script later) is not scanned here.
 #
 # It is the ONE PreToolUse hook on submit_review, and it hands the call on to
@@ -30,8 +41,11 @@ pass() { # the call goes on: a submit is recorded exactly as before
   case "$INPUT" in *'__submit_review"'*) printf '%s' "$INPUT" | exec bash "$STAMP" ;; esac
   exit 0
 }
-# The user's way out, in the env block of settings.json: no scan at all.
-[ "${OHMYBUG_SECRET_SCAN:-1}" = 0 ] && pass
+# The user's way out, in the env block of settings.json: no scan at all. A
+# provide_files still goes through python, which fills its paths unscanned.
+if [ "${OHMYBUG_SECRET_SCAN:-1}" = 0 ]; then
+  case "$INPUT" in *'__provide_files"'*) ;; *) pass ;; esac
+fi
 command -v python3 >/dev/null 2>&1 || {
   printf '%s\n' '{"systemMessage":"OhMyBug: secret scan skipped before this upload (python3 not found)."}'
   pass
@@ -53,6 +67,53 @@ if ti is None:
     ti = {}
 if not isinstance(ti, dict):
     raise TypeError("tool_input")
+
+def stop(rc, msg):
+    sys.stdout.buffer.write((msg + "\n").encode("utf-8"))
+    sys.stdout.flush()
+    sys.exit(rc)
+
+# The selection rules of the files_url recipe the server hands out: the git top level of
+# the session directory, a regular file whose real path (symlinks followed)
+# git lists as tracked or untracked-not-ignored. Missing, a directory, under
+# .git or resolving outside: skipped and named. Inside the work tree but not
+# listed (ignored, or in a submodule): nothing is sent, the agent decides.
+filled = None
+if str(d.get("tool_name") or "").endswith("__provide_files") and "paths" in ti and not os.environ.get("PLUGIN_DATA"):
+    import subprocess
+    paths = ti["paths"]
+    if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+        raise TypeError("paths")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        top = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], cwd=d.get("cwd") or None,
+                                      env=env, stderr=subprocess.DEVNULL).rstrip(b"\n")
+    except (OSError, subprocess.CalledProcessError):
+        stop(5, "")
+    top = os.path.realpath(top)
+    listed = set(subprocess.check_output(["git", "ls-files", "-z", "-co", "--exclude-standard"], cwd=top, env=env).split(b"\0"))
+    files = list(ti.get("files") or [])
+    sent, skipped, unlisted = [], [], []
+    for p in paths:
+        full = os.path.join(top, os.fsencode(p))
+        rel = os.path.relpath(os.path.realpath(full), top).replace(os.fsencode(os.sep), b"/") if os.path.isfile(full) else None
+        if rel is not None and rel in listed:
+            sent.append(p)
+            files.append({"path": p, "content": open(full, encoding="utf-8", errors="replace").read()})
+        elif rel is not None and not rel.startswith(b"../") and rel.split(b"/")[0] != b".git":
+            unlisted.append(p)
+        else:
+            skipped.append(p)
+    if unlisted:
+        stop(4, "\n".join("  - " + p for p in unlisted))
+    filled = {k: v for k, v in ti.items() if k != "paths"}
+    filled["files"] = files
+    ti = filled
+    note = "OhMyBug read %d requested file(s) from disk for provide_files%s." % (len(sent), (": " + ", ".join(sent)) if sent else "")
+    if skipped:
+        note += " Not sent (missing, a directory, under .git or outside the repository): " + ", ".join(skipped) + "."
+if os.environ.get("OHMYBUG_SECRET_SCAN", "1") == "0":
+    ti = {}
 
 SHAPES = [
     ("AWS access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
@@ -149,12 +210,27 @@ for f in files or []:
 
 if hits:
     shown = hits[:12] + (["... and %d more" % (len(hits) - 12)] if len(hits) > 12 else [])
-    sys.stdout.buffer.write(("\n".join(shown) + "\n").encode("utf-8"))
-    sys.stdout.flush()
-    sys.exit(3)
+    stop(3, "\n".join(shown))
+if filled is not None:
+    stop(0, json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": filled, "additionalContext": note}}))
 ' 2>/dev/null)
 rc=$?
-[ "$rc" = 0 ] && pass
+if [ "$rc" = 0 ]; then
+  [ -n "$OUT" ] && printf '%s\n' "$OUT"
+  pass
+fi
+if [ "$rc" = 4 ] && [ -n "$OUT" ]; then
+  {
+    echo "OhMyBug: git does not list these requested files (ignored: build output, generated code, a secret; or in a submodule), so nothing was sent:"
+    printf '%s\n' "$OUT"
+    echo "Call provide_files again for the same review without them in paths. If the user approves sending them, put them in files with their content instead."
+  } >&2
+  exit 2
+fi
+if [ "$rc" = 5 ]; then
+  echo "OhMyBug: provide_files paths are read from the git repository this session runs in, and this directory is not inside one, so nothing was sent. Call provide_files again with files [{path, content}] for the files you approve." >&2
+  exit 2
+fi
 if [ "$rc" != 3 ] || [ -z "$OUT" ]; then
   {
     echo "OhMyBug: could not scan this payload for credentials, so it was NOT sent."
