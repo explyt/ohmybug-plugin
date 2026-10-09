@@ -192,7 +192,7 @@ Turn the mod off with
 |---|---|---|
 | `submit_review` | `diff`, `files[{path, content}]`, `meta{language?, base_branch?, repo?, ref?}` | `{review_id, status, mode, pending_verdicts[]}` |
 | `get_findings` | `review_id` | `{status: running\|needs_files\|done\|failed, findings[{finding_id, severity, file, line?, title, failure_scenario, suggested_fix?}]}` |
-| `provide_files` | `review_id`, `files[{path, content}]` | `{status, delivered}` |
+| `provide_files` | `review_id`, `paths[]` (Claude Code: the plugin's hook reads them from disk) or `files[{path, content}]` | `{status, delivered}` |
 | `confirm_findings` | `review_id`, `verdicts[{finding_id, verdict: REAL\|NOT_REAL\|UNCLEAR, reason}]` | `{confirmed, minor_confirmed, billed_usd, free_review_used, balance_usd, receipt_id}` |
 | `get_balance` | — | `{balance_usd, free_reviews_left, confirmed_total, stats{…}}` |
 

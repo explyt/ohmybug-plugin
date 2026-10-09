@@ -117,4 +117,48 @@ check "unreadable input refuses" "$rc" 2
 OHMYBUG_SECRET_SCAN=0 row "OHMYBUG_SECRET_SCAN=0 lets a key through" 0 "$(j "{'diff':'+k=\"$AWS\"'}")"
 OHMYBUG_SECRET_SCAN=0 hook "$(j "{'diff':'+k=\"$AWS\"'}")" >/dev/null; check "with the scan off a submit is still recorded" "$(stamped)" yes
 
+# provide_files with PATHS: the hook reads the files from disk and hands the
+# call on with their contents (updatedInput), by the selection rules of the
+# server's files_url recipe, and scans what it read.
+FX=$(mktemp -d); trap 'rm -rf "$STUB" "$FX"' EXIT
+mkdir -p "$FX/repo/sub" && echo 'outside' > "$FX/outside.ts"
+(
+  cd "$FX/repo" && git init -q && printf 'secret.txt\n' > .gitignore
+  printf 'export const a = 1\n' > a.ts && printf 'T=%s\n' "$GHP" > ci.sh && printf 'S=1\n' > secret.txt
+  git add a.ts ci.sh .gitignore && printf 'export const n = 2\n' > new.ts
+  printf '// \377\376\n' > bad.ts && ln -s ../outside.ts out.ts && ln -s a.ts alias.ts
+)
+fillrun() { # cwd, paths JSON -> sets rc, out (stdout), err (stderr)
+  local e; e=$(mktemp)
+  out=$(python3 -c "import json,sys; print(json.dumps({'tool_name':'mcp__plugin_bughunter_ohmybug__provide_files','cwd':sys.argv[1],'tool_input':{'review_id':'r','paths':json.loads(sys.argv[2])}}))" "$1" "$2" \
+    | bash "$G/secret-scan.sh" 2>"$e"); rc=$?
+  err=$(cat "$e"); rm -f "$e"
+}
+field() { printf '%s' "$out" | python3 -c "import json,sys; o=json.load(sys.stdin)['hookSpecificOutput']; print(eval(sys.argv[1]))" "$1" 2>/dev/null; }
+fillrun "$FX/repo" '["a.ts","new.ts","bad.ts","alias.ts","nope.ts","sub",".git/config","out.ts","../outside.ts"]'
+check "paths: the call goes on" "$rc" 0
+check "paths: tracked, untracked and linked-inside files are filled from disk, in order" \
+  "$(field "ascii([(f['path'], f['content']) for f in o['updatedInput']['files']])")" \
+  "[('a.ts', 'export const a = 1\\n'), ('new.ts', 'export const n = 2\\n'), ('bad.ts', '// \\ufffd\\ufffd\\n'), ('alias.ts', 'export const a = 1\\n')]"
+check "paths: the paths key is gone, the review id stays" "$(field "sorted(o['updatedInput'])")" "['files', 'review_id']"
+check "paths: no permission decision, ever" "$(field "sorted(o)")" "['additionalContext', 'hookEventName', 'updatedInput']"
+check "paths: skipped ones are named to the agent" "$(field "o['additionalContext'].split('Not sent')[1]")" \
+  " (missing, a directory, under .git or outside the repository): nope.ts, sub, .git/config, out.ts, ../outside.ts."
+fillrun "$FX/repo/sub" '["a.ts"]'
+check "paths: read from the top level, whatever the session directory" "$(field "o['updatedInput']['files'][0]['path']")" "a.ts"
+fillrun "$FX/repo" '["a.ts","secret.txt"]'
+check "paths: a file git does not list stops the call" "$rc" 2
+check "paths: ...nothing goes on" "$out" ""
+case "$err" in *"git does not list"*"- secret.txt"*) echo "ok   paths: ...and the file is named";; *) echo "FAIL paths: unlisted message: $err"; fails=$((fails + 1));; esac
+fillrun "$FX/repo" '["ci.sh"]'
+check "paths: a key in a file read from disk is refused" "$rc" 2
+case "$err" in *"ci.sh:1 GitHub token"*) echo "ok   paths: ...naming file and line";; *) echo "FAIL paths: scan message: $err"; fails=$((fails + 1));; esac
+OHMYBUG_SECRET_SCAN=0 fillrun "$FX/repo" '["ci.sh"]'
+check "paths: with the scan off the paths are still filled" "$rc:$(field "o['updatedInput']['files'][0]['path']")" "0:ci.sh"
+PLUGIN_DATA=x fillrun "$FX/repo" '["a.ts"]'
+check "paths: under Codex nothing is filled (the server refuses the paths)" "$rc:$out" "0:"
+fillrun "$FX" '["outside.ts"]'
+check "paths: outside any repository nothing is sent" "$rc:$out" "2:"
+case "$err" in *"not inside one"*) echo "ok   paths: ...and the agent is told to send contents";; *) echo "FAIL paths: no-repo message: $err"; fails=$((fails + 1));; esac
+
 [ "$fails" = 0 ] && echo "secret-scan: all rows pass" || { echo "secret-scan: $fails failing"; exit 1; }
