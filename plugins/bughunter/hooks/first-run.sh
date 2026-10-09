@@ -16,10 +16,21 @@
 #
 # Printed ONCE per machine, and only while no rule mentions our tools — a plugin
 # that reminds you of something you already did is a plugin you turn off.
+#
+# It runs at SessionStart AND before every call to an OhMyBug tool (PreToolUse,
+# print-only, beside secret-scan.sh): a plugin installed inside an open session
+# and loaded with /reload-plugins never sees a SessionStart, so the first tool
+# call is the first moment it can speak. Two more things it says there:
+# - in auto mode, a submit_review while nothing decides provide_files: the
+#   reviewers' mid-run file request is a second send nobody allowed, so say so
+#   before the hunt (once per session).
+# - on provide_files itself, in auto mode, while no rule covers it: tell the
+#   ASSISTANT (additionalContext, which arrives even when the call is then
+#   refused) to name the exact rule to the user and send again inside the
+#   window, instead of letting the request expire.
 set -euo pipefail
 
 STATE=${OMB_STATE_DIR:-$HOME/.ohmybug}
-MARK=$STATE/permission-notice-v1
 
 # Codex loads these hooks too (manifest `hooks` lists hooks.json), and every
 # sentence below is about Claude Code: its auto-mode classifier, its
@@ -30,47 +41,97 @@ MARK=$STATE/permission-notice-v1
 # (Claude Code sets only the CLAUDE_-prefixed names); nothing is written, so the
 # other client still gets its turn.
 [ -n "${PLUGIN_DATA:-}" ] && exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+INPUT=$(cat 2>/dev/null) || INPUT=
 
-[ -f "$MARK" ] && exit 0
+mkdir -p "$STATE"
+printf '%s' "$INPUT" | python3 -c '
+import json, os, sys
+state, home, proj = sys.argv[1:4]
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except ValueError:
+    d = {}
+event = d.get("hook_event_name") or "SessionStart"
+tool = str(d.get("tool_name") or "")
 
-# Any mention at all counts as "the user has decided": allow, ask and deny are
-# all decisions, and re-suggesting a rule against a deliberate deny would be
-# nagging someone to undo their own choice.
-mentions_us() {
-  local f
-  for f in "$@"; do
-    [ -f "$f" ] || continue
-    grep -q 'bughunter_ohmybug' "$f" 2>/dev/null && return 0
-  done
-  return 1
-}
+# Every rule in the four files a user edits. Allow, ask and deny are all
+# decisions: re-suggesting a rule against a deliberate deny would be nagging
+# someone to undo their own choice.
+P = "mcp__plugin_bughunter_ohmybug"
+rules, mentioned = [], False
+for f in (home + "/.claude/settings.json", home + "/.claude/settings.local.json",
+          proj + "/.claude/settings.json", proj + "/.claude/settings.local.json"):
+    try:
+        text = open(f, encoding="utf-8", errors="replace").read()
+    except OSError:
+        continue
+    mentioned = mentioned or "bughunter_ohmybug" in text
+    try:
+        perms = json.loads(text).get("permissions") or {}
+    except (ValueError, AttributeError):
+        continue
+    for kind in ("allow", "ask", "deny"):
+        rules += [r for r in perms.get(kind) or [] if isinstance(r, str)]
+covers = lambda rs, t: any(r in (P, P + "__*", P + "__" + t) for r in rs)
+files_decided = covers(rules, "provide_files")
 
-if mentions_us "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" \
-               "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.json" \
-               "${CLAUDE_PROJECT_DIR:-$PWD}/.claude/settings.local.json"; then
-  mkdir -p "$STATE" && : > "$MARK"
-  exit 0
-fi
+def once(mark):
+    m = os.path.join(state, mark)
+    if os.path.exists(m):
+        return False
+    open(m, "w").close()
+    return True
 
-mkdir -p "$STATE" && : > "$MARK"
+auto = d.get("permission_mode") == "auto"
+say, ctx = None, None
+if not mentioned:
+    if once("permission-notice-v1"):
+        say = ("OhMyBug: the hunt runs in our cloud, so its tools send code off this machine.\n"
+               "In auto mode the permission classifier reviews each of those calls: it may\n"
+               "refuse the files the reviewers ask for mid-run (a large file is refused\n"
+               "outright), and the hunt then goes on without them. One rule lets the OhMyBug\n"
+               "tools through, and only you can add it — /permissions -> Add rule ->\n"
+               "mcp__plugin_bughunter_ohmybug__* . One tool at a time instead? Then allow both\n"
+               + P + "__submit_review and " + P + "__provide_files .\n"
+               + "Nothing will add them for you. With the rule, the files go through the plugin,\n"
+               "read from disk; no shell command uploads them.")
+else:
+    once("permission-notice-v1")
+# The careful user allows one tool at a time — a rule, or an approval under
+# /permissions -> Recently denied, which lives in the session and in no file
+# this hook can read. Either way a submit that goes ahead while nothing decides
+# provide_files is a hunt whose file request is a second send nobody allowed:
+# say so before the hunt, once per session (one file holding the last session).
+if not say and auto and not files_decided and tool.endswith("__submit_review"):
+    sid = str(d.get("session_id") or "")
+    last = os.path.join(state, "permission-notice-files-session")
+    try:
+        seen = open(last).read()
+    except OSError:
+        seen = None
+    if seen != sid:
+        open(last, "w").write(sid)
+        say = ("OhMyBug: no permission rule covers provide_files. When the reviewers ask for files\n"
+               "mid-hunt, sending them is a second call; in auto mode the classifier may refuse\n"
+               "it, the request closes within minutes, and the hunt goes on without the files.\n"
+               "To allow it: /permissions -> Add rule -> " + P + "__provide_files")
+if event == "PreToolUse" and auto and not files_decided and tool.endswith("__provide_files"):
+    ctx = ("OhMyBug: no permission rule covers provide_files. If auto mode refuses this call,"
+           " tell the user now, in one line, how to let it through: /permissions -> Add rule -> "
+           + P + "__provide_files, or approve it under /permissions -> Recently denied (only they"
+           " can; never add or widen a rule yourself). When they say it is done, call provide_files"
+           " again for the same review: the file request stays open only a few minutes. A denial"
+           " with no verdict (a classifier error) is not a refusal: retry it once right away.")
 
-read -r -d '' NOTE <<'EOF' || true
-OhMyBug: the hunt runs in our cloud, so its tools send code off this machine.
-In auto mode the permission classifier reviews each of those calls: it may
-refuse the files the reviewers ask for mid-run (a large file is refused
-outright), and the hunt then goes on without them. One rule lets the OhMyBug
-tools through, and only you can add it — /permissions -> Add rule ->
-mcp__plugin_bughunter_ohmybug__* . Nothing will add it for you. With it, the
-files go through the plugin, read from disk; no shell command uploads them.
-EOF
-
-# systemMessage is what the USER reads; additionalContext is what the assistant
-# reads, so it can answer "why was that denied" without re-deriving it.
-python3 - "$NOTE" <<'PY'
-import json, sys
-note = sys.argv[1]
-print(json.dumps({
-    "systemMessage": note,
-    "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": note},
-}))
-PY
+if say or ctx:
+    out = {}
+    if say:
+        out["systemMessage"] = say
+    # systemMessage is what the USER reads; additionalContext is what the
+    # assistant reads, so it can answer "why was that denied" without
+    # re-deriving it.
+    extra = "\n\n".join(x for x in (say, ctx) if x)
+    out["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": extra}
+    print(json.dumps(out))
+' "$STATE" "$HOME" "${CLAUDE_PROJECT_DIR:-$PWD}" || exit 0

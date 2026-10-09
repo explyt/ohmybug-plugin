@@ -829,6 +829,15 @@ Within that window:
    list: drop it, or – only if the user approves sending it – put it in
    `files` with its content. If the answer is `paths_not_read`, no hook ran
    (an older plugin, hooks off): follow that message.
+   **If auto mode refuses `provide_files`** – the user allowed `submit_review`
+   alone, and the file answer is a second send nothing allows – this is NOT
+   the "say it once and stop" of a refused hunt: the hunt is running and the
+   request closes in minutes. Tell the user now, in one line, the exact rule:
+   `/permissions` → Add rule → `mcp__plugin_bughunter_ohmybug__provide_files`
+   (or approve the call under `/permissions` → Recently denied). Only they can;
+   never add or widen it yourself. When they say it is done, call
+   `provide_files` again for the same review. A denial with no verdict (a
+   classifier error) is not a refusal: retry it once right away.
    **Codex and other clients:** `get_findings` answers with a `files_url` and
    the command that POSTs the files to it from disk; `provide_files(review_id,
    files)` with contents only if you cannot run it.

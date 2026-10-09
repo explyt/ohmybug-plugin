@@ -53,6 +53,16 @@
             "commandWindows": "exit 0"
           }
         ]
+      },
+      {
+        "matcher": "mcp__.*ohmybug.*__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/first-run.sh",
+            "commandWindows": "exit 0"
+          }
+        ]
       }
     ],
     "PostToolUse": [

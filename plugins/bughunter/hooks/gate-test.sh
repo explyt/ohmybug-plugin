@@ -2028,7 +2028,7 @@ rm -rf "$BK"
 # advice here is about the user's own permission settings — the one place this
 # plugin must never write.
 FR=$(mktemp -d)
-say() { OMB_STATE_DIR="$FR/state" HOME="$FR" bash "$G/first-run.sh"; }
+say() { OMB_STATE_DIR="$FR/state" HOME="$FR" CLAUDE_PROJECT_DIR="$FR/p" bash "$G/first-run.sh" </dev/null; }
 # Under Codex (PLUGIN_DATA set) the notice is about the wrong client: silent,
 # and the mark is NOT written, so a Claude Code session on the same machine
 # still hears it once.
@@ -2040,6 +2040,43 @@ rm -rf "$FR/state"
 mkdir -p "$FR/.claude"
 printf '{"permissions":{"deny":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
 [ -z "$(say)" ] || { printf 'FAIL first-run: nagged a user who had already decided\n'; fails=$((fails + 1)); }
+
+# Installed inside an open session (/reload-plugins): no SessionStart ever
+# comes, so the first OhMyBug tool call is where it speaks. Then a submit in
+# auto mode while nothing decides provide_files — the careful user who allowed
+# submit_review alone, as a rule or a "Recently denied" approval no file shows —
+# hears that the file request is a second send, once per session. And the
+# provide_files call itself tells the ASSISTANT the exact rule to name.
+pre() { # tool mode session -> first-run's answer as a PreToolUse
+  printf '{"hook_event_name":"PreToolUse","tool_name":"mcp__plugin_bughunter_ohmybug__%s","permission_mode":"%s","session_id":"%s"}' "$1" "$2" "$3" \
+    | OMB_STATE_DIR="$FR/state" HOME="$FR" CLAUDE_PROJECT_DIR="$FR/p" bash "$G/first-run.sh"
+}
+fr_row() { # name, output, grep -E pattern ('' = must be silent)
+  if { [ -z "$3" ] && [ -z "$2" ]; } || { [ -n "$3" ] && printf '%s' "$2" | grep -qE "$3"; }; then :; else
+    printf 'FAIL first-run: %s: %s\n' "$1" "${2:-<silent>}"; fails=$((fails + 1)); fi
+}
+rm -rf "$FR/state" "$FR/.claude"; mkdir -p "$FR/.claude"
+fr_row "in-session install: the first tool call carries the notice" "$(pre get_balance auto s1)" '"hookEventName": "PreToolUse".*__provide_files'
+fr_row "the notice is still once per machine" "$(pre get_balance auto s1)" ''
+fr_row "auto-mode submit with provide_files undecided is called out" "$(pre submit_review auto s1)" 'systemMessage.*no permission rule covers provide_files'
+fr_row "once per session" "$(pre submit_review auto s1)" ''
+fr_row "and again in the next session" "$(pre submit_review auto s2)" 'no permission rule covers provide_files'
+fr_row "not outside auto mode" "$(pre submit_review default s3)" ''
+fr_row "a refused provide_files: the assistant knows the exact rule" "$(pre provide_files auto s2)" 'additionalContext.*Add rule -> mcp__plugin_bughunter_ohmybug__provide_files.*again for the same review'
+case "$(pre provide_files auto s2)" in *systemMessage*) printf 'FAIL first-run: the provide_files hint nags the user\n'; fails=$((fails + 1)) ;; esac
+fr_row "no provide_files hint outside auto mode" "$(pre provide_files default s2)" ''
+printf '{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
+fr_row "a submit_review-only rule leaves provide_files undecided" "$(pre submit_review auto s4)" 'no permission rule covers provide_files'
+for rule in 'allow":["mcp__plugin_bughunter_ohmybug__*' 'allow":["mcp__plugin_bughunter_ohmybug' 'deny":["mcp__plugin_bughunter_ohmybug__provide_files' 'ask":["mcp__plugin_bughunter_ohmybug__provide_files'; do
+  n=$((${n:-0} + 1))
+  printf '{"permissions":{"%s"]}}\n' "$rule" > "$FR/.claude/settings.local.json"
+  fr_row "decided ($rule): submit is quiet" "$(pre submit_review auto "d$n")" ''
+  fr_row "decided ($rule): no provide_files hint" "$(pre provide_files auto "d$n")" ''
+done
+rm -f "$FR/.claude/settings.local.json"
+mkdir -p "$FR/p/.claude"
+printf '{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__provide_files"]}}\n' > "$FR/p/.claude/settings.json"
+fr_row "a project rule counts too" "$(pre provide_files auto s5)" ''
 
 # --- the scan hint: once per machine, Claude Code only, a suggestion ----------
 SH=$(mktemp -d)
@@ -2488,9 +2525,9 @@ reset_state
 python3 - "$G/hooks.json" <<'PY' || fails=$((fails + 1))
 import json, re, sys
 h = json.load(open(sys.argv[1]))["hooks"]
-def fires(event, tool):
+def fires(event, tool):  # the print-only first-run notice records nothing
     return any(re.search(e.get("matcher", ""), "mcp__plugin_bughunter_ohmybug__" + tool)
-               for e in h.get(event, []))
+               for e in h.get(event, []) if any(not k["command"].endswith("/first-run.sh") for k in e["hooks"]))
 want = {("PreToolUse", "submit_review"): True,
         ("PreToolUse", "get_findings"): False,
         ("PreToolUse", "wait_review"): False,
@@ -2503,6 +2540,12 @@ want = {("PreToolUse", "submit_review"): True,
         ("PostToolUse", "wait_review"): True,
         ("PostToolUse", "confirm_findings"): True}
 bad = [f"{e}/{t}: want {w}, got {fires(e, t)}" for (e, t), w in want.items() if fires(e, t) != w]
+# The permission notice has to reach a plugin installed inside an open session,
+# which never sees a SessionStart: before every OhMyBug tool call too.
+for t in ("get_balance", "submit_review", "provide_files"):
+    if not any(re.search(e.get("matcher", ""), "mcp__plugin_bughunter_ohmybug__" + t)
+               and any(k["command"].endswith("/first-run.sh") for k in e["hooks"]) for e in h.get("PreToolUse", [])):
+        bad.append(f"PreToolUse/{t}: first-run.sh not wired")
 # Codex reads the manifest's `hooks` INSTEAD of hooks/hooks.json, so a manifest
 # that names only the router file installs no gate, no recorder and no nudge
 # for Codex users. Both files, by name.
