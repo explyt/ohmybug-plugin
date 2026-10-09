@@ -80,8 +80,11 @@ TOOL=provide_files; hook "$(j "{'files':[{'path':'a','content':'x'}]}")" >/dev/n
 wired=$(python3 - "$G/hooks.json" <<'PY2'
 import json, re, sys
 pre = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
-print(" ".join(k["command"].rsplit("/", 1)[-1] for e in pre
-               if re.search(e.get("matcher", ""), "mcp__plugin_bughunter_ohmybug__submit_review") for k in e["hooks"]))
+# first-run.sh rides beside it on every OhMyBug tool, print-only: it never
+# refuses and records nothing, so it cannot split "scanned" from "recorded".
+print(" ".join(c for c in (k["command"].rsplit("/", 1)[-1] for e in pre
+               if re.search(e.get("matcher", ""), "mcp__plugin_bughunter_ohmybug__submit_review") for k in e["hooks"])
+               if c != "first-run.sh"))
 PY2
 )
 check "submit_review has one PreToolUse hook, the scan" "$wired" "secret-scan.sh"
