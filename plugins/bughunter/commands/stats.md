@@ -7,7 +7,7 @@ human table:
 
 - bugs confirmed (real) and minor bugs (never billed)
 - reviews run, and how many actually found bugs
-- false positives the cloud sent (cost the user $0)
+- false positives the cloud sent (cost the user nothing)
 - free reviews left, balance, total billed
 
 One screen, no fluff. If the call fails with an authentication error, follow

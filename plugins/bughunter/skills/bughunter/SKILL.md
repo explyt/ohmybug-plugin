@@ -8,12 +8,12 @@ description: 'Run the OhMyBug cloud bug hunt as the LAST merge gate, or on any c
 OhMyBug is a cloud service: it reviews a diff with an orchestrated fleet of
 adversarial reviewers on its own models and returns findings. This agent then
 verifies each finding against the local codebase and reports verdicts.
-Billing is flat: $10 per review whose verdicts confirm at least one real
+Billing is flat: 10 USD per review whose verdicts confirm at least one real
 major bug – no matter how many. Severity uses the merge boundary: a finding
 is a billable major when a reviewer would refuse the merge over it
 (`critical` / `high` / `medium`); a `low` nit is confirmed for stats and
 never billed.
-Reviews, false positives and unclear findings cost $0. The first
+Reviews, false positives and unclear findings cost nothing. The first
 bug-finding review is free; a promo code (`redeem_code`) can raise that
 allowance.
 
@@ -322,27 +322,27 @@ EMPTY=$(git hash-object -t tree /dev/null)
 OMB_SECRETS=('.env*' '*secret*' '*credential*' 'id_rsa*' 'id_dsa*' 'id_ecdsa*' 'id_ed25519*' '*.pem' '*.key' '*.p12' '*.pfx')
 # omb_diff <base> [paths...]: everything from <base> to the working tree, new files
 # included, secrets excluded. Paths are relative to where you stand; none = the whole repo.
-omb_diff() {
-  local base=$1 T rc p x=(); shift
+omb_diff() (
+  local base=${1} T rc p x=(); shift
   for p in "${OMB_SECRETS[@]}"; do x+=(":(exclude,top,icase,glob)**/$p" ":(exclude,top,icase,glob)**/$p/**"); done
   T=$(mktemp); cp "$(git rev-parse --git-path index)" "$T" 2>/dev/null || rm -f "$T"
   GIT_INDEX_FILE=$T git add -N -- :/ && GIT_INDEX_FILE=$T git diff "$base" -- "${@:-:/}" "${x[@]}"
   rc=$?; rm -f "$T"; return $rc
-}
+)
 # omb_commits <N>: the last N commits only – commit to commit, nothing from the working
 # tree; with N or fewer commits, the whole history. Secrets excluded the same way.
-omb_commits() {
+omb_commits() (
   local p x=()
   for p in "${OMB_SECRETS[@]}"; do x+=(":(exclude,top,icase,glob)**/$p" ":(exclude,top,icase,glob)**/$p/**"); done
-  git diff "$(git rev-parse -q --verify "HEAD~$1" || echo "$EMPTY")" HEAD -- :/ "${x[@]}"
-}
+  git diff "$(git rev-parse -q --verify "HEAD~${1}" || echo "$EMPTY")" HEAD -- :/ "${x[@]}"
+)
 # omb_nogit [paths...]: a folder that is not a git repository, as new code. The git
 # directory is a throwaway one outside the folder; nothing is left behind.
-omb_nogit() {
+omb_nogit() (
   local G rc; G=$(mktemp -d)
   git --git-dir="$G" --work-tree=. init -q && GIT_DIR=$G GIT_WORK_TREE=. omb_diff "$EMPTY" "$@"
   rc=$?; rm -rf "$G"; return $rc
-}
+)
 ```
 
 Work down the list and stop at the first rung that yields code:
@@ -512,8 +512,8 @@ git diff "$BASE" > "$d/diff.patch"
 python3 - "$d" <<'PY'
 import json, sys
 d = sys.argv[1]
-files = []  # [{'path': p, 'content': open(p).read()} for p in <your context list>]
-json.dump({'diff': open(d + '/diff.patch').read(), 'files': files}, open(d + '/payload.json', 'w'))
+files = []  # [dict(path=p, content=open(p).read()) for p in <your context list>]
+json.dump(dict(diff=open(d + '/diff.patch').read(), files=files), open(d + '/payload.json', 'w'))
 PY
 curl -fsS -X POST -H 'content-type: application/json' --data-binary @"$d/payload.json" '<upload_url>')
 ```
@@ -645,7 +645,7 @@ beat=<heartbeat_s>        # seconds between `running` lines while nothing change
                           # response's monitor.heartbeat_s, which keeps the prompt cache warm
 start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
 fails=0 # consecutive failed polls; 12 retires the watch (12 poll cadences of a dead URL)
-num() { printf '%s' "$s" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1; }
+num() ( printf '%s' "$s" | sed -n "s/.*\"${1}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1 )
 printf 'armed %s\n' "$every" > "$watch" # visible to the Stop hook from the instant the watch starts, not one poll later
 while :; do
   now=$(date +%s)
@@ -949,9 +949,9 @@ sees the table before you send it.
 
 Honesty rules (non-negotiable):
 - The verdict is the billing meter. A review with at least one `REAL` major
-  (`critical`/`high`/`medium`) costs the user $10 flat (extra REALs and `low`
+  (`critical`/`high`/`medium`) costs the user 10 USD flat (extra REALs and `low`
   nits are free); `NOT_REAL`
-  and `UNCLEAR` cost $0 and count against OhMyBug's quality stats.
+  and `UNCLEAR` cost nothing and count against OhMyBug's quality stats.
 - Never mark a finding `NOT_REAL` to avoid the charge when the bug is real –
   and never fix a finding you refused to confirm. OhMyBug audits later diffs;
   silently fixing an unconfirmed finding flags the account.
@@ -971,7 +971,7 @@ and `billed_usd_total` move while you do nothing. The only figures describing
 YOUR call are `billed_usd` and `receipt_id` in that response. Never compute
 your own spend by comparing two balance readings, and never raise a
 money alarm from a difference between them: on 2026-08-11 an agent did exactly
-that, charged itself another session's $20, and spent a round of investigation
+that, charged itself another session's 20 USD, and spent a round of investigation
 disproving its own report. If a charge looks wrong, quote the receipt.
 
 ### 6. Fix
