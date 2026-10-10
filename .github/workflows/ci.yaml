@@ -59,9 +59,19 @@ jobs:
       - run: npm install -g @anthropic-ai/claude-code@2.1.288
       - run: claude plugin validate plugins/bughunter
       - run: claude plugin test plugins/bughunter
+      - run: bash scripts/load-check.sh --mod "$(command -v claude)"
       # Older clients validate plugin.json strictly; a key they do not know
       # refuses the whole plugin, shell gate included.
       - run: npx -y @anthropic-ai/claude-code@2.1.140 plugin validate plugins/bughunter
+      # Validate does not open the hooks files the manifest lists; these older
+      # clients parse each one as a classic hooks file and mark the whole
+      # plugin "failed to load" when it is not. Only a real load sees that.
+      - run: |
+          for v in 2.0.77 2.1.140; do
+            npm install --silent --prefix "$RUNNER_TEMP/cc-$v" "@anthropic-ai/claude-code@$v"
+            bash scripts/load-check.sh --self-test "$RUNNER_TEMP/cc-$v/node_modules/.bin/claude"
+            bash scripts/load-check.sh "$RUNNER_TEMP/cc-$v/node_modules/.bin/claude"
+          done
 
   hygiene:
     name: Public-repo hygiene
