@@ -72,6 +72,16 @@ jobs:
             bash scripts/load-check.sh --self-test "$RUNNER_TEMP/cc-$v/node_modules/.bin/claude"
             bash scripts/load-check.sh "$RUNNER_TEMP/cc-$v/node_modules/.bin/claude"
           done
+      # The skill must reach the agent as written (clients substitute `$<digits>`
+      # with skill arguments) and its commands must not draw the client's
+      # obfuscation warning. Asked of the clients themselves, through a stub API.
+      - run: |
+          for v in 2.1.140 2.1.293; do
+            [ -x "$RUNNER_TEMP/cc-$v/node_modules/.bin/claude" ] ||
+              npm install --silent --prefix "$RUNNER_TEMP/cc-$v" "@anthropic-ai/claude-code@$v"
+            bash scripts/prompt-check.sh --self-test "$RUNNER_TEMP/cc-$v/node_modules/.bin/claude"
+            bash scripts/prompt-check.sh "$RUNNER_TEMP/cc-$v/node_modules/.bin/claude"
+          done
 
   hygiene:
     name: Public-repo hygiene
