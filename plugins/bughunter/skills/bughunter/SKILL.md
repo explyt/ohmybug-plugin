@@ -411,6 +411,18 @@ Work down this list and stop at the first rung that applies:
    bytes, but the gate cannot credit the tree with it, and the merge stays
    blocked until a full-diff hunt. Already pushed? Then rung 1 with `ref` = the
    head commit sha records the hunt without sending anything.
+   **Claude Code in auto mode, and no rule covers `provide_files`** (none of
+   `~/.claude/settings.json`, `~/.claude/settings.local.json`,
+   `.claude/settings.json`, `.claude/settings.local.json` lists
+   `mcp__plugin_bughunter_ohmybug__*` or `…__provide_files`): a payload hunt loses every file the reviewers ask
+   about the change itself – the server asks you for those, and auto mode
+   refuses that answer at any size. If the repo is on GitHub and readable by
+   the server (App installed, or public), offer the user, in one line, to
+   commit and push the change and hunt it by rung 1 instead: the server then
+   answers every file request from the repository and nothing is sent from
+   this machine. Say the trade-off with it: only what is committed and pushed
+   is hunted, so uncommitted edits are not reviewed. Committing and pushing is
+   their call; on a no, send the payload and expect no file answer.
 4. **`upload: true` only when that payload is genuinely large.** It is not a
    preference for shipping bytes, and the server ignores it whenever rung 1
    applies.
@@ -782,11 +794,12 @@ ones. Unresolved verdicts pause new reviews.
 ### 3a. If polling returns `status: needs_files`
 
 The cloud reviewers named concrete files they are missing (`requested_files`
-+ `reason`). For a repo the server can read (App-installed, or any public
-repo) it fetches those paths itself and you will usually never see this
-state; it reaches you only for paths the server could not fetch – a private
-repo without the App, a generated file, or a path that does not exist at
-that ref. Never read source into your own context just to echo it back when
++ `reason`). On a no-payload hunt (rung 1) of a repo the server can read
+(App-installed, or any public repo) it fetches those paths itself and you
+will usually never see this state; it reaches you only for paths the server
+could not fetch – a private repo without the App, or a fetch that failed. A
+payload hunt is different: the files the payload diff changes are always
+asked of you, because only you hold those bytes. Never read source into your own context just to echo it back when
 the server already has access; check the `requested_files` list against what
 is actually unavailable to it.
 
@@ -836,8 +849,9 @@ Within that window:
    `/permissions` → Add rule → `mcp__plugin_bughunter_ohmybug__provide_files`
    (or approve the call under `/permissions` → Recently denied). Only they can;
    never add or widen it yourself. When they say it is done, call
-   `provide_files` again for the same review. A denial with no verdict (a
-   classifier error) is not a refusal: retry it once right away.
+   `provide_files` again for the same review. Without the rule the classifier
+   refuses this answer at any size, with or without a verdict: do not retry
+   it, and do not split it into smaller calls.
    **Codex and other clients:** `get_findings` answers with a `files_url` and
    the command that POSTs the files to it from disk; `provide_files(review_id,
    files)` with contents only if you cannot run it.

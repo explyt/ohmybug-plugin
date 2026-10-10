@@ -2064,6 +2064,12 @@ fr_row "and again in the next session" "$(pre submit_review auto s2)" 'no permis
 fr_row "not outside auto mode" "$(pre submit_review default s3)" ''
 fr_row "a refused provide_files: the assistant knows the exact rule" "$(pre provide_files auto s2)" 'additionalContext.*Add rule -> mcp__plugin_bughunter_ohmybug__provide_files.*again for the same review'
 case "$(pre provide_files auto s2)" in *systemMessage*) printf 'FAIL first-run: the provide_files hint nags the user\n'; fails=$((fails + 1)) ;; esac
+# Measured: without the rule the file answer is refused at any size, and a
+# retry of a no-verdict denial rarely passes. Neither text may promise a retry
+# or imply that a small answer gets through; the submit line names the path
+# that needs no answer at all.
+fr_row "the submit line says the answer will be refused, at any size" "$(pre submit_review auto s9)" 'will refuse.{0,20}it, at any size.*pushed commit with no payload'
+case "$(pre provide_files auto s9)" in *[Rr]etry\ it*|*outright*) printf 'FAIL first-run: the provide_files hint promises a retry\n'; fails=$((fails + 1)) ;; esac
 fr_row "no provide_files hint outside auto mode" "$(pre provide_files default s2)" ''
 printf '{"permissions":{"allow":["mcp__plugin_bughunter_ohmybug__submit_review"]}}\n' > "$FR/.claude/settings.json"
 fr_row "a submit_review-only rule leaves provide_files undecided" "$(pre submit_review auto s4)" 'no permission rule covers provide_files'
