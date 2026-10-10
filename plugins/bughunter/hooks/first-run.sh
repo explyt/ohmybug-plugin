@@ -3,10 +3,14 @@
 # permission classifier reviews every call these tools make, because sending
 # code to a cloud service is exactly what it is built to watch. Measured on
 # Claude Code 2.1.293: it let a hunt start (a payload submit and a repo+ref one
-# alike), let small file answers through, and refused a large one outright
-# ("too long for the classifier") — so without the rule the reviewers can lose
-# the files they asked for mid-run, and the refusal is silent from the user's
-# side. The rule that fixes it is not guessable.
+# alike), but refused the reviewers' file request at every size tried, from
+# 2 KB up: files a tool result asked for are the exfiltration shape it exists
+# to stop, so it is provenance, not size. Splitting the answer cannot help, and
+# a retry of a no-verdict denial passed rarely. So without the rule the
+# reviewers lose the files they asked for mid-run, silently from the user's
+# side. The rule that fixes it is not guessable. A no-payload hunt of a pushed
+# commit on a repository the server can read never asks: the server reads the
+# files from the repository itself.
 #
 # Claude Code gives a plugin NO way to ship a permission rule or to ask for one
 # at install time, and that is deliberate: a plugin that widens its own
@@ -88,9 +92,9 @@ say, ctx = None, None
 if not mentioned:
     if once("permission-notice-v1"):
         say = ("OhMyBug: the hunt runs in our cloud, so its tools send code off this machine.\n"
-               "In auto mode the permission classifier reviews each of those calls: it may\n"
-               "refuse the files the reviewers ask for mid-run (a large file is refused\n"
-               "outright), and the hunt then goes on without them. One rule lets the OhMyBug\n"
+               "In auto mode the permission classifier reviews each of those calls, and it\n"
+               "refuses the files the reviewers ask for mid-run, at any size; the hunt then\n"
+               "goes on without them. One rule lets the OhMyBug\n"
                "tools through, and only you can add it — /permissions -> Add rule ->\n"
                "mcp__plugin_bughunter_ohmybug__* . One tool at a time instead? Then allow both\n"
                + P + "__submit_review and " + P + "__provide_files .\n"
@@ -113,16 +117,19 @@ if not say and auto and not files_decided and tool.endswith("__submit_review"):
     if seen != sid:
         open(last, "w").write(sid)
         say = ("OhMyBug: no permission rule covers provide_files. When the reviewers ask for files\n"
-               "mid-hunt, sending them is a second call; in auto mode the classifier may refuse\n"
-               "it, the request closes within minutes, and the hunt goes on without the files.\n"
-               "To allow it: /permissions -> Add rule -> " + P + "__provide_files")
+               "mid-hunt, sending them is a second call; in auto mode the classifier will refuse\n"
+               "it, at any size, and the hunt goes on without the files.\n"
+               "To allow it: /permissions -> Add rule -> " + P + "__provide_files\n"
+               "Without the rule: a hunt of a pushed commit with no payload, on a repository\n"
+               "OhMyBug can read (App installed, or public), needs no file answer from you.")
 if event == "PreToolUse" and auto and not files_decided and tool.endswith("__provide_files"):
     ctx = ("OhMyBug: no permission rule covers provide_files. If auto mode refuses this call,"
            " tell the user now, in one line, how to let it through: /permissions -> Add rule -> "
            + P + "__provide_files, or approve it under /permissions -> Recently denied (only they"
            " can; never add or widen a rule yourself). When they say it is done, call provide_files"
-           " again for the same review: the file request stays open only a few minutes. A denial"
-           " with no verdict (a classifier error) is not a refusal: retry it once right away.")
+           " again for the same review: the file request stays open only a few minutes. Do not"
+           " retry the refused call, and do not split it into smaller ones: without the rule it is"
+           " refused at any size.")
 
 if say or ctx:
     out = {}
