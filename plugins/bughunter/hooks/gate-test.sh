@@ -2231,16 +2231,19 @@ case $said in
   *) printf 'FAIL nudge names the wrong hunts: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
-# The remedy it names, per client (#57): the heartbeat monitor, not a
-# background shell that wakes the session once, at exit. Reverting the sentence
-# to `run_in_background` kept every check green.
+# The remedy it names, per client (#57): the skill's loop under Bash
+# run_in_background, re-armed on every line it prints — not the Monitor tool,
+# whose calls one client model breaks and then repeats for the rest of the
+# turn, and not a bare background shell that wakes the session once, at exit.
 case $said in
-  *'Monitor tool'*'automation_update'*) ;;
+  *'Bash run_in_background, re-armed on each'*'automation_update'*) ;;
   *) printf 'FAIL nudge no longer names the heartbeat monitor per client: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
+# Background Bash is named only WITH its re-arm (the case above); the tool it
+# replaced must not come back.
 case $said in
-  *run_in_background*) printf 'FAIL nudge points at run_in_background again: %s\n' "$said"
+  *'Monitor tool'*) printf 'FAIL nudge points at the Monitor tool again: %s\n' "$said"
      fails=$((fails + 1)) ;;
 esac
 # The watch-file sentence is scoped to the client that writes the file. This hook
@@ -2421,8 +2424,10 @@ rc=$(nsrc 0 A1)
                    fails=$((fails + 1)); }
 # A terminal word in a fresh file is the watcher's last write before it exited:
 # the review is over and nobody has read it — exactly the nag's case. The same
-# for a file request, which the reviewers hold open for minutes only.
-for word in done failed needs-files; do
+# for a file request, which the reviewers hold open for minutes only. And for
+# `rearm`: the loop exits at every line it prints, and a heartbeat nobody
+# re-armed is a watch that ended, fresh file or not.
+for word in done failed needs-files rearm; do
   printf '%s 240\n' "$word" > "$W/rev_watched"
   rc=$(nsrc 0 A1)
   [ "$rc" = 2 ] || { printf 'FAIL nudge: a watch file reading %s kept the nudge silent (rc=%s)\n' "$word" "$rc"

@@ -120,7 +120,9 @@ EOF
 # writes `<status> <poll_s>` into ~/.ohmybug/watch/<rev> on every poll (keyed by
 # review id: the loop runs in the agent's shell, which knows the id and not the
 # repo key). A file younger than poll_s + 60 s is a live watcher unless its word
-# is one the loop writes as it EXITS (`done`, `failed`, `needs-files`): the
+# is one the loop writes as it EXITS (`done`, `failed`, `needs-files`, and
+# `rearm` – the loop runs under Bash run_in_background and exits at every line
+# it prints, so a heartbeat it was not re-armed after is a watch that ended): the
 # watcher is what wakes the session, and nagging beside it is how a fleet ended
 # up with a foreground get_findings every 2–5 min on top of the armed watch
 # (#67). The test is on the exit words and not a whitelist of live ones because
@@ -140,7 +142,7 @@ while IFS= read -r rec; do
   wst='' wiv=''
   { read -r wst wiv < "$WATCH/$rec"; } 2>/dev/null
   case $wiv in ''|*[!0-9]*) wiv=240 ;; esac
-  case $wst in ''|done|failed|needs-files) alive=0 ;; *) alive=1 ;; esac
+  case $wst in ''|done|failed|needs-files|rearm) alive=0 ;; *) alive=1 ;; esac
   if [ "$alive" = 1 ] &&
      [ -n "$(find "$WATCH/$rec" -maxdepth 0 -mmin "-$(( (wiv + 119) / 60 ))" 2>/dev/null)" ]; then
     ARMED=$((ARMED + 1))
@@ -190,12 +192,14 @@ ALSO=''
 echo "ohmybug: $WHOSE: $IDS — do not end the turn waiting" \
      "to be prodded. Call get_findings on each now, unless you already know one is still" \
      "running: for those, arm the heartbeat monitor on the status_url per the bughunter" \
-     "skill (Claude Code: the Monitor tool; Codex: automation_update + wait_review) so it" \
+     "skill (Claude Code: the skill's loop with Bash run_in_background, re-armed on each" \
+     "line it prints; Codex: automation_update + wait_review) so it" \
      "wakes you, rather than polling in a loop or waiting for a background shell to exit." \
      "On Claude Code the skill's loop writes ~/.ohmybug/watch/<review_id> on every poll and" \
-     "this hook is silent while that file is fresh — so a nag beside a Monitor" \
+     "this hook is silent while that file is fresh — so a nag beside a loop" \
      "you armed there means it is dead OR it exited on a state to read now (done, failed," \
-     "needs-files): read first; re-arm only if the review is still running or waiting" \
+     "needs-files) OR on a heartbeat line nobody re-armed (rearm): read first; re-arm" \
+     "only if the review is still running or waiting" \
      "for files. On Codex the" \
      "heartbeat leaves no file here, so" \
      "this line does not know whether yours is alive: do not arm a second one over it." \
