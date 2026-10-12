@@ -16,7 +16,7 @@ ERR=$(mktemp); trap 'rm -f "$ERR"' EXIT
 
 # The shape that went cold in the field: an id in a variable, a loop that only
 # prints at the end. Refused, and the refusal names the way out.
-HAND='R=rev_00fcf9ee; echo "running 225" > ~/.ohmybug/watch/$R; while :; do sleep 225; s=$(curl -fsS https://mcp.ohmybug.ai/r/$R/status); case "$s" in *done*) echo done; exit 0;; esac; done'
+HAND='R=rev_example; echo "running 225" > ~/.ohmybug/watch/$R; while :; do sleep 225; s=$(curl -fsS https://mcp.ohmybug.ai/r/$R/status); case "$s" in *done*) echo done; exit 0;; esac; done'
 check "hand-written background loop is refused" "$(hook "$HAND" true)" 2
 grep -q "skill's watch loop" "$ERR" && grep -q "re-arm" "$ERR" && echo "ok   refusal names the skill loop and the re-arm" \
   || { echo "FAIL refusal text: $(cat "$ERR")"; fails=$((fails + 1)); }
