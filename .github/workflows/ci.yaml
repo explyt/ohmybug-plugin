@@ -39,6 +39,7 @@ jobs:
           sudo localedef -i zh_CN -f GBK zh_CN.GBK
           sudo localedef -i en_US -f ISO-8859-1 en_US.ISO8859-1
       - run: bash plugins/bughunter/hooks/secret-scan-test.sh
+      - run: bash plugins/bughunter/hooks/watch-guard-test.sh
       - run: bash plugins/bughunter/hooks/version-check-test.sh
       - run: bash scripts/version.sh --self-test
       # The manifest carries the version a marketplace reads, so it is the one

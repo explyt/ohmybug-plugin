@@ -248,6 +248,8 @@ with tempfile.TemporaryDirectory() as d:
     r = drive(env, 60)
     slept = open(f"{d}/slept").read().split()
     watch = open(f"{d}/.ohmybug/watch/rev_test").read()
+    # The chain re-armed on the way, so a state file existed; `done` removes it.
+    assert r.runs > 1 and not os.path.exists(f"{d}/.ohmybug/watch/rev_test.loop"), (r.runs, "done must clear the re-arm state")
 assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 assert slept == ["45"] * 5, slept
 assert watch == "done 240\n", watch
