@@ -197,6 +197,40 @@ test('a submit answered already_running keeps the one record and its start time'
   expect(list).toContain('5 min ago')
 })
 
+test('a file request that arrives mid-turn gets its band when the turn ends', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  world(on, JSON.stringify({ status: 'running', files_requested: true, next_poll_after_s: 30 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.turn.start({ prompt: 'x' } as never)
+  await clock.advance(75_000)
+  expect(await band($)).toBe('engine drawing')
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(await band($)).toContain('asked for files')
+})
+
+test('a submit answered already_running by another chat\'s hunt is adopted by the chat that asked', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  engine(on)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  on('http.fetch', async () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ status: 'running' }) } }) as never)
+  const replies = [submitted, JSON.stringify({ ...JSON.parse(submitted), already_running: true })]
+  on('tool.call', { tool: SUBMIT }, async () => ({ result: { content: [] }, text: replies.shift()! }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  sessionNow = 's2'
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  expect(await pane($)).not.toContain('rev_1')
+  await clock.advance(1000)
+  await $.tool.call({ tool: SUBMIT } as never)
+  sessionNow = 's1'
+  expect(await pane($)).toContain('rev_1')
+})
+
 test('files served and the hunt running again is not announced as done', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)

@@ -140,7 +140,12 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
     if (bandNow?.kind === 'deep' || bandNow?.kind === 'gate') setBand($, null)
     // The server answered with the hunt already queued or running for this
     // input: nothing started, nothing charged. Keep the record as it is.
-    if (at >= 0 && body.already_running === true) return
+    // The hunt belongs to the chat that asked for it just now: adopt it, or the
+    // chat that was told "already running" would track nothing.
+    if (at >= 0 && body.already_running === true) {
+      if (list[at]!.session !== sessionId) { list[at] = { ...list[at]!, session: sessionId }; await save($, list); await refreshStatus($) }
+      return
+    }
     const done = str(body.status) === 'done'
     const h: BughunterHunt = { id, mode: str(body.mode) ?? 'fast', state: done ? 'done' : 'running', statusUrl,
       cwd, session: sessionId, startedAt: now, median: num(body.recent_median_minutes), seen: done,
@@ -270,7 +275,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     ctx.showStatus = (await $.env.get('OHMYBUG_STATUS')) !== '0'
     ctx.autoResume = (await $.env.get('OHMYBUG_AUTO_RESUME')) === '1'
-    sessionId = String(await $.session.id())
+    sessionId = String((await $.session.id()) ?? '')
     bandNow = null
     ctx.working = false
     const now = await $.clock.now()
@@ -330,7 +335,7 @@ export const register: Register = on => {
     }
     else if (!ctx.autoResume && !bandNow) {
       const cwd = await $.session.cwd()
-      const u = huntList.find(x => ours(x, cwd) && !x.seen && !isOpen(x))
+      const u = huntList.find(x => ours(x, cwd) && !x.seen && x.state !== 'running')
       if (u) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })
     }
     return out
