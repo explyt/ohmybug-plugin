@@ -62,6 +62,10 @@ let bandNow: BughunterBand = null
 // review it never submitted (owner report, 2026-10-23). A saved hunt with no
 // session (written by an older mod) is nobody's: it expires on its own.
 let sessionId = ''
+// The hunt whose move the poll saw mid-turn and held back (announce): the turn's
+// end raises its band, and only its. Not "any unread hunt": the agent may have
+// read a file request itself, and `seen` does not record that for needs_files.
+let heldId: string | undefined
 const ours = (h: BughunterHunt, cwd: string) => h.cwd === cwd && !!sessionId && h.session === sessionId
 const rawOpen = new Set<string>()
 
@@ -157,6 +161,7 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
     list[at] = { ...list[at]!, state, seen: terminal || list[at]!.seen,
       findings: state === 'done' ? findingsOf(body).length : list[at]!.findings }
     if (bandNow?.kind === 'hunt' && bandNow.id === id) setBand($, null)
+    if (heldId === id) heldId = undefined
     // The deep offer comes in the answer for this tracked hunt, and only there.
     const offer = body.deep_offer as Record<string, unknown> | undefined
     if (kind === 'get_findings' && state === 'done' && offer && typeof offer === 'object' && str(offer.pitch)) {
@@ -207,7 +212,7 @@ async function announce($: Engine, h: BughunterHunt) {
   // While the agent is mid-turn it is likely to read the result itself in a
   // moment, and a band that vanishes by then is noise (owner report, 2026-10-23).
   // The toast already said it; the turn's end shows the band if it is still unread.
-  if (ctx.working && !ctx.autoResume) return
+  if (ctx.working && !ctx.autoResume) { heldId = h.id; return }
   setBand($, { kind: 'hunt', id: h.id, state: h.state, text: news(h) })
 }
 
@@ -277,6 +282,7 @@ export const register: Register = on => {
     ctx.autoResume = (await $.env.get('OHMYBUG_AUTO_RESUME')) === '1'
     sessionId = String((await $.session.id()) ?? '')
     bandNow = null
+    heldId = undefined
     ctx.working = false
     const now = await $.clock.now()
     const saved = (await $.store.get('hunts')) as BughunterHunt[] | undefined
@@ -334,8 +340,8 @@ export const register: Register = on => {
       await $.prompt.submit({ text: resumeText(h) })
     }
     else if (!ctx.autoResume && !bandNow) {
-      const cwd = await $.session.cwd()
-      const u = huntList.find(x => ours(x, cwd) && !x.seen && x.state !== 'running')
+      const u = huntList.find(x => x.id === heldId && !x.seen && x.state !== 'running')
+      heldId = undefined
       if (u) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })
     }
     return out

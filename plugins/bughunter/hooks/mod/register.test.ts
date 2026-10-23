@@ -45,6 +45,7 @@ const done = JSON.stringify({ review_id: 'rev_1', status: 'done', mode: 'fast', 
 /** What every test needs beneath the plugin: a session to start in, a command table, a drawing. */
 let sessionNow = 's1'
 function engine(on: On) {
+  sessionNow = 's1'
   on('session.id', async () => ({ value: sessionNow }) as never)
   on('session.start', async ($, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: '/repo' }) as never)
@@ -125,6 +126,40 @@ test('a hunt that finishes mid-turn raises no band until the turn ends, and none
   await $.turn.start({ prompt: 'y' } as never)
   await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
   await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't2', reason: 'end_turn' } as never)
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('another chat of the same repository neither polls nor raises a band for a hunt that is still running', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2, next_poll_after_s: 30 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  // The second chat starts while the first chat's hunt is still running.
+  sessionNow = 's2'
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  seen.toasts.length = 0
+  await clock.advance(300_000)
+  await $.turn.start({ prompt: 'x' } as never)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't9', reason: 'end_turn' } as never)
+  expect(seen.toasts, 'chat s2 polled and announced s1\'s hunt').toEqual([])
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('a file request the agent read itself mid-turn raises no band at the turn end', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const files = JSON.stringify({ status: 'running', files_requested: true, next_poll_after_s: 30 })
+  world(on, files)
+  on('tool.call', { tool: WAIT }, async () => ({ result: { content: [] }, text: JSON.stringify({ review_id: 'rev_1', ...JSON.parse(files) }) }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.turn.start({ prompt: 'x' } as never)
+  await clock.advance(75_000)
+  await $.tool.call({ tool: WAIT, review_id: 'rev_1' } as never)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
   expect(await band($)).toBe('engine drawing')
 })
 
