@@ -339,7 +339,8 @@ export const register: Register = on => {
       setBand($, null)
       await $.prompt.submit({ text: resumeText(h) })
     }
-    else if (!ctx.autoResume && !bandNow) {
+    // An empty band, or the gate refusal for this very hunt: the hunt finished, so the refusal is obsolete.
+    else if (!ctx.autoResume && (!bandNow || (bandNow.kind === 'gate' && bandNow.id === heldId))) {
       const u = huntList.find(x => x.id === heldId && !x.seen && x.state !== 'running')
       heldId = undefined
       if (u) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })

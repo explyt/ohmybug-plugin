@@ -354,6 +354,22 @@ test('the gate\'s RUNNING refusal with a tracked open hunt offers Poll for that 
   expect(seen.prompts).toEqual(['Poll the OhMyBug hunt rev_1: call get_findings with review_id rev_1.'])
 })
 
+test('a hunt that finishes mid-turn replaces the merge refusal that was waiting for it, at the turn end', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  world(on, JSON.stringify({ status: 'done', findings: 2, next_poll_after_s: 30 }))
+  on('tool.call', { tool: 'Bash' }, async () => ({ deny: RUNNING }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.turn.start({ prompt: 'x' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr merge 12 --squash' } as never)
+  await clock.advance(75_000)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(await band($)).toContain('Hunt rev_1 is done')
+  expect(await buttons($)).toEqual(['go', 'later'])
+})
+
 for (const [kind, reason] of [['RUNNING', RUNNING], ['unhunted', UNHUNTED]] as const) {
   test(`a ${kind} gate refusal without a tracked hunt shows its text and no button`, async ($, on) => {
     mock.clock(on)
