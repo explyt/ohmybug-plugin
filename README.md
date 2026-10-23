@@ -165,7 +165,7 @@ reach, and never on the wording of a refusal.
 | Merge gate, secret scan, hunt records | yes | yes | yes |
 | Hunt status in the status line, a toast when a hunt finishes or asks for files | yes | — | — |
 | Band above the prompt when a tracked hunt finishes, fails or asks for files: **Continue** sends the next step for that hunt's id, **Later** closes it | yes | — | — |
-| Deep-hunt offer (the `deep_offer` of a tracked hunt's `get_findings`) as **Run deep hunt** — pressing it is your consent — and **Not now**, which sends nothing | yes | — | — |
+| Deep-hunt offer (the `deep_offer` of a tracked hunt's `get_findings`) as **Run deep hunt** — pressing it is your consent — **Not now**, which sends nothing, and **Not today**, which asks the agent to pause the offer for 24 hours | yes | — | — |
 | A merge the gate refused: the gate's own words in the band, and **Poll &lt;id&gt;** only while a tracked hunt of this repository is open; no other button | yes | — | — |
 | Findings drawn as a card (`show the raw answer` keeps the original) | yes | — | — |
 | `/hunts` pane | yes | — | — |

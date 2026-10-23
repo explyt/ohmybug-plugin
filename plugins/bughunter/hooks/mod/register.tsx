@@ -369,13 +369,18 @@ export const register: Register = on => {
     let actions: RenderChildren[] = []
     let lead = ''
     if (b.kind === 'deep') {
-      // Pressing it is the person's consent; Not now sends nothing.
+      // Pressing Run is the person's consent; Not now sends nothing; Not today asks for a one-day pause.
       lead = `Deep hunt offered for ${b.id}: `
       actions = [
         <Button key="deep-yes" label="Run deep hunt" hotkey="1" variant="primary" onPress={async () => {
           close(); await $.prompt.submit({ text: `Yes, run the deep hunt for ${b.id}.` })
         }} />,
         <Button key="deep-no" label="Not now" hotkey="2" role="dismiss" onPress={close} />,
+        // The person's own word: the offer stays quiet for a day. The agent writes it down (set_policy
+        // snooze), because the server keeps it for every session; asking for a deep hunt still works.
+        <Button key="deep-snooze" label="Not today" hotkey="3" onPress={async () => {
+          close(); await $.prompt.submit({ text: 'Not today: do not offer me the deep hunt for the next 24 hours. Call set_policy with snooze {"deep": 24}, and say when it ends.' })
+        }} />,
       ]
     } else if (b.kind === 'gate') {
       lead = 'Merge blocked: '

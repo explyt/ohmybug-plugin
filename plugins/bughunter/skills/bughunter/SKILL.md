@@ -936,6 +936,16 @@ so as YOUR idea it only makes sense once the cheap pass has come back empty.
   its `how`: call `submit_review` again with `deep: "<review_id>"` and the
   same `meta` – the server re-fetches the diff, so you send no payload. If
   it carries `install_url`, the App install is the missing step first.
+- **Pausing an offer.** When the user asks to stop being offered the deep
+  hunt for a while ("not today", "not for a day"), or the mod sends you their
+  "Not today", call `set_policy` with `snooze: {"deep": 24}`; the same field
+  takes `stories` (the question about posting a story) and `earned` (the note
+  about unclaimed rewards), 1 to 168 hours, and 0 offers again. Do it only
+  when they ask, never on your own judgment, and say when it ends. A pause
+  silences the offer and nothing else: a deep hunt or a story the user asks
+  for is still done as asked. If `set_policy` answers that `snooze` is an
+  unknown field, the server is older than this plugin: tell the user, do not
+  retry.
 - **Arm the monitor for the deep hunt too, and give the user the
   `review_id`.** The hour is exactly how long it takes to forget: the deep run
   rarely needs files from you, so little prods you mid-run — the heartbeat's
