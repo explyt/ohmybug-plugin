@@ -43,7 +43,10 @@ const done = JSON.stringify({ review_id: 'rev_1', status: 'done', mode: 'fast', 
 
 /** The world beneath the plugin: a status URL, the toasts, the status line, the prompts it queues. */
 /** What every test needs beneath the plugin: a session to start in, a command table, a drawing. */
+let sessionNow = 's1'
 function engine(on: On) {
+  sessionNow = 's1'
+  on('session.id', async () => ({ value: sessionNow }) as never)
   on('session.start', async ($, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: '/repo' }) as never)
   on('command.register', async () => ({ value: undefined }) as never)
@@ -84,6 +87,80 @@ test('a hunt that finishes raises a toast and a band, and starts no turn by itse
   await drawn($, 'PromptHint', { isDraft: false, isWorking: false, hint: '' })
   await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
   expect(seen.prompts).toHaveLength(0)
+})
+
+test('a hunt another chat of the same repository started is not this chat\'s: no band, no toast, no status', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  // Positive control: the submitting chat is told.
+  await clock.advance(75_000)
+  expect(await band($)).toContain('Hunt rev_1 is done')
+  // The same store and cwd, another chat.
+  sessionNow = 's2'
+  seen.toasts.length = 0
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await clock.advance(300_000)
+  sessionNow = 's1'
+  expect(await band($)).toBe('engine drawing')
+  expect(seen.toasts).toEqual([])
+  expect(seen.status.at(-1)).toBeUndefined()
+})
+
+test('a hunt that finishes mid-turn raises no band until the turn ends, and none if the agent read it meanwhile', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  world(on, JSON.stringify({ status: 'done', findings: 2 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.turn.start({ prompt: 'x' } as never)
+  await clock.advance(75_000)
+  expect(await band($)).toBe('engine drawing')
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(await band($)).toContain('Hunt rev_1 is done')
+  // Read by the agent in the next turn: the band is gone, nothing is re-raised.
+  await $.turn.start({ prompt: 'y' } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't2', reason: 'end_turn' } as never)
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('another chat of the same repository neither polls nor raises a band for a hunt that is still running', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, JSON.stringify({ status: 'done', findings: 2, next_poll_after_s: 30 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  // The second chat starts while the first chat's hunt is still running.
+  sessionNow = 's2'
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  seen.toasts.length = 0
+  await clock.advance(300_000)
+  await $.turn.start({ prompt: 'x' } as never)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't9', reason: 'end_turn' } as never)
+  expect(seen.toasts, 'chat s2 polled and announced s1\'s hunt').toEqual([])
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('a file request the agent read itself mid-turn raises no band at the turn end', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const files = JSON.stringify({ status: 'running', files_requested: true, next_poll_after_s: 30 })
+  world(on, files)
+  on('tool.call', { tool: WAIT }, async () => ({ result: { content: [] }, text: JSON.stringify({ review_id: 'rev_1', ...JSON.parse(files) }) }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.turn.start({ prompt: 'x' } as never)
+  await clock.advance(75_000)
+  await $.tool.call({ tool: WAIT, review_id: 'rev_1' } as never)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(await band($)).toBe('engine drawing')
 })
 
 test('Continue sends the step for the hunt it names, by id', async ($, on) => {
@@ -153,6 +230,40 @@ test('a submit answered already_running keeps the one record and its start time'
   const list = await pane($)
   expect(list.match(/rev_1/g)).toHaveLength(1)
   expect(list).toContain('5 min ago')
+})
+
+test('a file request that arrives mid-turn gets its band when the turn ends', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  world(on, JSON.stringify({ status: 'running', files_requested: true, next_poll_after_s: 30 }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.turn.start({ prompt: 'x' } as never)
+  await clock.advance(75_000)
+  expect(await band($)).toBe('engine drawing')
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(await band($)).toContain('asked for files')
+})
+
+test('a submit answered already_running by another chat\'s hunt is adopted by the chat that asked', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  engine(on)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  on('http.fetch', async () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ status: 'running' }) } }) as never)
+  const replies = [submitted, JSON.stringify({ ...JSON.parse(submitted), already_running: true })]
+  on('tool.call', { tool: SUBMIT }, async () => ({ result: { content: [] }, text: replies.shift()! }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  sessionNow = 's2'
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  expect(await pane($)).not.toContain('rev_1')
+  await clock.advance(1000)
+  await $.tool.call({ tool: SUBMIT } as never)
+  sessionNow = 's1'
+  expect(await pane($)).toContain('rev_1')
 })
 
 test('files served and the hunt running again is not announced as done', async ($, on) => {
@@ -241,6 +352,22 @@ test('the gate\'s RUNNING refusal with a tracked open hunt offers Poll for that 
   expect(await buttons($)).toEqual(['gate-poll'])
   await press($, 'gate-poll')
   expect(seen.prompts).toEqual(['Poll the OhMyBug hunt rev_1: call get_findings with review_id rev_1.'])
+})
+
+test('a hunt that finishes mid-turn replaces the merge refusal that was waiting for it, at the turn end', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  world(on, JSON.stringify({ status: 'done', findings: 2, next_poll_after_s: 30 }))
+  on('tool.call', { tool: 'Bash' }, async () => ({ deny: RUNNING }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.turn.start({ prompt: 'x' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr merge 12 --squash' } as never)
+  await clock.advance(75_000)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+  expect(await band($)).toContain('Hunt rev_1 is done')
+  expect(await buttons($)).toEqual(['go', 'later'])
 })
 
 for (const [kind, reason] of [['RUNNING', RUNNING], ['unhunted', UNHUNTED]] as const) {

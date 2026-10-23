@@ -39,6 +39,8 @@ type BughunterHunt = {
   /** confirm_findings for this hunt's id answered with the verdicts recorded. */
   judged?: boolean
   nextAt: number
+  /** The session that submitted it: the store is shared by every session of this machine. */
+  session?: string
 }
 
 /** The one band above the prompt. `id` is always a tracked hunt; `state` is the
@@ -55,6 +57,16 @@ type BughunterBand =
 // session through $.store.
 let huntList: BughunterHunt[] = []
 let bandNow: BughunterBand = null
+// This session's id. The saved hunts are shared by every session on the machine,
+// and a band for a hunt another chat started told this chat's agent to read a
+// review it never submitted (owner report, 2026-10-23). A saved hunt with no
+// session (written by an older mod) is nobody's: it expires on its own.
+let sessionId = ''
+// The hunt whose move the poll saw mid-turn and held back (announce): the turn's
+// end raises its band, and only its. Not "any unread hunt": the agent may have
+// read a file request itself, and `seen` does not record that for needs_files.
+let heldId: string | undefined
+const ours = (h: BughunterHunt, cwd: string) => h.cwd === cwd && !!sessionId && h.session === sessionId
 const rawOpen = new Set<string>()
 
 function setHunts($: Engine, list: BughunterHunt[]) { huntList = list; $.ui.invalidate('ui.render') }
@@ -69,7 +81,7 @@ const COLOR: Record<string, string> = { critical: 'red', high: 'red', medium: 'y
 const isOpen = (h: BughunterHunt) => h.state === 'running' || h.state === 'needs_files'
 /** Done, read by the agent, and no verdicts seen for it: the one next step left. */
 const awaitsVerdicts = (h: BughunterHunt, cwd: string, now: number) =>
-  h.cwd === cwd && h.state === 'done' && h.seen && !h.judged && now - h.startedAt < STALE_MS
+  ours(h, cwd) && h.state === 'done' && h.seen && !h.judged && now - h.startedAt < STALE_MS
 
 function news(h: BughunterHunt): string {
   if (h.state === 'needs_files') return `Reviewers of hunt ${h.id} asked for files.`
@@ -95,7 +107,7 @@ function actionable(b: BughunterBand): BughunterHunt | undefined {
 
 /** The open tracked hunt of this repository a gate band may offer to poll. */
 const openHunt = (cwd: string, id?: string) =>
-  huntList.find(h => h.cwd === cwd && isOpen(h) && (id === undefined || h.id === id))
+  huntList.find(h => ours(h, cwd) && isOpen(h) && (id === undefined || h.id === id))
 
 // What the person chose (environment), what the last drawing said about the
 // session and what the network allowed. Module state on purpose: a reload
@@ -132,10 +144,15 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
     if (bandNow?.kind === 'deep' || bandNow?.kind === 'gate') setBand($, null)
     // The server answered with the hunt already queued or running for this
     // input: nothing started, nothing charged. Keep the record as it is.
-    if (at >= 0 && body.already_running === true) return
+    // The hunt belongs to the chat that asked for it just now: adopt it, or the
+    // chat that was told "already running" would track nothing.
+    if (at >= 0 && body.already_running === true) {
+      if (list[at]!.session !== sessionId) { list[at] = { ...list[at]!, session: sessionId }; await save($, list); await refreshStatus($) }
+      return
+    }
     const done = str(body.status) === 'done'
     const h: BughunterHunt = { id, mode: str(body.mode) ?? 'fast', state: done ? 'done' : 'running', statusUrl,
-      cwd, startedAt: now, median: num(body.recent_median_minutes), seen: done,
+      cwd, session: sessionId, startedAt: now, median: num(body.recent_median_minutes), seen: done,
       nextAt: now + 60_000 }
     if (at >= 0) list[at] = h; else list.push(h)
   } else if (at >= 0 && (kind === 'get_findings' || kind === 'wait_review')) {
@@ -144,6 +161,7 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
     list[at] = { ...list[at]!, state, seen: terminal || list[at]!.seen,
       findings: state === 'done' ? findingsOf(body).length : list[at]!.findings }
     if (bandNow?.kind === 'hunt' && bandNow.id === id) setBand($, null)
+    if (heldId === id) heldId = undefined
     // The deep offer comes in the answer for this tracked hunt, and only there.
     const offer = body.deep_offer as Record<string, unknown> | undefined
     if (kind === 'get_findings' && state === 'done' && offer && typeof offer === 'object' && str(offer.pitch)) {
@@ -168,7 +186,7 @@ async function refreshStatus($: Engine) {
   if (!ctx.showStatus) return
   const cwd = await $.session.cwd()
   const now = await $.clock.now()
-  const mine = huntList.filter(h => h.cwd === cwd)
+  const mine = huntList.filter(h => ours(h, cwd))
   const unread = mine.find(h => !h.seen && !isOpen(h))
   const unjudged = mine.find(h => awaitsVerdicts(h, cwd, now))
   const running = mine.filter(isOpen)
@@ -191,6 +209,10 @@ async function announce($: Engine, h: BughunterHunt) {
     await $.prompt.submit({ text: resumeText(h) })
     return
   }
+  // While the agent is mid-turn it is likely to read the result itself in a
+  // moment, and a band that vanishes by then is noise (owner report, 2026-10-23).
+  // The toast already said it; the turn's end shows the band if it is still unread.
+  if (ctx.working && !ctx.autoResume) { heldId = h.id; return }
   setBand($, { kind: 'hunt', id: h.id, state: h.state, text: news(h) })
 }
 
@@ -207,7 +229,7 @@ async function tick($: Engine) {
 async function pollDue($: Engine) {
   const cwd = await $.session.cwd()
   const now = await $.clock.now()
-  const due = huntList.filter(h => h.cwd === cwd && isOpen(h) && h.statusUrl && now >= h.nextAt)
+  const due = huntList.filter(h => ours(h, cwd) && isOpen(h) && h.statusUrl && now >= h.nextAt)
   for (const h of due) {
     let res
     try {
@@ -258,6 +280,10 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     ctx.showStatus = (await $.env.get('OHMYBUG_STATUS')) !== '0'
     ctx.autoResume = (await $.env.get('OHMYBUG_AUTO_RESUME')) === '1'
+    sessionId = String((await $.session.id()) ?? '')
+    bandNow = null
+    heldId = undefined
+    ctx.working = false
     const now = await $.clock.now()
     const saved = (await $.store.get('hunts')) as BughunterHunt[] | undefined
     setHunts($, Array.isArray(saved) ? saved.filter(h => now - h.startedAt < STALE_MS) : [])
@@ -312,6 +338,12 @@ export const register: Register = on => {
     if (h) {
       setBand($, null)
       await $.prompt.submit({ text: resumeText(h) })
+    }
+    // An empty band, or the gate refusal for this very hunt: the hunt finished, so the refusal is obsolete.
+    else if (!ctx.autoResume && (!bandNow || (bandNow.kind === 'gate' && bandNow.id === heldId))) {
+      const u = huntList.find(x => x.id === heldId && !x.seen && x.state !== 'running')
+      heldId = undefined
+      if (u) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })
     }
     return out
   })
@@ -453,7 +485,7 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     const cwd = await $.session.cwd()
     const now = await $.clock.now()
-    const mine = huntList.filter(h => h.cwd === cwd).reverse()
+    const mine = huntList.filter(h => ours(h, cwd)).reverse()
     if (!mine.length) return <Text dimColor>No hunts in this repository in the last 6 hours.</Text>
     return (
       <Box flexDirection="column">
