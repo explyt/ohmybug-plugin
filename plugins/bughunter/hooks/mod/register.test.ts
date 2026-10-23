@@ -413,7 +413,7 @@ test('the deep hunt buttons come only with deep_offer, and Not now sends nothing
   expect(await buttons($)).not.toContain('deep-yes')
   await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
   expect(await band($)).toContain('Deep hunt offered for rev_1: A deep hunt reads the whole repository.')
-  expect(await buttons($)).toEqual(['deep-yes', 'deep-no'])
+  expect(await buttons($)).toEqual(['deep-yes', 'deep-no', 'deep-snooze'])
   await press($, 'deep-no')
   expect(seen.prompts).toHaveLength(0)
   expect(await band($)).toBe('engine drawing')
@@ -430,6 +430,23 @@ test('Run deep hunt sends the consent for the offered id', async ($, on) => {
   await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
   await press($, 'deep-yes')
   expect(seen.prompts).toEqual(['Yes, run the deep hunt for rev_1.'])
+})
+
+test('Not today asks the agent for a one-day pause of the deep offer and clears the band', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: findingsWith({ deep_offer: { pitch: 'Go deep.' } }) }))
+  const seen = world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  await press($, 'deep-snooze')
+  expect(seen.prompts).toHaveLength(1)
+  expect(seen.prompts[0]).toContain('set_policy')
+  expect(seen.prompts[0]).toContain('{"deep": 24}')
+  expect(seen.prompts[0], 'Not today must not read as consent to the deep hunt').not.toMatch(/run the deep hunt/i)
+  expect(await band($)).toBe('engine drawing')
 })
 
 test('a deep_offer for a hunt the mod does not track draws no band', async ($, on) => {
