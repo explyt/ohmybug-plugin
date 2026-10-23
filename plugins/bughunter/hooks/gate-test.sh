@@ -447,6 +447,16 @@ print(json.dumps({
   [ -z "$said" ] || { echo "FAIL stamp: confirm after a refused hunt still talks: $said"; fails=$((fails + 1)); }
   t "$V" 2
 
+  # Read from a directory with no git (cwd /tmp): the record is found by its id
+  # and promoted into its own repository. Before, nothing was promoted and the
+  # Stop nudge there repeated for the whole TTL over a hunt that had been read.
+  reset_state; post submit_review 0
+  NOGIT=$(mktemp -d)
+  (cd "$NOGIT" && post get_findings 1) >/dev/null 2>&1
+  pend "read from outside the checkout" 0
+  t "$V" 0
+  rm -rf "$NOGIT"
+
   # --- the person's live page -------------------------------------------------
   # The submit answer names a private page for the hunt (`live_url`). It is the
   # ONE thing this hook hands to the human rather than the agent: `systemMessage`

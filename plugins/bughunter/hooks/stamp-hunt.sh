@@ -261,13 +261,29 @@ live_tail() {
 }
 
 . "$(dirname "$0")/diff-id.sh" 2>/dev/null || exit 0
-MARKER=$(ohmybug_marker_path) || exit 0
-REPO_HUNTS=$(ohmybug_hunt_dir) || exit 0
-PENDING_DIR="$REPO_HUNTS.pending"
+MARKER=$(ohmybug_marker_path) || MARKER=
+REPO_HUNTS=$(ohmybug_hunt_dir) || REPO_HUNTS=
 # The review id is the one model-authored string that becomes a path here, and
 # `..` in it would walk out of ~/.ohmybug/ and overwrite a file elsewhere. Real
 # ids are alphanumeric; anything else is not an id we need to preserve.
 REVIEW=$(printf '%s' "$REVIEW" | tr -c 'A-Za-z0-9_.-' '_' | sed 's/^[.-]*//')
+# A poll from outside the submitting checkout (cwd /tmp, another repository)
+# found no record here and promoted nothing, so the Stop nudge in that checkout
+# repeated for the whole TTL over hunts that had been read (owner report,
+# 2026-10-22). The server mints the id and the record holds what was sent, so
+# the record names its repository by where it lives; the cwd is not needed.
+if [ "${PRE:-0}" != 1 ] && [ "$TOOL" != submit_review ] && [ -n "$REVIEW" ] &&
+   [ ! -e "$REPO_HUNTS.pending/$REVIEW" ] && [ ! -e "$REPO_HUNTS.promoted/$REVIEW" ]; then
+  for p in "$HOME"/.ohmybug/hunts/*.pending/"$REVIEW" "$HOME"/.ohmybug/hunts/*.promoted/"$REVIEW"; do
+    [ -e "$p" ] || continue
+    REPO_HUNTS=${p%/*}; REPO_HUNTS=${REPO_HUNTS%.*}
+    # The single-slot marker is keyed on the cwd's git dir: not this repository's.
+    MARKER=
+    break
+  done
+fi
+[ -n "$REPO_HUNTS" ] || exit 0
+PENDING_DIR="$REPO_HUNTS.pending"
 PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 # The tombstone a promotion leaves lives in its OWN directory, not beside the
 # record it replaced. Sessions keep the hooks they started with (the plugin
@@ -489,11 +505,12 @@ case "$TOOL" in
       # Promote what was SENT, not what the tree looks like now: fixes written
       # while the review ran were never hunted.
       while IFS= read -r line; do
-        [ -n "$line" ] && ohmybug_record_hunt "$line"
+        # Into the record's own repository, which need not be the cwd's.
+        [ -n "$line" ] && mkdir -p "$REPO_HUNTS" && : > "$REPO_HUNTS/$line"
       done < "$PENDING"
       # The single-slot marker stays written for one more release: a gate from an
       # older install still reads only that file.
-      mkdir -p "$(dirname "$MARKER")" && head -n 1 "$PENDING" > "$MARKER"
+      [ -z "$MARKER" ] || { mkdir -p "$(dirname "$MARKER")" && head -n 1 "$PENDING" > "$MARKER"; }
       rm -f "$PENDING"
       # The tombstone the calls after this one read (above). Empty, and in its
       # own directory (see TOMB): no gate or nudge, of any version, reads it.
