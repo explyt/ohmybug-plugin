@@ -486,6 +486,15 @@ test('the confirm card shows each species with its page and field notes', async 
   expect(texts).toContain('2 field notes from other hunters are in the agent\'s context')
 })
 
+test('a medium-confidence species is drawn like any other, with no "likely" marker', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  const texts = await confirmCard($, [{ finding_id: 'f_1', slug: 'retry-twice', name: 'Retry twice', confidence: 'medium',
+    url: 'https://bugs.test/retry-twice' }])
+  expect(texts).toContain('Retry twice')
+  expect(texts).not.toMatch(/likely|probably/i)
+})
+
 test('a species without lessons draws no field-note lines', async ($, on) => {
   mock.store(on)
   engine(on)
@@ -597,6 +606,26 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
     expect(texts).toContain('fast hunt rev_1 · done · 2 findings')
     expect(texts.indexOf('Refund retried twice')).toBeLessThan(texts.indexOf('Log line leaks'))
+  })
+
+  test(`a finding with a filed species shows its name and links to its page on ${surface}`, async ($, on) => {
+    mock.store(on)
+    engine(on)
+    const withSpecies = JSON.stringify({ ...JSON.parse(done), findings: [
+      { finding_id: 'f_1', severity: 'high', file: 'billing/refund.ts', line: 88, title: 'Refund retried twice on timeout',
+        species: { slug: 'lost-update', name: 'Lost update', url: 'https://mcp.ohmybug.ai/bugs/lost-update' } },
+      { finding_id: 'f_2', severity: 'low', file: 'a.ts', line: 3, title: 'Log line leaks the email domain' },
+      { finding_id: 'f_3', severity: 'low', file: 'b.ts', line: 4, title: 'A third',
+        species: { slug: 'x', name: 'Not a web page', url: 'javascript:alert(1)' } },
+    ] })
+    const ui = await $.ui.mount({ plugin: 'bughunter', surface, component: 'ToolResult', requestId: 't3',
+      props: { tool_use_id: 't3', tool: GET, output: withSpecies, isErrored: false } } as never)
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('\n')
+    expect(texts).toContain('bug: ')
+    expect(texts).toContain('Lost update')
+    expect(texts, 'a species without an https page link was drawn').not.toContain('Not a web page')
+    const links = await ui.findAll({ type: 'Link' })
+    expect(links.map(l => (l as unknown as { props?: { href?: string } }).props?.href)).toEqual(['https://mcp.ohmybug.ai/bugs/lost-update'])
   })
 
   test(`an answer the card cannot read is drawn by the engine on ${surface}`, async ($, on) => {

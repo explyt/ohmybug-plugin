@@ -420,7 +420,7 @@ export const register: Register = on => {
     if (!kind || kind === 'submit_review' || e.props.isErrored) return next(e)
     const body = bodyOf(e.props.output)
     if (!body || body.error) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const { Box, Button, Link, Text } = $.ui.resolve(e)
     const toggle = (
       <Button key="raw" plain dimColor label={rawOpen.has(e.requestId) ? 'show the card' : 'show the raw answer'}
         onPress={() => toggleRaw($, e.requestId)} />
@@ -444,9 +444,8 @@ export const register: Register = on => {
           <Box flexDirection="column">
             <Text>
               <Text dimColor>{str(s.finding_id) ?? '?'} →</Text> {str(s.name) ?? str(s.slug) ?? '?'}
-              {s.confidence === 'medium' ? <Text dimColor> (likely)</Text> : null}
             </Text>
-            {str(s.url) ? <Text dimColor>{'    '}{str(s.url)}</Text> : null}
+            {str(s.url) ? <Text dimColor>{'    '}<Link href={str(s.url)!} /></Text> : null}
             {lessonsOf(s).map(l => <Text dimColor>{'    '}· {l.slice(0, 240)}</Text>)}
           </Box>
         )),
@@ -469,6 +468,7 @@ export const register: Register = on => {
                 {f.id}  {f.title}
               </Text>
               {f.where ? <Text dimColor>{'           '}{f.where}</Text> : null}
+              {f.species ? <Text dimColor>{'           '}bug: <Link href={f.species.url} label={f.species.name} /></Text> : null}
             </Box>
           )),
           found.length === 0 && str(body.summary) ? <Text>{str(body.summary)}</Text> : null,

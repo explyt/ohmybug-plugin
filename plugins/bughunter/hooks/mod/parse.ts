@@ -35,7 +35,7 @@ export function bodyOf(output: unknown): Body | undefined {
 export const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
 export const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 
-export type Finding = { id: string; severity: string; where: string; title: string }
+export type Finding = { id: string; severity: string; where: string; title: string; species?: { name: string; url: string } }
 
 export function findingsOf(body: Body): Finding[] {
   const list = Array.isArray(body.findings) ? body.findings : []
@@ -45,8 +45,13 @@ export function findingsOf(body: Body): Finding[] {
     const id = str(o.finding_id) ?? str(o.id)
     if (!id) return []
     const line = num(o.line)
+    // The bug species the server filed against it (#1870); the page link only when it is an https URL.
+    const sp = o.species && typeof o.species === 'object' ? (o.species as Body) : undefined
+    const spName = str(sp?.name)
+    const spUrl = str(sp?.url)
     return [{ id, severity: (str(o.severity) ?? '?').toLowerCase(), title: str(o.title) ?? '',
-      where: str(o.file) ? `${o.file}${line ? `:${line}` : ''}` : '' }]
+      where: str(o.file) ? `${o.file}${line ? `:${line}` : ''}` : '',
+      ...(spName && spUrl && spUrl.startsWith('https://') ? { species: { name: spName, url: spUrl } } : {}) }]
   })
 }
 
