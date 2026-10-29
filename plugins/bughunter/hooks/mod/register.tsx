@@ -38,6 +38,10 @@ type BughunterHunt = {
   seen: boolean
   /** confirm_findings for this hunt's id answered with the verdicts recorded. */
   judged?: boolean
+  /** The server said someone already read or judged the result, and this session
+   *  did not see it happen (another session, a result the mod could not parse):
+   *  nothing is owed from here, so no nudge, no next-step line. */
+  settled?: boolean
   nextAt: number
   /** The session that submitted it: the store is shared by every session of this machine. */
   session?: string
@@ -81,7 +85,16 @@ const COLOR: Record<string, string> = { critical: 'red', high: 'red', medium: 'y
 const isOpen = (h: BughunterHunt) => h.state === 'running' || h.state === 'needs_files'
 /** Done, read by the agent, and no verdicts seen for it: the one next step left. */
 const awaitsVerdicts = (h: BughunterHunt, cwd: string, now: number) =>
-  ours(h, cwd) && h.state === 'done' && h.seen && !h.judged && now - h.startedAt < STALE_MS
+  ours(h, cwd) && h.state === 'done' && h.seen && !h.judged && !h.settled && now - h.startedAt < STALE_MS
+
+/** The status URL's word that the result was already dealt with: a findings door
+ *  read it told done, or a finding has a verdict. Absent on an older server, and
+ *  never true of a failed hunt (the server counts only reads told done), so
+ *  those keep the nudge they always had. */
+const dealtWith = (body: unknown) => {
+  const b = body as Record<string, unknown> | undefined
+  return b?.read_after_done === true || b?.judged === true
+}
 
 function news(h: BughunterHunt): string {
   if (h.state === 'needs_files') return `Reviewers of hunt ${h.id} asked for files.`
@@ -103,6 +116,26 @@ function actionable(b: BughunterBand): BughunterHunt | undefined {
   if (b?.kind !== 'hunt') return undefined
   const h = huntList.find(x => x.id === b.id)
   return h && h.state === b.state && !h.seen ? h : undefined
+}
+
+/** Asked right before a nudge (a resume prompt, a Continue, the turn-end band):
+ *  this session's `seen` is a local guess, the server's read journal is the fact.
+ *  False settles the hunt here. Any failure keeps the nudge, as before. */
+async function stillUnread($: Engine, h: BughunterHunt) {
+  if (h.state !== 'done' || !h.statusUrl) return true
+  let body
+  try {
+    const res = await $.http.fetch(h.statusUrl)
+    body = res.ok ? JSON.parse(res.text) : undefined
+  } catch {
+    return true
+  }
+  if (!dealtWith(body)) return true
+  // A direct save: apply() edits open hunts only, and this one is done.
+  await save($, huntList.map(x => (x.id === h.id ? { ...x, seen: true, settled: true } : x)))
+  if (bandNow?.kind === 'hunt' && bandNow.id === h.id) setBand($, null)
+  await refreshStatus($)
+  return false
 }
 
 /** The open tracked hunt of this repository a gate band may offer to poll. */
@@ -158,7 +191,8 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
   } else if (at >= 0 && (kind === 'get_findings' || kind === 'wait_review')) {
     const state = pollState(body) ?? list[at]!.state
     const terminal = state === 'done' || state === 'failed'
-    list[at] = { ...list[at]!, state, seen: terminal || list[at]!.seen,
+    // Read here: whatever the server said before, this session now owes the verdicts.
+    list[at] = { ...list[at]!, state, seen: terminal || list[at]!.seen, settled: terminal ? false : list[at]!.settled,
       findings: state === 'done' ? findingsOf(body).length : list[at]!.findings }
     if (bandNow?.kind === 'hunt' && bandNow.id === id) setBand($, null)
     if (heldId === id) heldId = undefined
@@ -206,7 +240,7 @@ async function announce($: Engine, h: BughunterHunt) {
   if (h.seen) return
   await $.ui.toast(`OhMyBug: ${news(h)}`)
   if (ctx.autoResume && !ctx.working && !ctx.draft) {
-    await $.prompt.submit({ text: resumeText(h) })
+    if (await stillUnread($, h)) await $.prompt.submit({ text: resumeText(h) })
     return
   }
   // While the agent is mid-turn it is likely to read the result itself in a
@@ -252,8 +286,9 @@ async function pollDue($: Engine) {
     let moved = false
     const next = await apply($, h.id, cur => {
       moved = !!state && state !== cur.state
+      const settled = moved && state === 'done' && dealtWith(body)
       return moved
-        ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings }
+        ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings, ...(settled ? { seen: true, settled: true } : {}) }
         : { nextAt: now + wait * 1000 }
     })
     // Back to running (files served) is news to nobody.
@@ -337,13 +372,13 @@ export const register: Register = on => {
     const h = ctx.autoResume && !ctx.draft ? actionable(bandNow) : undefined
     if (h) {
       setBand($, null)
-      await $.prompt.submit({ text: resumeText(h) })
+      if (await stillUnread($, h)) await $.prompt.submit({ text: resumeText(h) })
     }
     // An empty band, or the gate refusal for this very hunt: the hunt finished, so the refusal is obsolete.
     else if (!ctx.autoResume && (!bandNow || (bandNow.kind === 'gate' && bandNow.id === heldId))) {
       const u = huntList.find(x => x.id === heldId && !x.seen && x.state !== 'running')
       heldId = undefined
-      if (u) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })
+      if (u && await stillUnread($, u)) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })
     }
     return out
   })
@@ -400,7 +435,7 @@ export const register: Register = on => {
         <Button key="go" label="Continue" hotkey="1" variant="primary" onPress={async () => {
           const h = actionable(bandNow?.id === b.id ? bandNow : null)
           close()
-          if (h) await $.prompt.submit({ text: resumeText(h) })
+          if (h && await stillUnread($, h)) await $.prompt.submit({ text: resumeText(h) })
         }} />,
         <Button key="later" label="Later" hotkey="2" role="dismiss" onPress={close} />,
       ]
