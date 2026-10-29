@@ -442,7 +442,8 @@ reformulate.
 
 If the repo lives on GitHub and the head commit is PUSHED, try the zero-payload
 mode FIRST: call `submit_review` with NO diff, NO files, and full `meta`
-including `repo`, `ref` (head sha), `base_branch` (and `pr` number if known).
+including `repo`, `ref` (head sha), `base_branch` (and `pr` number if known),
+plus `pr_title` and `pr_body` (the table below).
 The server fetches the merge-base diff from GitHub itself – nothing leaves
 the machine, no size limits, no upload step.
 
@@ -556,6 +557,8 @@ Call `submit_review` with the diff, the context files, and `meta`. The
 | `ref` | HEAD sha | `git rev-parse HEAD` |
 | `base_branch` | base branch name | `git remote show origin \| sed -n 's/.*HEAD branch: //p'` |
 | `pr` | PR number, if reviewing a PR | `gh pr view --json number` |
+| `pr_title` | the PR's title; with no PR, the branch's purpose in one line | `gh pr view --json title -q .title` |
+| `pr_body` | the PR's description, verbatim; with no PR, the branch's commit subjects, one per line | `gh pr view --json body -q .body`, else `git log --format=%s <base>..HEAD` |
 | `language`, `framework` | repo facts | what you already know |
 | `repo_hint` | the briefing (below) | composed by you |
 
