@@ -171,6 +171,12 @@ reach, and never on the wording of a refusal.
 | `/hunts` pane | yes | — | — |
 | A hunt read but not confirmed: one line in the system prompt and the same in the status line (`bughunt <id> · verdicts not sent`) until `confirm_findings` for that id; while another hunt runs or waits to be read, the status line shows that hunt instead | yes | — | — |
 
+A finished hunt someone already read or judged — in another chat, or in a way
+the mod did not see — gets no toast, band, resume or verdicts line here: the
+mod asks the status URL (a finished, unread hunt again every few minutes), and
+the server says whether the result was read or has verdicts. If the status URL
+cannot be reached, the band stays as before.
+
 The mod never starts a turn on its own unless you opt in. Two environment
 variables tune it (in the `env` block of `settings.json`, or managed settings
 for a team):

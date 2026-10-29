@@ -34,7 +34,8 @@ type BughunterHunt = {
   startedAt: number
   median?: number
   findings?: number
-  /** The agent has read the terminal result itself (get_findings or wait_review). */
+  /** Nothing left to tell this session: its agent read the terminal result
+   *  (get_findings or wait_review), or the server said someone did (`settled`). */
   seen: boolean
   /** confirm_findings for this hunt's id answered with the verdicts recorded. */
   judged?: boolean
@@ -95,6 +96,10 @@ const dealtWith = (body: unknown) => {
   const b = body as Record<string, unknown> | undefined
   return b?.read_after_done === true || b?.judged === true
 }
+/** What a hunt becomes when the server says it was dealt with. Judged is kept
+ *  as judged, so a later read here does not ask for verdicts already sent. */
+const settledBy = (body: unknown): Partial<BughunterHunt> =>
+  ({ seen: true, settled: true, ...((body as Record<string, unknown>).judged === true ? { judged: true } : {}) })
 
 function news(h: BughunterHunt): string {
   if (h.state === 'needs_files') return `Reviewers of hunt ${h.id} asked for files.`
@@ -116,26 +121,6 @@ function actionable(b: BughunterBand): BughunterHunt | undefined {
   if (b?.kind !== 'hunt') return undefined
   const h = huntList.find(x => x.id === b.id)
   return h && h.state === b.state && !h.seen ? h : undefined
-}
-
-/** Asked right before a nudge (a resume prompt, a Continue, the turn-end band):
- *  this session's `seen` is a local guess, the server's read journal is the fact.
- *  False settles the hunt here. Any failure keeps the nudge, as before. */
-async function stillUnread($: Engine, h: BughunterHunt) {
-  if (h.state !== 'done' || !h.statusUrl) return true
-  let body
-  try {
-    const res = await $.http.fetch(h.statusUrl)
-    body = res.ok ? JSON.parse(res.text) : undefined
-  } catch {
-    return true
-  }
-  if (!dealtWith(body)) return true
-  // A direct save: apply() edits open hunts only, and this one is done.
-  await save($, huntList.map(x => (x.id === h.id ? { ...x, seen: true, settled: true } : x)))
-  if (bandNow?.kind === 'hunt' && bandNow.id === h.id) setBand($, null)
-  await refreshStatus($)
-  return false
 }
 
 /** The open tracked hunt of this repository a gate band may offer to poll. */
@@ -240,7 +225,7 @@ async function announce($: Engine, h: BughunterHunt) {
   if (h.seen) return
   await $.ui.toast(`OhMyBug: ${news(h)}`)
   if (ctx.autoResume && !ctx.working && !ctx.draft) {
-    if (await stillUnread($, h)) await $.prompt.submit({ text: resumeText(h) })
+    await $.prompt.submit({ text: resumeText(h) })
     return
   }
   // While the agent is mid-turn it is likely to read the result itself in a
@@ -263,6 +248,25 @@ async function tick($: Engine) {
 async function pollDue($: Engine) {
   const cwd = await $.session.cwd()
   const now = await $.clock.now()
+  // A done hunt nobody here has read yet is asked again on the slow clock: the
+  // server knows when another session read or judged it, and the nudges (band,
+  // Continue, auto-resume) then read that here with no network call of their own.
+  for (const h of huntList.filter(x => ours(x, cwd) && x.state === 'done' && !x.seen && x.statusUrl && now >= x.nextAt)) {
+    let body
+    try {
+      const res = await $.http.fetch(h.statusUrl!)
+      body = res.ok ? JSON.parse(res.text) : undefined
+    } catch {
+      body = undefined
+    }
+    // Judged against the hunt as it stands now: a read here during the fetch wins.
+    const cur = huntList.find(x => x.id === h.id)
+    if (!cur || cur.seen) continue
+    const settle = dealtWith(body)
+    await save($, huntList.map(x => (x.id === h.id ? { ...x, nextAt: now + 240_000, ...(settle ? settledBy(body) : {}) } : x)))
+    if (settle && bandNow?.kind === 'hunt' && bandNow.id === h.id) setBand($, null)
+    if (settle && heldId === h.id) heldId = undefined
+  }
   const due = huntList.filter(h => ours(h, cwd) && isOpen(h) && h.statusUrl && now >= h.nextAt)
   for (const h of due) {
     let res
@@ -288,7 +292,7 @@ async function pollDue($: Engine) {
       moved = !!state && state !== cur.state
       const settled = moved && state === 'done' && dealtWith(body)
       return moved
-        ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings, ...(settled ? { seen: true, settled: true } : {}) }
+        ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings, ...(settled ? settledBy(body) : {}) }
         : { nextAt: now + wait * 1000 }
     })
     // Back to running (files served) is news to nobody.
@@ -372,13 +376,13 @@ export const register: Register = on => {
     const h = ctx.autoResume && !ctx.draft ? actionable(bandNow) : undefined
     if (h) {
       setBand($, null)
-      if (await stillUnread($, h)) await $.prompt.submit({ text: resumeText(h) })
+      await $.prompt.submit({ text: resumeText(h) })
     }
     // An empty band, or the gate refusal for this very hunt: the hunt finished, so the refusal is obsolete.
     else if (!ctx.autoResume && (!bandNow || (bandNow.kind === 'gate' && bandNow.id === heldId))) {
       const u = huntList.find(x => x.id === heldId && !x.seen && x.state !== 'running')
       heldId = undefined
-      if (u && await stillUnread($, u)) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })
+      if (u) setBand($, { kind: 'hunt', id: u.id, state: u.state, text: news(u) })
     }
     return out
   })
@@ -435,7 +439,7 @@ export const register: Register = on => {
         <Button key="go" label="Continue" hotkey="1" variant="primary" onPress={async () => {
           const h = actionable(bandNow?.id === b.id ? bandNow : null)
           close()
-          if (h && await stillUnread($, h)) await $.prompt.submit({ text: resumeText(h) })
+          if (h) await $.prompt.submit({ text: resumeText(h) })
         }} />,
         <Button key="later" label="Later" hotkey="2" role="dismiss" onPress={close} />,
       ]
