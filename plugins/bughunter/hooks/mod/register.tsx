@@ -34,10 +34,15 @@ type BughunterHunt = {
   startedAt: number
   median?: number
   findings?: number
-  /** The agent has read the terminal result itself (get_findings or wait_review). */
+  /** Nothing left to tell this session: its agent read the terminal result
+   *  (get_findings or wait_review), or the server said someone did (`settled`). */
   seen: boolean
   /** confirm_findings for this hunt's id answered with the verdicts recorded. */
   judged?: boolean
+  /** The server said someone already read or judged the result, and this session
+   *  did not see it happen (another session, a result the mod could not parse):
+   *  nothing is owed from here, so no nudge, no next-step line. */
+  settled?: boolean
   nextAt: number
   /** The session that submitted it: the store is shared by every session of this machine. */
   session?: string
@@ -81,7 +86,20 @@ const COLOR: Record<string, string> = { critical: 'red', high: 'red', medium: 'y
 const isOpen = (h: BughunterHunt) => h.state === 'running' || h.state === 'needs_files'
 /** Done, read by the agent, and no verdicts seen for it: the one next step left. */
 const awaitsVerdicts = (h: BughunterHunt, cwd: string, now: number) =>
-  ours(h, cwd) && h.state === 'done' && h.seen && !h.judged && now - h.startedAt < STALE_MS
+  ours(h, cwd) && h.state === 'done' && h.seen && !h.judged && !h.settled && now - h.startedAt < STALE_MS
+
+/** The status URL's word that the result was already dealt with: a findings door
+ *  read it told done, or a finding has a verdict. Absent on an older server, and
+ *  never true of a failed hunt (the server counts only reads told done), so
+ *  those keep the nudge they always had. */
+const dealtWith = (body: unknown) => {
+  const b = body as Record<string, unknown> | undefined
+  return b?.read_after_done === true || b?.judged === true
+}
+/** What a hunt becomes when the server says it was dealt with. Judged is kept
+ *  as judged, so a later read here does not ask for verdicts already sent. */
+const settledBy = (body: unknown): Partial<BughunterHunt> =>
+  ({ seen: true, settled: true, ...((body as Record<string, unknown>).judged === true ? { judged: true } : {}) })
 
 function news(h: BughunterHunt): string {
   if (h.state === 'needs_files') return `Reviewers of hunt ${h.id} asked for files.`
@@ -158,7 +176,8 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
   } else if (at >= 0 && (kind === 'get_findings' || kind === 'wait_review')) {
     const state = pollState(body) ?? list[at]!.state
     const terminal = state === 'done' || state === 'failed'
-    list[at] = { ...list[at]!, state, seen: terminal || list[at]!.seen,
+    // Read here: whatever the server said before, this session now owes the verdicts.
+    list[at] = { ...list[at]!, state, seen: terminal || list[at]!.seen, settled: terminal ? false : list[at]!.settled,
       findings: state === 'done' ? findingsOf(body).length : list[at]!.findings }
     if (bandNow?.kind === 'hunt' && bandNow.id === id) setBand($, null)
     if (heldId === id) heldId = undefined
@@ -229,6 +248,25 @@ async function tick($: Engine) {
 async function pollDue($: Engine) {
   const cwd = await $.session.cwd()
   const now = await $.clock.now()
+  // A done hunt nobody here has read yet is asked again on the slow clock: the
+  // server knows when another session read or judged it, and the nudges (band,
+  // Continue, auto-resume) then read that here with no network call of their own.
+  for (const h of huntList.filter(x => ours(x, cwd) && x.state === 'done' && !x.seen && x.statusUrl && now >= x.nextAt)) {
+    let body
+    try {
+      const res = await $.http.fetch(h.statusUrl!)
+      body = res.ok ? JSON.parse(res.text) : undefined
+    } catch {
+      body = undefined
+    }
+    // Judged against the hunt as it stands now: a read here during the fetch wins.
+    const cur = huntList.find(x => x.id === h.id)
+    if (!cur || cur.seen) continue
+    const settle = dealtWith(body)
+    await save($, huntList.map(x => (x.id === h.id ? { ...x, nextAt: now + 240_000, ...(settle ? settledBy(body) : {}) } : x)))
+    if (settle && bandNow?.kind === 'hunt' && bandNow.id === h.id) setBand($, null)
+    if (settle && heldId === h.id) heldId = undefined
+  }
   const due = huntList.filter(h => ours(h, cwd) && isOpen(h) && h.statusUrl && now >= h.nextAt)
   for (const h of due) {
     let res
@@ -252,8 +290,9 @@ async function pollDue($: Engine) {
     let moved = false
     const next = await apply($, h.id, cur => {
       moved = !!state && state !== cur.state
+      const settled = moved && state === 'done' && dealtWith(body)
       return moved
-        ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings }
+        ? { nextAt: now + wait * 1000, state, findings: num(body.findings) ?? cur.findings, ...(settled ? settledBy(body) : {}) }
         : { nextAt: now + wait * 1000 }
     })
     // Back to running (files served) is news to nobody.

@@ -685,3 +685,129 @@ test('with OHMYBUG_AUTO_RESUME=1, a draft in the prompt is never overrun', async
   expect(seen.prompts).toHaveLength(0)
   expect(await buttons($)).toEqual(['go', 'later'])
 })
+
+// The server's read journal is the fact; this session's `seen` is a guess.
+const readElsewhere = JSON.stringify({ status: 'done', findings: 2, read_after_done: true, judged: false })
+const judgedOnly = JSON.stringify({ status: 'done', findings: 2, read_after_done: false, judged: true })
+const unreadDone = JSON.stringify({ status: 'done', findings: 2, read_after_done: false, judged: false })
+const idle = ($: Dollar, working = false) => drawn($, 'PromptHint', { isDraft: false, isWorking: working, hint: '' })
+const endTurn = ($: Dollar) => $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+
+test('a hunt the server says was already read raises nothing here and owes nothing here', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { OHMYBUG_AUTO_RESUME: '1' })
+  composeBeneath(on)
+  const seen = world(on, readElsewhere)
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await idle($)
+  await clock.advance(75_000)
+  expect(seen.toasts).toEqual([])
+  expect(seen.prompts).toEqual([])
+  expect(await band($)).toBe('engine drawing')
+  // Read, not judged, by someone else: this session is not told to verify findings it never read.
+  expect(await nextStep($)).toBe('')
+  expect(seen.status.at(-1)).toBeUndefined()
+  // ...until it reads them itself: then the verdicts are its own to send.
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await nextStep($)).toContain('confirm_findings for rev_1')
+})
+
+test('a hunt judged elsewhere stays judged when this session reads it later', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  composeBeneath(on)
+  const seen = world(on, judgedOnly)
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  expect(await buttons($)).toEqual([])
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await nextStep($)).toBe('')
+  expect(seen.prompts).toEqual([])
+})
+
+test('a done hunt read elsewhere after its band went up loses the band and its unread status on the next slow poll', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, [unreadDone, readElsewhere])
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  expect(await buttons($)).toEqual(['go', 'later'])
+  expect(seen.status.at(-1)).toContain('rev_1 done')
+  await clock.advance(240_000)
+  expect(await buttons($)).toEqual([])
+  expect(await band($)).toBe('engine drawing')
+  expect(seen.status.at(-1)).toBeUndefined()
+  expect(seen.prompts).toEqual([])
+})
+
+test('with OHMYBUG_AUTO_RESUME=1, a hunt read elsewhere before the turn ends is not resumed, and the turn end makes no network call', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { OHMYBUG_AUTO_RESUME: '1' })
+  let fetches = 0
+  const seen = world(on, async () => { fetches++; return fetches === 1 ? unreadDone : readElsewhere })
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await idle($, true)
+  await clock.advance(75_000)
+  await clock.advance(240_000)
+  const before = fetches
+  await endTurn($)
+  expect(fetches).toBe(before)
+  expect(seen.prompts).toEqual([])
+})
+
+test('without auto-resume, a hunt held through a turn and read elsewhere meanwhile gets no band at its end', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  world(on, [unreadDone, readElsewhere])
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await idle($, true)
+  await clock.advance(75_000)
+  await clock.advance(240_000)
+  await endTurn($)
+  expect(await band($)).toBe('engine drawing')
+})
+
+test('a status URL that fails on the slow poll leaves the nudge as it was', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const seen = world(on, [unreadDone, 'not json'])
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  await clock.advance(240_000)
+  expect(await buttons($)).toEqual(['go', 'later'])
+  await press($, 'go')
+  expect(seen.prompts).toEqual(['The OhMyBug hunt rev_1 is done. Read it with get_findings (review_id rev_1) and continue the bughunter flow.'])
+})
+
+test('a read here while the slow poll is in flight wins over the server saying it was read', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  composeBeneath(on)
+  let fetches = 0
+  world(on, async () => {
+    fetches++
+    if (fetches === 1) return unreadDone
+    // This session's own read lands during the fetch; the server then counts it.
+    await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+    return readElsewhere
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await clock.advance(75_000)
+  await clock.advance(240_000)
+  expect(fetches).toBe(2)
+  expect(await nextStep($)).toContain('confirm_findings for rev_1')
+})
