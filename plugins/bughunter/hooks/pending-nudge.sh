@@ -127,8 +127,8 @@ EOF
 # up with a foreground get_findings every 2–5 min on top of the armed watch
 # (#67). The test is on the exit words and not a whitelist of live ones because
 # the loop writes the server's status word verbatim — `running`, `poll-failed`
-# (the endpoint's failure, not the watcher's: it keeps polling for twelve of
-# them), `awaiting_upload` on an upload ticket, whatever the door answers next —
+# (the endpoint's failure, not the watcher's: it keeps polling for 15 minutes
+# of them), `awaiting_upload` on an upload ticket, whatever the door answers next —
 # and a whitelist read each new word as a dead watcher and ordered a second one
 # (found in review, twice). Stale means the watcher died; an exit word is its
 # last write before leaving on a state that must be read now. Both fall through

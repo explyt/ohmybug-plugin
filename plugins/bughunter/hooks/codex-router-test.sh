@@ -60,7 +60,7 @@ monitor_section = skill.split("start this compact, unbounded loop immediately wi
 monitor_code = monitor_section.split("```", 2)[1]
 assert "while :" in monitor_code
 # One cadence (#67): no literal sleep. The poll gap is the body's watch_poll_s
-# (#2062: 5 s fast, 15 s deep; next_poll_after_s on an older server), the line
+# (5 s fast, 15 s deep; next_poll_after_s on an older server), the line
 # gap its heartbeat_s; the submit response's watch_poll_s seeds the first sleep.
 # A literal here is the loop that polled once a minute against a four-minute
 # contract. Two `sleep "$every"` (the re-arm's and the poll's) and one
@@ -77,7 +77,7 @@ assert "seq " not in monitor_code
 # a positive one (#1029 f3): `every` is the loop's only throttle — and the
 # same clamp on `beat`, whose zero would make the print gate true on every poll.
 assert "\nevery=<watch_poll_s> #" in monitor_code and "\nbeat=<heartbeat_s> " in monitor_code
-# #2062: the loop's own number, watch_poll_s (5 s fast / 15 s deep); an older
+# The loop's own number, watch_poll_s (5 s fast / 15 s deep); an older
 # server has only next_poll_after_s, and that stays the fallback.
 assert 'n=$(num watch_poll_s); [ -n "$n" ] || n=$(num next_poll_after_s)' in monitor_code
 assert '[ -n "$n" ] && [ "$n" -gt 0 ] && every=$n; back=$every' in monitor_code
@@ -98,19 +98,16 @@ assert monitor_code.count("last=$now") == 2, monitor_code.count("last=$now")
 # writes the watch file FIRST: the endpoint failed, the watcher did not, and a
 # Stop hook reading a stale file here called a live watcher dead two polls into
 # a blip and ordered a second one over it (found in review).
-assert ('''    if [ "$code" = 429 ]; then # throttled, not dead: back off, and it never retires the watch
-      back=$((back * 2)); [ "$back" -gt "$beat" ] && back=$beat
-    else
-      fails=$((fails + 1)); back=$every
-    fi
-    printf 'poll-failed %s\\n' "$back" > "$watch" # still alive: the endpoint failed, not the watcher; $back is the sleep it is about to take
+assert ('''    if [ "$code" = 429 ]; then back=$((back * 2)); else back=$every; fi # throttled: ask less often
     now=$(date +%s)
     if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\\n' "$mode"
       last=$now; prev=
-      printf '%s %s - %s %s %s\\n' "$start" "$last" "$fails" "$every" "$ok" > "$keep"
+      printf '%s %s - 0 %s %s\\n' "$start" "$last" "$every" "$ok" > "$keep"
       printf 'rearm %s\\n' "$every" > "$watch"; break # the line is the wake: re-arm the same command
     fi
+    n=$((beat - (now - last))); [ "$back" -gt "$n" ] && back=$n # the next line stays on the heartbeat clock
+    printf 'poll-failed %s\\n' "$back" > "$watch" # still alive: the endpoint failed, not the watcher; $back is the sleep it is about to take
     sleep "$back"
     continue
 ''') in monitor_code, "poll-failed branch lost its shape"
@@ -129,10 +126,10 @@ assert "\nstart=$(date +%s); last=$start; prev= #" in monitor_code
 # The watch retires (with a line) at 180 min or after 12 consecutive failed
 # polls: a dead URL must not wake the session every heartbeat forever, and a
 # cap SHORTER than the 150 min hunt budget would drop a live hunt.
-assert ('''  if [ $((now - start)) -ge 10800 ] || { [ "$fails" -ge 12 ] && [ $((now - ok)) -ge "$beat" ]; }; then
-    rm -f "$keep"; printf 'bughunt · %s · watch-retired\\n' "$mode"; break # past 180 min, or a dead URL
+assert ('''  if [ $((now - start)) -ge 10800 ] || [ $((now - ok)) -ge 900 ]; then
+    rm -f "$keep"; printf 'bughunt · %s · watch-retired\\n' "$mode"; break # past 180 min, or 15 min with no answer: a dead URL
 ''') in monitor_code, "watch retirement lost its shape"
-assert "      fails=$((fails + 1)); back=$every\n" in monitor_code and "\n  fails=0; ok=$now\n" in monitor_code
+assert "\n  ok=$now\n" in monitor_code and "fails" not in monitor_code
 # The watch file exists from the instant the watch starts: the first write used
 # to be after the first curl returned, and a Stop inside that round trip (or
 # right after a needs-files re-arm, while the file still held the exit word) had
@@ -148,7 +145,7 @@ assert ('''  now=$(date +%s)
   if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$beat" ]; then
     printf 'bughunt · %s · running\\n' "$mode"
     last=$now; prev=$st
-    printf '%s %s %s %s %s %s\\n' "$start" "$last" "$prev" "$fails" "$every" "$ok" > "$keep"
+    printf '%s %s %s 0 %s %s\\n' "$start" "$last" "$prev" "$every" "$ok" > "$keep"
     printf 'rearm %s\\n' "$every" > "$watch"; break # the line is the wake: re-arm the same command
   fi
   sleep "$every"
@@ -197,7 +194,7 @@ assert set(re.findall(r"<[a-z_]+>", loop_src)) == {"<status_url>", "<review_id>"
 assert "Substitute the four placeholders from the submit response — `<status_url>`,\n`<review_id>`, `<watch_poll_s>` (its `next_poll_after_s` on an older server\nthat has none, `monitor.interval_s` on one older still) and `<heartbeat_s>` from its `monitor` — and nothing else" in skill
 assert "the submit response's `watch_poll_s` seeds the\n  first sleep" in skill and "`monitor.interval_s` seeds the\n  first sleep" not in skill
 def armed(src): return src.replace("<status_url>", "http://x/").replace("<review_id>", "rev_test").replace("<watch_poll_s>", "240").replace("<heartbeat_s>", "225")
-# The loop asks curl for the HTTP code as its last line (`-w`, #2062); a shim answers 200.
+# The loop asks curl for the HTTP code as its last line (`-w`); a shim answers 200.
 CODE200 = 'case " $* " in *" -w "*) printf \'\\n200\' ;; esac\n'
 def shims(d, curl_body):
     # The shim notes whether the watch file already existed when it was called:
@@ -290,13 +287,13 @@ with tempfile.TemporaryDirectory() as d:
 assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 assert slept == ["240"] * 2, slept
 assert watch == "done 240\n", watch
-# The failed-poll path, executed: a dead endpoint. The curl shim honours `-f`
-# (exit 22 on an HTTP error, else a 404 page with exit 0 – what dropping `-f`
-# or piping curl's output would see) and `date` advances 60 s per call, so the
-# clock-gated poll-failed lines land and the 12-failure retirement fires. A
-# loop that treats the failure as "running" prints `running` and is red. No body
-# ever arrived, so the loop sleeps the seeded next_poll_after_s — and still writes the
-# watch file, `poll-failed 240`: the watcher is alive, the endpoint is not, and a
+# The failed-poll path, executed: a dead endpoint. The curl shim answers a 404
+# page with its code on the `-w` line (the loop decides by the code, not by
+# curl's exit), and `date` advances 60 s per call, so the clock-gated
+# poll-failed lines land and the 15-minute retirement fires. A loop that treats
+# the failure as "running" prints `running` and is red. No body ever arrived, so
+# the loop sleeps the seeded cadence, cut to the time left before the next line,
+# and still writes the watch file: the watcher is alive, the endpoint is not, and a
 # Stop hook that read the missing file as a dead watcher ordered a second monitor
 # over a live one for the length of a blip (found in review).
 with tempfile.TemporaryDirectory() as d:
@@ -304,14 +301,14 @@ with tempfile.TemporaryDirectory() as d:
     open(f"{d}/curl", "w").write('#!/bin/sh\nprintf \'<html>404</html>\'\ncase " $* " in *" -w "*) printf \'\\n404\' ;; esac\n'); os.chmod(f"{d}/curl", 0o755)
     open(f"{d}/date", "w").write(f'#!/bin/sh\nn=$(cat "{d}/clock" 2>/dev/null || echo 0); n=$((n + 60)); echo "$n" > "{d}/clock"; echo "$n"\n'); os.chmod(f"{d}/date", 0o755)
     r = drive(env, 120)
-    slept = set(open(f"{d}/slept").read().split())
-    # The run that retires is a re-arm that reads twelve failures from the
-    # state file and retires before its first poll, so the last write is its
+    slept = [int(x) for x in open(f"{d}/slept").read().split()]
+    # The run that retires is a re-arm that reads the last good poll's time from
+    # the state file and retires before its first poll, so the last write is its
     # `armed`: a word the Stop hook reads as alive, the same as the
     # `poll-failed` one loop left behind, for the same freshness window.
     assert open(f"{d}/.ohmybug/watch/rev_test").read() == "armed 240\n", open(f"{d}/.ohmybug/watch/rev_test").read()
     assert not os.path.exists(f"{d}/.ohmybug/watch/rev_test.loop"), "a retired watch leaves no state for the next arm"
-assert slept == {"240"}, slept
+assert slept and max(slept) <= 240, slept
 lines = r.stdout.splitlines()
 assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
 assert "bughunt · fast · poll-failed" in lines and "bughunt · fast · running" not in lines, r.stdout
@@ -329,7 +326,7 @@ with tempfile.TemporaryDirectory() as d:
 lines = r.stdout.splitlines()
 assert r.returncode == 0 and lines and lines[-1] == "bughunt · fast · watch-retired", (r.returncode, r.stdout, r.stderr)
 assert "bughunt · fast · running" not in lines and "bughunt · fast · poll-failed" in lines, r.stdout
-# #2062: the loop polls at the body's watch_poll_s, not next_poll_after_s (the
+# The loop polls at the body's watch_poll_s, not next_poll_after_s (the
 # cron/foreground number, 240 on a repo row) — five running polls sleep 5 each.
 with tempfile.TemporaryDirectory() as d:
     env = shims(d, '')
@@ -341,7 +338,7 @@ with tempfile.TemporaryDirectory() as d:
 assert r.stdout.splitlines()[-1] == "bughunt · fast · done", r.stdout
 assert set(slept) == {"5"}, slept
 assert watch == "done 5\n", watch
-# #2062, executed on a clock that only sleeps move: `date` reads it, `sleep`
+# Executed on a clock that only sleeps move: `date` reads it, `sleep`
 # adds to it. The curl shim answers a script — line n is "<code> <body>", the
 # last line repeats — and logs the watch file as it finds it before each poll.
 def scripted(d, answers):
@@ -357,53 +354,71 @@ case " $* " in *" -w "*) printf '\\n%s' "$code" ;; esac
     open(f"{d}/date", "w").write(f'#!/bin/sh\ncat "{d}/clock" 2>/dev/null || echo 1000\n'); os.chmod(f"{d}/date", 0o755)
     open(f"{d}/sleep", "w").write(f'#!/bin/sh\necho "$1" >> "{d}/slept"\nn=$(cat "{d}/clock" 2>/dev/null || echo 1000); echo $((n + $1)) > "{d}/clock"\n'); os.chmod(f"{d}/sleep", 0o755)
 RUN5 = '200 {"status":"running","monitor":{"heartbeat_s":225},"watch_poll_s":5}'
-# A 429 is the server asking for less, not a dead URL: forty in a row (hours
-# of clock, backing off from the cadence up to the heartbeat) never retire the
-# watch, and the watch file names the sleep the loop is about to take, so the
-# Stop hook's freshness window (poll_s + 2 min) covers the backed-off sleep.
-# A real failure after a 429 sleeps the cadence, not the backoff.
+# A 429 is the server asking for less: each one in a row doubles the sleep
+# (5, 10 ... 80), and no sleep runs past the next line's time, so the
+# `poll-failed` line still lands on the heartbeat clock (the 155 s spent, then
+# 70 s, not 160). The watch file names the sleep about to be taken, so the Stop
+# hook's freshness window (poll_s + 2 min) covers it. Twenty in a row (under
+# 15 min) do not retire the watch; a real failure after a 429 sleeps the
+# cadence again, and the next good answer is read.
 with tempfile.TemporaryDirectory() as d:
     env = shims(d, '')
-    scripted(d, [RUN5] + ['429 {"error":"slow down"}'] * 40 + [RUN5, '429 {"error":"slow down"}', '404 <html>404</html>', RUN5, '200 {"status":"done","watch_poll_s":5}'])
+    scripted(d, [RUN5] + ['429 {"error":"slow down"}'] * 20 + ['404 <html>404</html>', RUN5, '200 {"status":"done","watch_poll_s":5}'])
     r = drive(env, 120, cap=120)
     slept = [int(x) for x in open(f"{d}/slept").read().split()]
     log = open(f"{d}/watchlog").read().split("\n")
 lines = r.stdout.splitlines()
 assert lines[-1] == "bughunt · fast · done" and "bughunt · fast · watch-retired" not in lines, r.stdout
-# Each `poll-failed` line is a wake and a re-arm, which starts the backoff from
-# the cadence again: 5, 10 ... 160, then the line (315 s >= heartbeat_s).
-assert 160 in slept and max(slept) <= 225, slept
-assert "poll-failed 160" in log, "the watch file must name the backed-off sleep"
+assert 80 in slept and 70 in slept and 160 not in slept and max(slept) <= 225, slept
+assert "poll-failed 70" in log, "the watch file must name the sleep about to be taken"
 assert [w for w in log if w.startswith("poll-failed")][-1] == "poll-failed 5", "a 404 after a 429 sleeps the cadence"
-# Real failures at a 5 s cadence retire only once a heartbeat has passed since
-# the last GOOD poll: a minute of good polls, then 500s whose body even names a
-# status (the HTTP code decides, not the body). Twelve failures take 60 s of
-# clock; the watch must go on until 225 s after the last good answer.
+# ...but a URL that answers nothing but 429 is not a live server for the watch:
+# 15 minutes with no review in the answer retire it, as for any other failure.
 with tempfile.TemporaryDirectory() as d:
     env = shims(d, '')
-    scripted(d, [RUN5] * 70 + ['500 {"status":"failed","error":"boom"}'])
+    scripted(d, [RUN5, '429 {"error":"slow down"}'])
     r = drive(env, 120, cap=120)
-    failed = int(open(f"{d}/polls").read()) - 70
+assert r.stdout.splitlines()[-1] == "bughunt · fast · watch-retired", r.stdout
+# A curl that fails outright (a refused connection, a timeout) exits non-zero
+# and prints code 000 under -w: a failed poll like any other, never `running`.
+with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '')
+    scripted(d, [RUN5, '000 {"status":"running"}'])
+    open(f"{d}/curl", "a").write("[ \"$(cat \"%s/polls\")\" -gt 1 ] && exit 7\nexit 0\n" % d)
+    r = drive(env, 120, cap=120)
+lines = r.stdout.splitlines()
+assert lines[-1] == "bughunt · fast · watch-retired" and lines.count("bughunt · fast · running") == 1, r.stdout
+# Failures retire the watch only 15 minutes after the last GOOD poll, however
+# many polls fit in them: a few minutes of good polls, then 500s whose body even
+# names a status (the HTTP code decides, not the body). The last good poll's time
+# rides the state file across the heartbeat re-arms (the running branch's too).
+with tempfile.TemporaryDirectory() as d:
+    env = shims(d, '')
+    # 46 good polls: the 46th lands at 225 s and prints the heartbeat line, so the
+    # run that fails is a re-arm reading the last good poll off the RUNNING line's state.
+    scripted(d, [RUN5] * 46 + ['500 {"status":"failed","error":"boom"}'])
+    r = drive(env, 120, cap=120)
+    failed = int(open(f"{d}/polls").read()) - 46
 lines = r.stdout.splitlines()
 assert lines[-1] == "bughunt · fast · watch-retired" and "bughunt · fast · failed" not in lines, r.stdout
-assert 40 <= failed <= 50, ("retired off the last good poll + heartbeat_s", failed)
-# A state file from before the last good poll was kept (five fields) re-arms
-# with "now" as that time: eleven failures already, one more must not retire it.
+assert 170 <= failed <= 190, ("retired 15 min after the last good poll, at a 5 s cadence", failed)
+# A state file from before the last good poll was kept (five fields, its start
+# long ago) re-arms with "now" as that time, not its start: 15 more minutes.
 with tempfile.TemporaryDirectory() as d:
     env = shims(d, '')
     scripted(d, ['404 <html>404</html>'])
     os.makedirs(f"{d}/.ohmybug/watch", exist_ok=True)
-    open(f"{d}/.ohmybug/watch/rev_test.loop", "w").write("1000 1000 running 11 5\n")
+    open(f"{d}/.ohmybug/watch/rev_test.loop", "w").write("1 1 running 11 5\n")
     r = drive(env, 120, cap=120)
     polls = int(open(f"{d}/polls").read())
 assert r.stdout.splitlines()[-1] == "bughunt · fast · watch-retired", r.stdout
-assert polls > 30, ("an old state file retired the watch at once", polls)
+assert polls > 150, ("an old state file retired the watch at once", polls)
 # The properties list is normative for any rewrite of the loop: property 4
-# must describe the shipped loop (clock-gated poll-failed, retirement after 12
-# failures), not the pre-retirement one that printed per failure and never ended.
+# must describe the shipped loop (clock-gated poll-failed, retirement after 15
+# minutes with no answer), not the pre-retirement one that printed per failure and never ended.
 props = skill.split("Any form you write must keep:", 1)[1].split("\n\nNo background tasks", 1)[0]
 assert "- **A poll failure is seen, not swallowed.**" in props
-assert "print `poll-failed` on the heartbeat clock" in props and "only 12 consecutive failures, with no good\n  poll for `heartbeat_s`, end the watch" in props
+assert "print `poll-failed` on the heartbeat clock" in props and "only 15 minutes with no poll that got the\n  review back end the watch" in props
 assert "does not end the watch" not in props and "print the failure, and keep polling" not in props
 # Property 5 (#67): the watch file is what makes the Stop hook stand down.
 assert "- **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on every\n  poll after it, failed ones too**" in props
@@ -413,7 +428,7 @@ assert "`watch_poll_s` is the sleep, `monitor.heartbeat_s` the line\n  clock" in
 # under the prompt-cache TTL: a rewrite to "at least every heartbeat_s" is the
 # promise no once-per-poll loop can keep.
 assert "rounded up to\n  whole poll cadences" in props and "must stay under the\n  prompt-cache TTL" in props
-assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is 12 poll cadences, and the cadence is the server's"
+assert "~9 min" not in skill and "13 min" not in skill and "9–12 min" not in skill, "the failure window is a time, and the cadence is the server's"
 claude_bullet = skill.split("- **Claude Code:**", 1)[1].split("\n\nIf the runtime cannot create its monitor", 1)[0]
 for phrase in ("`Bash` tool, `run_in_background: true`", "re-arm\n  the same command on each heartbeat wake", "`next_poll_after_s`", "on the `monitor.heartbeat_s` clock", "Every number in the loop\n  comes from the server", "up to 150 min", "CronCreate", "`3-59/4 * * * *`", "KEEP this job", "after `<fail_cap>` consecutive poll failures (3 for a job at\n  `interval_s`, 12 for one every minute", "older than 180 minutes", "print `bughunt · <mode> · watch-retired` and only then\n  `CronDelete`", "One job per review", "older review id", "answered with that one line and a re-arm", "the loop has already exited", "`~/.ohmybug/watch/<review_id>`", "do\n  not add a foreground `get_findings` beside an armed monitor"):
     assert phrase in claude_bullet, phrase
@@ -491,7 +506,7 @@ assert "it and its round trip would end inside" not in skill and "it and its rou
 for phrase in ("the one exception is a payload submit", "inside that wake call wait_review back to back", "start another hold only if it, its round trip, and one more round trip for the handover's own calls would end inside heartbeat_s from this wake's start", "a bound that subtracts the hold alone lets the last one return as the next wake fires", "shrinks it on the slow links that need it", "a repo or deep submit never needs this"):
     assert phrase in session_text, phrase
 # The Monitor surface reads on a failed poll like the other two (found in
-# review): a fresh poll-failed file keeps the Stop hook quiet for twelve polls,
+# review): a fresh poll-failed file keeps the Stop hook quiet while the loop fails,
 # so without this read a review sat done and unread behind that silence.
 assert "on `poll-failed` → one\n  `get_findings`, print what it answered" in claude_bullet
 after_loop = skill.split("Every printed line wakes you.", 1)[1].split("The loop above keeps", 1)[0]
