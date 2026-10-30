@@ -666,12 +666,13 @@ every=<watch_poll_s> # seconds between polls: the submit response's watch_poll_s
                      # on one older still); the body's watch_poll_s takes over from the first poll
 beat=<heartbeat_s>        # seconds between `running` lines while nothing changes: the submit
                           # response's monitor.heartbeat_s, which keeps the prompt cache warm
-start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
+now=$(date +%s); start=$now; last=$start; prev= # empty prev: the first reading prints at once
 ok=$start # when a poll last got the review back; a failed poll 15 min after it retires the watch
 back=$every # the sleep before the next poll: the cadence, doubled by each failed poll in a row
 keep="$watch.loop" # a re-arm goes on from here: start, last line, last status, sleep, cadence, last good poll
 rearm=; [ -s "$keep" ] && read -r start last prev back every ok < "$keep" && rearm=1
-[ -n "$ok" ] || ok=$(date +%s) # a state file written before the last good poll was kept
+[ -n "$ok" ] && ok=$((ok + now - last)) # a late re-arm: the time between runs is not time the URL failed
+[ -n "$ok" ] || ok=$now # a state file written before the last good poll was kept
 case $back in ''|*[!0-9]*|0) back=$every ;; esac # ...or one whose fourth field was a failure count of 0
 num() ( printf '%s' "$s" | sed -n "s/.*\"${1}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1 )
 printf 'armed %s\n' "$back" > "$watch" # visible to the Stop hook from the instant the watch starts, for as long as its first sleep
@@ -696,9 +697,9 @@ while :; do
       printf '%s %s - %s %s %s\n' "$start" "$last" "$back" "$every" "$ok" > "$keep"
       printf 'rearm %s\n' "$every" > "$watch"; break # the line is the wake: re-arm the same command
     fi
-    n=$((beat - (now - last))); [ "$back" -gt "$n" ] && back=$n # the next line stays on the heartbeat clock
-    printf 'poll-failed %s\n' "$back" > "$watch" # still alive: the endpoint failed, not the watcher; $back is the sleep it is about to take
-    sleep "$back"
+    nap=$((beat - (now - last))); [ "$back" -lt "$nap" ] && nap=$back # the next line stays on the heartbeat clock; the backoff is kept whole
+    printf 'poll-failed %s\n' "$nap" > "$watch" # still alive: the endpoint failed, not the watcher; $nap is the sleep it is about to take
+    sleep "$nap"
     continue
   fi
   ok=$now
@@ -782,8 +783,9 @@ review was watched. Any form you write must keep:
   whole poll cadences plus the poll's own cost, and it must stay under the
   prompt-cache TTL — and every review status change immediately, at the poll
   cadence the body names.** Poll failures are
-  the exception: they land on the clock only (a failed poll sleeps the cadence,
-  each 429 in a row doubles it, and no sleep runs past the next line's time), so a flapping endpoint costs at
+  the exception: they land on the clock only (each failed poll in a row — a 429
+  or any other — doubles the sleep, capped at `heartbeat_s`, and no sleep runs
+  past the next line's time), so a flapping endpoint costs at
   most two lines per heartbeat window (`poll-failed` on the clock, `running`
   once on recovery) and never one per poll. The numbers are the server's, not
   yours: `watch_poll_s` is the sleep, `monitor.heartbeat_s` the line
@@ -807,7 +809,8 @@ review was watched. Any form you write must keep:
   review sat unread behind an armed-looking watch for the whole age cap.
 - **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on every
   poll after it, failed ones too** — the status word (`armed` before the first
-  answer, `poll-failed` when curl failed) and the poll cadence, one line. The
+  answer, `poll-failed` after a failed poll) and the sleep it is about to
+  take, one line. The
   Stop hook reads it: a fresh file whose word is not one the loop writes as it
   exits is an armed watch and the hook stays quiet; a stale one means the
   watcher died, and the hook says so. Drop the write and every turn ends with
