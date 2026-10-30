@@ -690,7 +690,7 @@ while :; do
     else
       fails=$((fails + 1)); back=$every
     fi
-    printf 'poll-failed %s\n' "$every" > "$watch" # still alive: the endpoint failed, not the watcher
+    printf 'poll-failed %s\n' "$back" > "$watch" # still alive: the endpoint failed, not the watcher; $back is the sleep it is about to take
     now=$(date +%s)
     if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\n' "$mode"
@@ -739,7 +739,7 @@ re-arm is a hunt nobody watches: the loop leaves `rearm` in the watch file, and
 the Stop hook reads that word as a watch that ended.
 `needs-files` → serve `provide_files` first and re-arm the loop. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. `watch-retired` → the URL has failed 12 polls in a row and answered nothing for `heartbeat_s`, or the
+nothing to stop. `watch-retired` → the URL has failed 12 polls in a row with no good answer for `heartbeat_s` (a 429 is not counted), or the
 watch is 3 h old: call `get_findings` once; if the review is still running or
 waiting for files, tell the user, and arm a fresh monitor unless the watch
 retired on age — that cap ends the watching, and the user takes it from there. `poll-failed` lands on the heartbeat clock, never per poll: a
