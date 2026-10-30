@@ -2416,7 +2416,8 @@ rc=$(nsrc 0 A1)
 [ "$rc" = 2 ] || { printf 'FAIL nudge: a 3-minute-old watch at a 45 s cadence was read as armed (rc=%s)\n' "$rc"
                    fails=$((fails + 1)); }
 # A failed poll is the endpoint's failure, not the watcher's: the loop writes
-# `poll-failed <cadence>` then and keeps going for twelve of them, so a fresh
+# `poll-failed <the sleep it is about to take>` then and keeps going until 15
+# minutes pass with no good poll, so a fresh
 # `poll-failed` file is an armed watch too. Read as dead, the hook ordered a
 # second monitor over a live one for the length of a blip (found in review).
 printf 'poll-failed 240\n' > "$W/rev_watched"

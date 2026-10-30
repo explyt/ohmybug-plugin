@@ -160,16 +160,15 @@ This is a required client action, not a reminder to do later:
   without exiting woke every session exactly once per hunt, 15–25 minutes after
   submit, and the prompt cache (5-minute TTL) went cold each time. The loop
   polls `status_url` at the cadence the status
-  body names — `next_poll_after_s`, which the server sets per submit (the
-  watcher cadence for a payload submit, whose file request is held open for
-  minutes; `interval_s` for a repo or deep one, where the server serves the
-  files itself) — prints the compact line on the `monitor.heartbeat_s` clock
+  body names — `watch_poll_s`, which the server sets per mode (5 s fast, 15 s
+  deep: a bare `curl` wakes nobody, so the loop sees `done` within seconds; an
+  older server sends only `next_poll_after_s`, and the loop takes that) — prints the compact line on the `monitor.heartbeat_s` clock
   even when nothing changed (that line is the heartbeat that keeps the cache
   warm), prints immediately on
   every review status change and exits on `done` / `failed` or on the
   `awaiting_client_files`/`files_requested` flags — that body carries a file
   request in those flags, never in its status word. Every number in the loop
-  comes from the server: the submit response's `next_poll_after_s` seeds the
+  comes from the server: the submit response's `watch_poll_s` seeds the
   first sleep, the body's own fields take over from the first poll. The
   re-armed runs carry the age clock between them (a deep hunt runs
   up to 150 min; the watch retires at 180). Do not paste status JSON into the
@@ -652,7 +651,7 @@ In Claude Code, start this compact, unbounded loop immediately with the
 **`Bash` tool, `run_in_background: true`**. Claude Code wakes you when a
 background command EXITS, so the loop ends at every line it prints: a `running`
 or `poll-failed` line is a wake – answer it, then start the SAME command again
-(a re-arm). The clocks and the failure count carry over in
+(a re-arm). The clocks, the backed-off sleep and the last good poll carry over in
 `~/.ohmybug/watch/<review_id>.loop`, so a chain of re-armed runs prints what one
 unbounded loop would. Do not run it with the `Monitor` tool: a client model has
 been seen adding an empty `ws` argument to every `Monitor` call, the tool
@@ -662,40 +661,50 @@ of the turn.
 ```bash
 mode=fast # deep for a deep submit – an escalation or a deep-first hunt (`deep: true`)
 url='<status_url>'; watch="$HOME/.ohmybug/watch/<review_id>"; mkdir -p "${watch%/*}"
-every=<next_poll_after_s> # seconds between polls: the submit response's next_poll_after_s
-                          # seeds it (its monitor.interval_s on an older server that has none);
-                          # the body's next_poll_after_s takes over from the first poll
+every=<watch_poll_s> # seconds between polls: the submit response's watch_poll_s seeds it
+                     # (its next_poll_after_s on an older server that has none, monitor.interval_s
+                     # on one older still); the body's watch_poll_s takes over from the first poll
 beat=<heartbeat_s>        # seconds between `running` lines while nothing changes: the submit
                           # response's monitor.heartbeat_s, which keeps the prompt cache warm
-start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
-fails=0 # consecutive failed polls; 12 retires the watch (12 poll cadences of a dead URL)
-keep="$watch.loop" # a re-arm goes on from here: start, last line, last status, failed polls, cadence
-rearm=; [ -s "$keep" ] && read -r start last prev fails every < "$keep" && rearm=1
+now=$(date +%s); start=$now; last=$start; prev= # empty prev: the first reading prints at once
+ok=$start # when a poll last got the review back; a failed poll 15 min after it retires the watch
+back=$every # the sleep before the next poll: the cadence, doubled by each failed poll in a row
+keep="$watch.loop" # a re-arm goes on from here: start, last line, last status, sleep, cadence, last good poll
+rearm=; [ -s "$keep" ] && read -r start last prev back every ok < "$keep" && rearm=1
+[ -n "$ok" ] && ok=$((ok + now - last)) # a late re-arm: the time between runs is not time the URL failed
+[ -n "$ok" ] || ok=$now # a state file written before the last good poll was kept
+case $back in ''|*[!0-9]*|0) back=$every ;; esac # ...or one whose fourth field was a failure count of 0
 num() ( printf '%s' "$s" | sed -n "s/.*\"${1}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1 )
-printf 'armed %s\n' "$every" > "$watch" # visible to the Stop hook from the instant the watch starts, not one poll later
-[ -n "$rearm" ] && sleep "$every" # the run before polled just now: wait one cadence, as one loop would
+printf 'armed %s\n' "$back" > "$watch" # visible to the Stop hook from the instant the watch starts, for as long as its first sleep
+[ -n "$rearm" ] && sleep "$back" # the run before polled just now: wait as one loop would (backed off after failed polls)
 while :; do
   now=$(date +%s)
-  if [ $((now - start)) -ge 10800 ] || [ "$fails" -ge 12 ]; then
-    rm -f "$keep"; printf 'bughunt · %s · watch-retired\n' "$mode"; break # past 180 min, or a dead URL
+  if [ $((now - start)) -ge 10800 ]; then
+    rm -f "$keep"; printf 'bughunt · %s · watch-retired\n' "$mode"; break # past 180 min
   fi
-  s=$(curl -fsS --max-time 15 "$url"); rc=$?
+  s=$(curl -sS --max-time 15 -w '\n%{http_code}' "$url"); rc=$?
+  code=$(printf '%s' "$s" | tail -n 1); s=$(printf '%s' "$s" | sed '$d') # the last line is the HTTP code
   st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
-  if [ "$rc" -ne 0 ] || [ -z "$st" ]; then # no answer, or a 200 that is not the review (a redirect page, a proxy's HTML)
-    fails=$((fails + 1))
-    printf 'poll-failed %s\n' "$every" > "$watch" # still alive: the endpoint failed, not the watcher
+  if [ "$rc" -ne 0 ] || [ "$code" != 200 ] || [ -z "$st" ]; then # no answer, an error, or a 200 that is not the review (a redirect page, a proxy's HTML)
+    back=$((back * 2)); [ "$back" -gt "$beat" ] && back=$beat # each error in a row halves how often the server is asked, a 429 too
     now=$(date +%s)
+    if [ $((now - ok)) -ge 900 ]; then
+      rm -f "$keep"; printf 'bughunt · %s · watch-retired\n' "$mode"; break # 15 min with no answer, judged on a poll that failed: a dead URL
+    fi
     if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\n' "$mode"
       last=$now; prev=
-      printf '%s %s - %s %s\n' "$start" "$last" "$fails" "$every" > "$keep"
+      printf '%s %s - %s %s %s\n' "$start" "$last" "$back" "$every" "$ok" > "$keep"
       printf 'rearm %s\n' "$every" > "$watch"; break # the line is the wake: re-arm the same command
     fi
-    sleep "$every"
+    nap=$((beat - (now - last))); [ "$back" -lt "$nap" ] && nap=$back # the next line stays on the heartbeat clock; the backoff is kept whole
+    printf 'poll-failed %s\n' "$nap" > "$watch" # still alive: the endpoint failed, not the watcher; $nap is the sleep it is about to take
+    sleep "$nap"
     continue
   fi
-  fails=0
-  n=$(num next_poll_after_s); [ -n "$n" ] && [ "$n" -gt 0 ] && every=$n
+  ok=$now
+  n=$(num watch_poll_s); [ -n "$n" ] || n=$(num next_poll_after_s) # an older server has no watch_poll_s
+  [ -n "$n" ] && [ "$n" -gt 0 ] && every=$n; back=$every
   n=$(num heartbeat_s); [ -n "$n" ] && [ "$n" -gt 0 ] && beat=$n
   printf '%s' "$s" | grep -qE '"awaiting_client_files"[[:space:]]*:[[:space:]]*true|"files_requested"[[:space:]]*:[[:space:]]*true' && st=needs-files
   printf '%s %s\n' "$st" "$every" > "$watch" # the Stop hook reads this: fresh + running = armed
@@ -706,7 +715,7 @@ while :; do
   if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$beat" ]; then
     printf 'bughunt · %s · running\n' "$mode"
     last=$now; prev=$st
-    printf '%s %s %s %s %s\n' "$start" "$last" "$prev" "$fails" "$every" > "$keep"
+    printf '%s %s %s %s %s %s\n' "$start" "$last" "$prev" "$back" "$every" "$ok" > "$keep"
     printf 'rearm %s\n' "$every" > "$watch"; break # the line is the wake: re-arm the same command
   fi
   sleep "$every"
@@ -714,11 +723,15 @@ done
 ```
 
 Substitute the four placeholders from the submit response — `<status_url>`,
-`<review_id>`, `<next_poll_after_s>` (its `monitor.interval_s` on an older
-server that has none) and `<heartbeat_s>` from its `monitor` — and nothing else: the
+`<review_id>`, `<watch_poll_s>` (its `next_poll_after_s` on an older server
+that has none, `monitor.interval_s` on one older still) and `<heartbeat_s>` from its `monitor` — and nothing else: the
 cadence between polls and between lines is read off each status body
-(`next_poll_after_s`, `monitor.heartbeat_s`), so the loop keeps the server's
-numbers without you typing them.
+(`watch_poll_s`, `monitor.heartbeat_s`), so the loop keeps the server's
+numbers without you typing them. `watch_poll_s` is seconds — 5 on a fast hunt,
+15 on a deep one: each poll is a bare `curl` that wakes nobody, so the loop sees
+`done` within seconds while you still hear from it only once per `heartbeat_s`.
+`next_poll_after_s` is for the cron fallback and the foreground, where every
+poll is a turn of yours; this loop does not use it on a server that sends both.
 
 Every printed line wakes you. The run has exited on it. A plain `running`
 line is a heartbeat: answer it with that one line, re-arm the same command, and
@@ -727,7 +740,7 @@ re-arm is a hunt nobody watches: the loop leaves `rearm` in the watch file, and
 the Stop hook reads that word as a watch that ended.
 `needs-files` → serve `provide_files` first and re-arm the loop. `done` /
 `failed` → call `get_findings(review_id)`; the loop has exited, so there is
-nothing to stop. `watch-retired` → the URL has been dead for 12 polls or the
+nothing to stop. `watch-retired` → no poll got the review back for 15 minutes, or the
 watch is 3 h old: call `get_findings` once; if the review is still running or
 waiting for files, tell the user, and arm a fresh monitor unless the watch
 retired on age — that cap ends the watching, and the user takes it from there. `poll-failed` lands on the heartbeat clock, never per poll: a
@@ -739,7 +752,7 @@ once — the MCP transport is a different path from the status URL — and print
 what THAT answered.** `done` there is `done`: read the findings and do not
 re-arm; otherwise re-arm the same command. The loop keeps writing the watch file through an outage because the
 watcher is alive, so the Stop hook stays quiet for as long as the loop tolerates
-failures (12 polls); this read is what keeps a review from sitting `done` and
+failures (15 minutes with no answer); this read is what keeps a review from sitting `done` and
 unread behind that silence — the Codex wake and the cron job already read on a
 failed poll, and this surface must not be the one that only prints.
 
@@ -758,8 +771,10 @@ review was watched. Any form you write must keep:
 - **Unbounded while the hunt can still end.** No iteration cap shorter than
   the hunt's own budget (≥ 150 min): a watcher that dies before the hunt is a
   watcher that missed the event, and silence from it reads exactly like "still
-  running". The two retirements it DOES have — 180 min of age, or 12 consecutive
-  failed polls (12 poll cadences of a dead URL) — print `watch-retired` first, so the
+  running". The two retirements it DOES have — 180 min of age, or 15 minutes
+  with no poll that got the review back (a dead URL, not a deploy's blip; by
+  time, not by a count of polls, which shrinks as the poll gets faster) —
+  print `watch-retired` first, so the
   session learns the watch ended rather than inferring it from silence. Every
   printed line is a wake; a watch nothing can satisfy must not wake you forever.
 - **Wakes on `files_requested:true`**, not only on `done|failed`.
@@ -768,10 +783,12 @@ review was watched. Any form you write must keep:
   whole poll cadences plus the poll's own cost, and it must stay under the
   prompt-cache TTL — and every review status change immediately, at the poll
   cadence the body names.** Poll failures are
-  the exception: they land on the clock only, so a flapping endpoint costs at
+  the exception: they land on the clock only (each failed poll in a row — a 429
+  or any other — doubles the sleep, capped at `heartbeat_s`, and no sleep runs
+  past the next line's time), so a flapping endpoint costs at
   most two lines per heartbeat window (`poll-failed` on the clock, `running`
   once on recovery) and never one per poll. The numbers are the server's, not
-  yours: `next_poll_after_s` is the sleep, `monitor.heartbeat_s` the line
+  yours: `watch_poll_s` is the sleep, `monitor.heartbeat_s` the line
   clock, read off every body — a loop with a literal in either place is the
   loop that polled once a minute against a four-minute contract, and one that
   sleeps longer than the body says is the loop that misses a file request held
@@ -783,16 +800,17 @@ review was watched. Any form you write must keep:
 - **A poll failure is seen, not swallowed.** A pipeline's exit status is
   its LAST command's, so `curl … | grep` masks curl's failure and grep's
   "no match" reads as "still running"; capture curl's output and exit code
-  first, count the failure, print `poll-failed` on the heartbeat clock
-  (property 3) and keep polling – only 12 consecutive failures end the
-  watch, and they do so with `watch-retired` (property 1). A 200 with no
+  first, back off, print `poll-failed` on the heartbeat clock
+  (property 3) and keep polling – only 15 minutes with no poll that got the
+  review back end the watch, and they do so with `watch-retired` (property 1). A 200 with no
   status word in it is a failed poll too — a redirect page, a proxy's HTML —
   not a `running` review: read as success it wrote a blank word into the
   watch file, the Stop hook read the cadence as the status, and a finished
   review sat unread behind an armed-looking watch for the whole age cap.
 - **Writes `~/.ohmybug/watch/<review_id>` before the first poll and on every
   poll after it, failed ones too** — the status word (`armed` before the first
-  answer, `poll-failed` when curl failed) and the poll cadence, one line. The
+  answer, `poll-failed` after a failed poll) and the sleep it is about to
+  take, one line. The
   Stop hook reads it: a fresh file whose word is not one the loop writes as it
   exits is an armed watch and the hook stays quiet; a stale one means the
   watcher died, and the hook says so. Drop the write and every turn ends with
@@ -913,8 +931,8 @@ so as YOUR idea it only makes sense once the cheap pass has come back empty.
   hunt of this commit is live – let it finish and escalate it; the text names
   the id), `deep_at_capacity` (retry later, or the fast hunt now).
 - For the monitor a deep-first hunt is a deep submit like an escalation:
-  `mode=deep`, the cadence from ITS response (`next_poll_after_s`, else
-  `monitor.interval_s`) – never a fast default carried over from an earlier
+  `mode=deep`, the cadence from ITS response (`watch_poll_s`, else
+  `next_poll_after_s`, else `monitor.interval_s`) – never a fast default carried over from an earlier
   hunt – and the compact line reads `bughunt · deep · running`.
 
 - `submit_review` carries `connect_repo` when the repo is not readable:
@@ -1227,7 +1245,7 @@ branch.
    `scan_fetch_failed`, `scan_disabled`.
 3. Tell the user once that it takes about an hour and they need not wait
    at the terminal. Watch it exactly like a deep hunt (the monitor rules
-   above – `monitor`, `status_url`, `next_poll_after_s`); hand the user
+   above – `monitor`, `status_url`, `watch_poll_s`); hand the user
    `live_url` once.
 4. When it is done, read `scan` in the answer: the window (`base`..`ref`),
    how many files were read (`files`), and what was not (`not_read`, with

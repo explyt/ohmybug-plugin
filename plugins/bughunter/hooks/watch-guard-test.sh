@@ -29,7 +29,7 @@ SKILL_LOOP=$(python3 - "$G/../skills/bughunter/SKILL.md" <<'PY'
 import sys
 s = open(sys.argv[1], encoding="utf-8").read()
 code = s.split("start this compact, unbounded loop immediately with the", 1)[1].split("```", 2)[1].split("\n", 1)[1]
-for a, b in (("<status_url>", "https://mcp.ohmybug.ai/r/rev_abc/status"), ("<review_id>", "rev_abc"), ("<next_poll_after_s>", "240"), ("<heartbeat_s>", "225")):
+for a, b in (("<status_url>", "https://mcp.ohmybug.ai/r/rev_abc/status"), ("<review_id>", "rev_abc"), ("<watch_poll_s>", "5"), ("<heartbeat_s>", "225")):
     code = code.replace(a, b)
 print(code)
 PY
