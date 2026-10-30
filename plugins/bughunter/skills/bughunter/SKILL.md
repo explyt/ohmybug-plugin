@@ -651,7 +651,7 @@ In Claude Code, start this compact, unbounded loop immediately with the
 **`Bash` tool, `run_in_background: true`**. Claude Code wakes you when a
 background command EXITS, so the loop ends at every line it prints: a `running`
 or `poll-failed` line is a wake – answer it, then start the SAME command again
-(a re-arm). The clocks and the failure count carry over in
+(a re-arm). The clocks, the backed-off sleep and the last good poll carry over in
 `~/.ohmybug/watch/<review_id>.loop`, so a chain of re-armed runs prints what one
 unbounded loop would. Do not run it with the `Monitor` tool: a client model has
 been seen adding an empty `ws` argument to every `Monitor` call, the tool
@@ -667,29 +667,33 @@ every=<watch_poll_s> # seconds between polls: the submit response's watch_poll_s
 beat=<heartbeat_s>        # seconds between `running` lines while nothing changes: the submit
                           # response's monitor.heartbeat_s, which keeps the prompt cache warm
 start=$(date +%s); last=$start; prev= # empty prev: the first reading prints at once
-ok=$start # when a poll last got the review back; 15 min with none retires the watch
-keep="$watch.loop" # a re-arm goes on from here: start, last line, last status, (a spare slot), cadence, last good poll
-rearm=; [ -s "$keep" ] && read -r start last prev n every ok < "$keep" && rearm=1
+ok=$start # when a poll last got the review back; a failed poll 15 min after it retires the watch
+back=$every # the sleep before the next poll: the cadence, doubled by each failed poll in a row
+keep="$watch.loop" # a re-arm goes on from here: start, last line, last status, sleep, cadence, last good poll
+rearm=; [ -s "$keep" ] && read -r start last prev back every ok < "$keep" && rearm=1
 [ -n "$ok" ] || ok=$(date +%s) # a state file written before the last good poll was kept
-back=$every # the sleep after a failed poll: the cadence, doubled for each 429 in a row
+case $back in ''|*[!0-9]*|0) back=$every ;; esac # ...or one whose fourth field was a failure count of 0
 num() ( printf '%s' "$s" | sed -n "s/.*\"${1}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1 )
-printf 'armed %s\n' "$every" > "$watch" # visible to the Stop hook from the instant the watch starts, not one poll later
-[ -n "$rearm" ] && sleep "$every" # the run before polled just now: wait one cadence, as one loop would
+printf 'armed %s\n' "$back" > "$watch" # visible to the Stop hook from the instant the watch starts, for as long as its first sleep
+[ -n "$rearm" ] && sleep "$back" # the run before polled just now: wait as one loop would (backed off after failed polls)
 while :; do
   now=$(date +%s)
-  if [ $((now - start)) -ge 10800 ] || [ $((now - ok)) -ge 900 ]; then
-    rm -f "$keep"; printf 'bughunt · %s · watch-retired\n' "$mode"; break # past 180 min, or 15 min with no answer: a dead URL
+  if [ $((now - start)) -ge 10800 ]; then
+    rm -f "$keep"; printf 'bughunt · %s · watch-retired\n' "$mode"; break # past 180 min
   fi
   s=$(curl -sS --max-time 15 -w '\n%{http_code}' "$url"); rc=$?
   code=$(printf '%s' "$s" | tail -n 1); s=$(printf '%s' "$s" | sed '$d') # the last line is the HTTP code
   st=$(printf '%s' "$s" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"\]*\)".*/\1/p' | head -n 1)
   if [ "$rc" -ne 0 ] || [ "$code" != 200 ] || [ -z "$st" ]; then # no answer, an error, or a 200 that is not the review (a redirect page, a proxy's HTML)
-    if [ "$code" = 429 ]; then back=$((back * 2)); else back=$every; fi # throttled: ask less often
+    back=$((back * 2)); [ "$back" -gt "$beat" ] && back=$beat # each error in a row halves how often the server is asked, a 429 too
     now=$(date +%s)
+    if [ $((now - ok)) -ge 900 ]; then
+      rm -f "$keep"; printf 'bughunt · %s · watch-retired\n' "$mode"; break # 15 min with no answer, judged on a poll that failed: a dead URL
+    fi
     if [ $((now - last)) -ge "$beat" ]; then
       printf 'bughunt · %s · poll-failed\n' "$mode"
       last=$now; prev=
-      printf '%s %s - 0 %s %s\n' "$start" "$last" "$every" "$ok" > "$keep"
+      printf '%s %s - %s %s %s\n' "$start" "$last" "$back" "$every" "$ok" > "$keep"
       printf 'rearm %s\n' "$every" > "$watch"; break # the line is the wake: re-arm the same command
     fi
     n=$((beat - (now - last))); [ "$back" -gt "$n" ] && back=$n # the next line stays on the heartbeat clock
@@ -710,7 +714,7 @@ while :; do
   if [ "$st" != "$prev" ] || [ $((now - last)) -ge "$beat" ]; then
     printf 'bughunt · %s · running\n' "$mode"
     last=$now; prev=$st
-    printf '%s %s %s 0 %s %s\n' "$start" "$last" "$prev" "$every" "$ok" > "$keep"
+    printf '%s %s %s %s %s %s\n' "$start" "$last" "$prev" "$back" "$every" "$ok" > "$keep"
     printf 'rearm %s\n' "$every" > "$watch"; break # the line is the wake: re-arm the same command
   fi
   sleep "$every"
@@ -794,7 +798,7 @@ review was watched. Any form you write must keep:
 - **A poll failure is seen, not swallowed.** A pipeline's exit status is
   its LAST command's, so `curl … | grep` masks curl's failure and grep's
   "no match" reads as "still running"; capture curl's output and exit code
-  first, count the failure, print `poll-failed` on the heartbeat clock
+  first, back off, print `poll-failed` on the heartbeat clock
   (property 3) and keep polling – only 15 minutes with no poll that got the
   review back end the watch, and they do so with `watch-retired` (property 1). A 200 with no
   status word in it is a failed poll too — a redirect page, a proxy's HTML —
