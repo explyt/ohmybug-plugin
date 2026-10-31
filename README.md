@@ -4,7 +4,7 @@
 
 <br clear="left">
 
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/EjpSKN3am)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/hAtEhsWqFe)
 
 We find the bugs your Claude Code missed. You pay only when your own Claude
 confirms real bugs: $4 per bug-finding review (however many bugs it
@@ -112,7 +112,7 @@ codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp \
 --header "Authorization: Bearer $OHMYBUG_API_KEY"` — an explicit
 Authorization header disables the OAuth flow.)
 
-Questions → [Discord](https://discord.gg/EjpSKN3am).
+Questions → [Discord](https://discord.gg/hAtEhsWqFe).
 
 ## First run: no pull request needed
 
