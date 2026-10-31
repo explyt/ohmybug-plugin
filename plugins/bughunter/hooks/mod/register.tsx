@@ -52,7 +52,7 @@ type BughunterHunt = {
  *  state the mod saw it move into, re-checked before any action. */
 type BughunterBand =
   | { kind: 'hunt'; id: string; state: BughunterHunt['state']; text: string }
-  | { kind: 'deep'; id: string; text: string }
+  | { kind: 'deep'; id: string; text: string; strong?: boolean; price?: number }
   | { kind: 'gate'; id?: string; text: string }
   | null
 
@@ -184,7 +184,8 @@ async function observe($: Engine, kind: string, input: Record<string, unknown>, 
     // The deep offer comes in the answer for this tracked hunt, and only there.
     const offer = body.deep_offer as Record<string, unknown> | undefined
     if (kind === 'get_findings' && state === 'done' && offer && typeof offer === 'object' && str(offer.pitch)) {
-      setBand($, { kind: 'deep', id, text: str(offer.pitch)!.slice(0, 280) })
+      // A strong offer is the server's recommendation, with its reasons in the pitch; the price is the server's quote.
+      setBand($, { kind: 'deep', id, text: str(offer.pitch)!.slice(0, 280), strong: offer.strength === 'strong', price: num(offer.price_usd) })
     }
   } else if (at >= 0 && kind === 'confirm_findings' && num(body.confirmed) !== undefined) {
     list[at] = { ...list[at]!, judged: true }
@@ -409,7 +410,7 @@ export const register: Register = on => {
     let lead = ''
     if (b.kind === 'deep') {
       // Pressing Run is the person's consent; Not now sends nothing; Not today asks for a one-day pause.
-      lead = `Deep hunt offered for ${b.id}: `
+      lead = `Deep hunt ${b.strong ? 'recommended' : 'offered'} for ${b.id}${b.price !== undefined ? ` (${b.price} USD, only if a real bug is confirmed)` : ''}: `
       actions = [
         <Button key="deep-yes" label="Run deep hunt" hotkey="1" variant="primary" onPress={async () => {
           close(); await $.prompt.submit({ text: `Yes, run the deep hunt for ${b.id}.` })
