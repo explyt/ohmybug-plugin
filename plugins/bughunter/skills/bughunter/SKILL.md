@@ -10,7 +10,9 @@ adversarial reviewers on its own models and returns findings. This agent then
 verifies each finding against the local codebase and reports verdicts.
 Billing is flat per review whose verdicts confirm at least one real major
 bug – no matter how many: 4 USD for a fast hunt, 12 USD for a deep hunt,
-24 USD for a deep hunt over a wide change (11 or more folder chunks). Severity uses the merge boundary: a finding
+24 USD for a deep hunt over a wide change (11 or more folder chunks). The
+server is the authority on prices: when `get_balance` `prices` or a
+`deep_offer.price_usd` names a different figure, quote that one. Severity uses the merge boundary: a finding
 is a billable major when a reviewer would refuse the merge over it
 (`critical` / `high` / `medium`); a `low` nit is confirmed for stats and
 never billed.
