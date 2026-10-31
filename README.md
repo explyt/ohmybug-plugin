@@ -2,6 +2,8 @@
 
 # OhMyBug plugin — bughunter
 
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/EjpSKN3am)
+
 <br clear="left">
 
 We find the bugs your Claude Code missed. You pay only when your own Claude
@@ -95,8 +97,8 @@ codex mcp add ohmybug --url https://mcp.ohmybug.ai/mcp
 `codex mcp add` detects OAuth and opens the GitHub sign-in flow automatically.
 
 For headless CI, use an operator-issued raw `omb_` key — write to
-[hi@ohmybug.ai](mailto:hi@ohmybug.ai) or DM [@ohmybug](https://x.com/ohmybug)
-to get one:
+[hi@ohmybug.ai](mailto:hi@ohmybug.ai), DM [@ohmybug](https://x.com/ohmybug) or ask on
+[Discord](https://discord.gg/EjpSKN3am) to get one:
 
 ```bash
 export OHMYBUG_API_KEY=omb_...
@@ -191,6 +193,10 @@ The VS Code extension has no band above the prompt; there the toast and the
 status line carry it.
 Turn the mod off with
 `/plugin` like any built-in mod; the shell hooks stay.
+
+## Questions
+
+Questions → [Discord](https://discord.gg/EjpSKN3am), or write to [hi@ohmybug.ai](mailto:hi@ohmybug.ai).
 
 ## MCP contract (server: https://mcp.ohmybug.ai/mcp)
 
