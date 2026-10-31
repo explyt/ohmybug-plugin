@@ -5,8 +5,9 @@
 <br clear="left">
 
 We find the bugs your Claude Code missed. You pay only when your own Claude
-confirms real bugs: $10 flat per bug-finding review (however many bugs it
-holds), minor findings free, first review free.
+confirms real bugs: $4 per bug-finding review (however many bugs it
+holds), $12 for a deep hunt you choose ($24 on a wide change), minor findings
+free, first review free.
 
 ## Install (Claude Code)
 
@@ -123,8 +124,8 @@ On a GitHub repository, `/bughunter:scan` hunts the code this repository changed
 GitHub and clones the repository on its side — nothing is uploaded from your
 machine — then runs a deep hunt (about an hour) over the window's changed
 code with two engines, and hands back one merged review that lists anything
-it did not read. Your agent verifies the findings like any hunt, and the same
-price applies. It needs the OhMyBug GitHub App on that repository, runs once per
+it did not read. Your agent verifies the findings like any hunt, and it is priced
+as a deep hunt: $12, or $24 on a wide change, only if a real bug is confirmed. It needs the OhMyBug GitHub App on that repository, runs once per
 repository per week, and is not a merge gate.
 
 ## What it does
@@ -139,8 +140,8 @@ repository per week, and is not a merge gate.
   Only findings that survive triage come back.
 - Your own agent verifies each finding against your codebase and reports
   REAL / NOT_REAL / UNCLEAR. You see and approve the verdicts.
-- Billing: $10 flat per review with confirmed real bugs — one or ten, same
-  price. Minor findings, review runs, false positives, unclear — $0.
+- Billing: one flat price per review with confirmed real bugs — one or ten,
+  same price: $4 fast, $12 deep, $24 deep on a wide change (11+ folder chunks). Minor findings, review runs, false positives, unclear — $0.
 - `/bughunter:stats` shows your record: bugs found, reviews run, balance.
 - Before a diff or file contents leave your machine (`submit_review`,
   `provide_files`), a secret scan refuses a payload that carries a credential
