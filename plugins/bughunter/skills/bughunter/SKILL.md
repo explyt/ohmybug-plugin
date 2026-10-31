@@ -597,8 +597,8 @@ This is what separates a calibrated review from a blind one – do not skip
 it to save a minute.
 
 `repo` + `ref` are what let the server fetch the diff itself, answer the
-reviewers' file requests without coming back to you, and – after a clean
-pass – offer the deep hunt at all. Omitting them costs you all three and is
+reviewers' file requests without coming back to you, and offer the deep
+hunt at all. Omitting them costs you all three and is
 the single most common integration mistake. It returns `review_id`
 immediately.
 
@@ -908,7 +908,8 @@ for mid-run (how long: the server's `recent_median_minutes`, never a number
 from this page) – **unless the user asked for the deep hunt up front.** You
 never request the deep hunt on your own initiative: it pulls the whole
 repository into a throwaway VM, takes about an hour and costs the deep price,
-so as YOUR idea it only makes sense once the cheap pass has come back empty.
+so it is never YOUR idea: it is started on the user's word, or on the
+server's `deep_offer` once the user agrees.
 
 - **Deep first, only on the user's word.** The user asked for the deep hunt
   when their request names it, in any language – "deep hunt", "deep review",
@@ -950,7 +951,7 @@ so as YOUR idea it only makes sense once the cheap pass has come back empty.
   first: the hunt went after this diff and found nothing, which on this
   evidence looks like a clean PR. That is the result. Do not turn it into a
   preamble for the offer.
-- The same response may carry `deep_offer`. May: when every deep slot is
+- A finished hunt's `get_findings` may carry `deep_offer`. May: when every deep slot is
   busy it is simply absent, and then there is nothing to offer – do not
   invent it, do not poll for one. When present, relay `pitch` (it names the
   hour of waiting and the repo copy out loud) and ask once. With

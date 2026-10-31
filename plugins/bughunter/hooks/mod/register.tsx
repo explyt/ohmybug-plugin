@@ -410,7 +410,7 @@ export const register: Register = on => {
     let lead = ''
     if (b.kind === 'deep') {
       // Pressing Run is the person's consent; Not now sends nothing; Not today asks for a one-day pause.
-      lead = `Deep hunt ${b.strong ? 'recommended' : 'offered'} for ${b.id}${b.price !== undefined ? ` (${b.price} USD)` : ''}: `
+      lead = `Deep hunt ${b.strong ? 'recommended' : 'offered'} for ${b.id}${b.price !== undefined ? ` (${b.price} USD, only if a real bug is confirmed)` : ''}: `
       actions = [
         <Button key="deep-yes" label="Run deep hunt" hotkey="1" variant="primary" onPress={async () => {
           close(); await $.prompt.submit({ text: `Yes, run the deep hunt for ${b.id}.` })
