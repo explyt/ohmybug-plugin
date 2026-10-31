@@ -419,6 +419,21 @@ test('the deep hunt buttons come only with deep_offer, and Not now sends nothing
   expect(await band($)).toBe('engine drawing')
 })
 
+test('a strong offer reads as a recommendation and names the quoted price; a regular one as before', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  const answers = [findingsWith({ deep_offer: { pitch: 'Wide change.', strength: 'strong', price_usd: 12 } }), findingsWith({ deep_offer: { pitch: 'Go deep.', strength: 'regular' } })]
+  on('tool.call', { tool: GET }, async () => ({ result: { content: [] }, text: answers.shift()! }))
+  world(on, JSON.stringify({ status: 'running' }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: SUBMIT } as never)
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await band($)).toContain('Deep hunt recommended for rev_1 ($12, $0 unless a real bug is found): Wide change.')
+  await $.tool.call({ tool: GET, review_id: 'rev_1' } as never)
+  expect(await band($)).toContain('Deep hunt offered for rev_1: Go deep.')
+})
+
 test('Run deep hunt sends the consent for the offered id', async ($, on) => {
   mock.clock(on)
   mock.store(on)
