@@ -956,11 +956,13 @@ so as YOUR idea it only makes sense once the cheap pass has come back empty.
   hour of waiting and the repo copy out loud) and ask once. With
   `strength: "strong"` it is the server's recommendation for a wide change:
   say so, with its `reasons` as the pitch states them, and name `price_usd`
-  when present ($0 unless a real bug is found). Do not soften it into a
-  maybe, and do not add a recommendation to a regular one. On a hunt whose
-  findings were confirmed, it comes only after every finding is judged;
-  findings of the deep hunt marked `known_from` repeat one the fast hunt
-  already confirmed: judge them as usual, they cost nothing. On yes, follow
+  in USD when present, with the pitch's own terms (nothing is charged unless
+  a real bug is confirmed). Do not soften it into a maybe, and do not add a
+  recommendation to a regular one. On a hunt with findings it comes only
+  after every finding is judged: once your `confirm_findings` call is
+  answered (its `deep_next` says so too), read `get_findings` once more for it. Findings of the deep hunt
+  marked `known_from` repeat one the fast hunt already confirmed: judge them
+  as usual, they cost nothing. On yes, follow
   its `how`: call `submit_review` again with `deep: "<review_id>"` and the
   same `meta` – the server re-fetches the diff, so you send no payload. If
   it carries `install_url`, the App install is the missing step first.
