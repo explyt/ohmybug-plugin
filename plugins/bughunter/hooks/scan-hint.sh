@@ -18,7 +18,7 @@ MARK=$STATE/scan-hint-v1
 [ -f "$MARK" ] && exit 0
 mkdir -p "$STATE" && : > "$MARK"
 
-NOTE='OhMyBug is installed: a cloud bug hunt for your code, $10 flat only when a real bug is found (the first is free). Try it, no pull request needed:
+NOTE='OhMyBug is installed: a cloud bug hunt for your code, from $4 only when a real bug is found (the first is free). Try it, no pull request needed:
   /bughunter:review  hunts whatever you have: a branch, uncommitted changes, recent commits, or a folder with no git
   /bughunter:scan    on a GitHub repository, everything it changed in the last 30 days (a deep hunt, about an hour)
   /bughunter:stats   your record, balance and price
