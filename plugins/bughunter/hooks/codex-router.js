@@ -25,7 +25,7 @@ function emit(context, hookEventName) {
 // Once per machine, the first Codex session after install: what to say to try it.
 // Codex has no slash commands, so the welcome names phrases, and asks the assistant
 // to pass them on, since a systemMessage alone is small print.
-const WELCOME = 'OhMyBug is installed: a cloud bug hunt for your code, $10 flat only when a real bug is found (the first is free). No pull request needed. Ask Codex: "Run the OhMyBug cloud hunt on my code" (your branch, uncommitted changes, recent commits, or a folder with no git), "Run an OhMyBug scan of this repository" (a GitHub repository, everything changed in the last 30 days, about an hour), or "Show my OhMyBug balance and record". Nothing starts until you ask.';
+const WELCOME = 'OhMyBug is installed: a cloud bug hunt for your code, from $4 only when a real bug is found (the first is free). No pull request needed. Ask Codex: "Run the OhMyBug cloud hunt on my code" (your branch, uncommitted changes, recent commits, or a folder with no git), "Run an OhMyBug scan of this repository" (a GitHub repository, everything changed in the last 30 days, about an hour), or "Show my OhMyBug balance and record". Nothing starts until you ask.';
 
 function firstSession() {
   const fs = require('fs'), path = require('path'), os = require('os');

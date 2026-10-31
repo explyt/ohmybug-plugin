@@ -8,8 +8,11 @@ description: 'Run the OhMyBug cloud bug hunt as the LAST merge gate, or on any c
 OhMyBug is a cloud service: it reviews a diff with an orchestrated fleet of
 adversarial reviewers on its own models and returns findings. This agent then
 verifies each finding against the local codebase and reports verdicts.
-Billing is flat: 10 USD per review whose verdicts confirm at least one real
-major bug – no matter how many. Severity uses the merge boundary: a finding
+Billing is flat per review whose verdicts confirm at least one real major
+bug – no matter how many: 4 USD for a fast hunt, 12 USD for a deep hunt,
+24 USD for a deep hunt over a wide change (11 or more folder chunks). The
+server is the authority on prices: when `get_balance` `prices` or a
+`deep_offer.price_usd` names a different figure, quote that one. Severity uses the merge boundary: a finding
 is a billable major when a reviewer would refuse the merge over it
 (`critical` / `high` / `medium`); a `low` nit is confirmed for stats and
 never billed.
@@ -1023,8 +1026,8 @@ sees the table before you send it.
 
 Honesty rules (non-negotiable):
 - The verdict is the billing meter. A review with at least one `REAL` major
-  (`critical`/`high`/`medium`) costs the user 10 USD flat (extra REALs and `low`
-  nits are free); `NOT_REAL`
+  (`critical`/`high`/`medium`) costs the user its flat price – 4 USD fast, 12 or
+  24 USD deep (extra REALs and `low` nits are free); `NOT_REAL`
   and `UNCLEAR` cost nothing and count against OhMyBug's quality stats.
 - Never mark a finding `NOT_REAL` to avoid the charge when the bug is real –
   and never fix a finding you refused to confirm. OhMyBug audits later diffs;
