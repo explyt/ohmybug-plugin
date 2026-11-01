@@ -98,7 +98,7 @@ This is a required client action, not a reminder to do later:
   exactly as the next wake fires, and one that leaves the handover to the
   `heartbeat_s`–`interval_s` gap shrinks it on exactly the slow links whose
   calls need it. A repo or deep submit never needs this. A
-  deep hunt runs about an hour: its wake polls `status_url` once and reports
+  deep hunt runs up to 2 hours: its wake polls `status_url` once and reports
   that, which is the read `wake_rule` names for a deep hunt. That body
   keys a file request off `awaiting_client_files`/`files_requested`, not off its
   status word, so a wake that sees either flag prints `bughunt · <mode> ·
@@ -173,8 +173,8 @@ This is a required client action, not a reminder to do later:
   request in those flags, never in its status word. Every number in the loop
   comes from the server: the submit response's `watch_poll_s` seeds the
   first sleep, the body's own fields take over from the first poll. The
-  re-armed runs carry the age clock between them (a deep hunt runs
-  up to 150 min; the watch retires at 180). Do not paste status JSON into the
+  re-armed runs carry the age clock between them (the longest hunt,
+  a scan, runs up to 150 min; the watch retires at 180). Do not paste status JSON into the
   conversation.
   **A heartbeat wake is answered with that one line and a re-arm, nothing
   else** – `bughunt · fast · running` – no `get_findings`, no file reads, no
@@ -216,7 +216,7 @@ This is a required client action, not a reminder to do later:
   the cadence you created the job at) or once the current time is past `<retire_at>` (an
   ISO timestamp you substitute at creation: the SUBMIT time + 180 minutes,
   carried unchanged into every replacement job – the watch is then older than 180 minutes,
-  the hunt's 150 min budget plus queue time – as an instant,
+  the longest hunt's 150 min budget (a scan) plus queue time – as an instant,
   because a fresh cron turn has no creation time to count from, and anchored
   at submit so a replacement job cannot restart the cap)
   print `bughunt · <mode> · watch-retired` and only then
@@ -254,7 +254,7 @@ while a file request can still arrive: there `wait_review` back to back is the
 watcher the body's `next_poll_after_s` asks for, because it returns the moment
 `needs_files` shows. Here the waiting is for a deep hunt TOO: with no
 heartbeat there is nothing to hand the waiting to, and a deep hunt is the one
-that runs about an hour, so a single call would end the turn on a review nobody
+that runs up to 2 hours, so a single call would end the turn on a review nobody
 reads — the failure §3b records. If you cannot keep waiting, say the hunt is
 running and unwatched; never claim that a monitor is armed.
 
@@ -911,7 +911,7 @@ send them – the manifest keeps it auditable. If nothing can be sent, call
 for mid-run (how long: the server's `recent_median_minutes`, never a number
 from this page) – **unless the user asked for the deep hunt up front.** You
 never request the deep hunt on your own initiative: it pulls the whole
-repository into a throwaway VM, takes about an hour and costs the deep price,
+repository into a throwaway VM, takes up to 2 hours and costs the deep price,
 so it is never YOUR idea: it is started on the user's word, or on the
 server's `deep_offer` once the user agrees.
 
@@ -958,7 +958,7 @@ server's `deep_offer` once the user agrees.
 - A finished hunt's `get_findings` may carry `deep_offer`. May: when every deep slot is
   busy it is simply absent, and then there is nothing to offer – do not
   invent it, do not poll for one. When present, relay `pitch` (it names the
-  hour of waiting and the repo copy out loud) and ask once. With
+  wait and the repo copy out loud) and ask once. With
   `strength: "strong"` it is the server's recommendation for a wide change:
   say so, with its `reasons` as the pitch states them, and name `price_usd`
   in USD when present, with the pitch's own terms (nothing is charged unless
@@ -982,11 +982,11 @@ server's `deep_offer` once the user agrees.
   unknown field, the server is older than this plugin: tell the user, do not
   retry.
 - **Arm the monitor for the deep hunt too, and give the user the
-  `review_id`.** The hour is exactly how long it takes to forget: the deep run
+  `review_id`.** The wait is exactly how long it takes to forget: the deep run
   rarely needs files from you, so little prods you mid-run — the heartbeat's
   `status_url` poll is what catches a request when it does — and an agent that
   armed a monitor for every 15-minute fast pass will skip it on the one run
-  that waits four times as long. Then the user paid an hour of attention for a
+  that waits many times as long. Then the user paid hours of attention for a
   result nobody read. Tell them in chat that it is running and name the
   `review_id`, so they can ask for it later even if you lost the thread.
 - Escalation errors are final answers, not retry conditions:
@@ -1241,7 +1241,7 @@ For a user who just installed the plugin and asks what it can do, offer
 no GitHub and no git (the ladder in step 1) – and this scan as the option for
 a GitHub repository with the App installed. The server reads
 the window from GitHub, clones the repository on its side, runs a deep hunt
-over the window's changed code with two engines – about an hour – and
+over the window's changed code with two engines – up to 150 minutes – and
 returns ONE merged review. It is not a merge
 gate and records nothing for one; never present it as a review of the current
 branch.
@@ -1257,7 +1257,7 @@ branch.
    `scan_empty`, `scan_too_big` (fewer days is the user's call; a repository
    too large to clone is refused the same way – then a pull request is the way),
    `scan_fetch_failed`, `scan_disabled`.
-3. Tell the user once that it takes about an hour and they need not wait
+3. Tell the user once that it takes up to 150 minutes and they need not wait
    at the terminal. Watch it exactly like a deep hunt (the monitor rules
    above – `monitor`, `status_url`, `watch_poll_s`); hand the user
    `live_url` once.
