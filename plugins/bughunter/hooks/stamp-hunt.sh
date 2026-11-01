@@ -251,14 +251,14 @@ if sys.argv[2]:
 print(json.dumps(out))' "$s" "${LIVE_MSG:-}" 2>/dev/null
   LIVE_MSG=
 }
-# The link when no other sentence carried it out already. Called at the end of
-# the submit arm AND on the two paths that leave it early because the record
-# could not be written (found in review): the page is the person's whatever
-# happens to the record.
 live_page() { # the submit answer's page -> the person, on the next sentence said
   [ -n "${LIVE_URL:-}" ] && LIVE_MSG="OhMyBug: watch this hunt live — $LIVE_URL (a private link for you; it stops working 6 hours after the result. Save the report as PDF from the page before then.)"
   return 0
 }
+# The link when no other sentence carried it out already. Called at the end of
+# the submit arm AND on the two paths that leave it early because the record
+# could not be written (found in review): the page is the person's whatever
+# happens to the record.
 live_tail() {
   [ -n "${LIVE_MSG:-}" ] && say ""
   return 0

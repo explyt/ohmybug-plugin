@@ -543,6 +543,18 @@ for line in sys.stdin:
   case "$(printf '%s' "$out" | sysmsg)" in *"https://example.invalid/live/unwritable"*) ;; *) echo "FAIL stamp: a submit whose record could not be written lost the person's live page: $out"; fails=$((fails + 1)) ;; esac
   [ "$(printf '%s' "$out" | grep -c .)" = 1 ] || { echo "FAIL stamp: the unwritable-record submit must still print exactly one JSON object, got: $out"; fails=$((fails + 1)); }
   [ -e "$(ohmybug_hunt_dir).pending/rev_live4" ] && { echo "FAIL stamp: the unwritable directory took a record"; fails=$((fails + 1)); }
+  # ...and a submit from a directory with no git, which has no record at all:
+  # the page still goes out, in the same object as the "not recorded" sentence.
+  # Its PreToolUse offer from there says nothing; the PostToolUse speaks once.
+  NOGIT=$(mktemp -d)
+  reset_state
+  out=$(cd "$NOGIT" && postxo submit_review rev_live5 '{"status":"running","live_url":"https://example.invalid/live/nogit"}')
+  case "$(printf '%s' "$out" | sysmsg)" in *"https://example.invalid/live/nogit"*) ;; *) echo "FAIL stamp: a submit from a directory with no git lost the person's live page: $out"; fails=$((fails + 1)) ;; esac
+  case "$(printf '%s' "$out" | ctx)" in *"not recorded"*"https://example.invalid/live/nogit"*"never paste"*) ;; *) echo "FAIL stamp: a submit from a directory with no git did not ask the agent to print the live page: $out"; fails=$((fails + 1)) ;; esac
+  [ "$(printf '%s' "$out" | grep -c .)" = 1 ] || { echo "FAIL stamp: the no-git submit must print exactly one JSON object, got: $out"; fails=$((fails + 1)); }
+  out=$(python3 -c "import json,sys;print(json.dumps({'hook_event_name':'PreToolUse','tool_name':'mcp__plugin_bughunter_ohmybug__submit_review','tool_input':{'diff':''},'cwd':sys.argv[1]}))" "$NOGIT" | bash "$G/stamp-hunt.sh" 2>/dev/null)
+  [ -z "$out" ] || { echo "FAIL stamp: a PreToolUse submit from a directory with no git talks: $out"; fails=$((fails + 1)); }
+  rm -rf "$NOGIT"
   # ...and the link rides along with a dead-end sentence in the SAME object: a
   # payload that matches no tree still gets its page shown, once, beside the
   # warning — never as a second JSON line, which neither client would parse.
