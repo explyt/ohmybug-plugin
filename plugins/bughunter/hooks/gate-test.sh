@@ -455,6 +455,17 @@ print(json.dumps({
   (cd "$NOGIT" && post get_findings 1) >/dev/null 2>&1
   pend "read from outside the checkout" 0
   t "$V" 0
+  # Submitted from there: nowhere to file it, and the agent is told so
+  # instead of taking the hunt as recorded. A refused submit and a poll stay
+  # silent, and nothing is written under any repository.
+  reset_state
+  said=$(cd "$NOGIT" && postxo submit_review rev_nogit '{"status":"running"}' | ctx)
+  case "$said" in *"no git repository"*"not recorded"*"from that checkout"*) ;; *) echo "FAIL stamp: a submit from a directory with no git was not said to the agent: $said"; fails=$((fails + 1));; esac
+  ls "$HOME"/.ohmybug/hunts/*.pending/rev_nogit >/dev/null 2>&1 && { echo "FAIL stamp: a submit from a directory with no git left a record"; fails=$((fails + 1)); }
+  said=$(cd "$NOGIT" && postxo submit_review rev_nogit '{"error":"rate_limited"}' error | ctx)
+  [ -z "$said" ] || { echo "FAIL stamp: a refused submit from a directory with no git still talks: $said"; fails=$((fails + 1)); }
+  said=$(cd "$NOGIT" && postxo get_findings rev_nogit '{"status":"running"}' | ctx)
+  [ -z "$said" ] || { echo "FAIL stamp: a poll from a directory with no git talks: $said"; fails=$((fails + 1)); }
   rm -rf "$NOGIT"
 
   # --- the person's live page -------------------------------------------------
