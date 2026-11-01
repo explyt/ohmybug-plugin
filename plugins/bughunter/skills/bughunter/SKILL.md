@@ -98,7 +98,7 @@ This is a required client action, not a reminder to do later:
   exactly as the next wake fires, and one that leaves the handover to the
   `heartbeat_s`–`interval_s` gap shrinks it on exactly the slow links whose
   calls need it. A repo or deep submit never needs this. A
-  deep hunt runs about an hour: its wake polls `status_url` once and reports
+  deep hunt runs up to 2 hours: its wake polls `status_url` once and reports
   that, which is the read `wake_rule` names for a deep hunt. That body
   keys a file request off `awaiting_client_files`/`files_requested`, not off its
   status word, so a wake that sees either flag prints `bughunt · <mode> ·
@@ -254,7 +254,7 @@ while a file request can still arrive: there `wait_review` back to back is the
 watcher the body's `next_poll_after_s` asks for, because it returns the moment
 `needs_files` shows. Here the waiting is for a deep hunt TOO: with no
 heartbeat there is nothing to hand the waiting to, and a deep hunt is the one
-that runs about an hour, so a single call would end the turn on a review nobody
+that runs up to 2 hours, so a single call would end the turn on a review nobody
 reads — the failure §3b records. If you cannot keep waiting, say the hunt is
 running and unwatched; never claim that a monitor is armed.
 
@@ -609,8 +609,9 @@ Tell the user the review is running. How long: say it ONLY from the
 server's own reading – `recent_median_minutes`, in the submit response
 where the server provides it and in the status body's `overdue` block on
 any poll – as "runs of this kind are taking about N min (recent median)".
-If the field is absent, say nothing about duration. Never quote a literal
-here: this page once said "~15 min" while the protocol had grown to
+If the field is absent, say only the ceiling the server enforces: a fast
+hunt takes up to 15 minutes, a deep one up to 2 hours. Never quote any other
+literal here: this page once said "~15 min" while the protocol had grown to
 roughly six times that, and a number nobody updates is what taught a fleet
 of agents to read every honest run as hung.
 
@@ -911,7 +912,7 @@ send them – the manifest keeps it auditable. If nothing can be sent, call
 for mid-run (how long: the server's `recent_median_minutes`, never a number
 from this page) – **unless the user asked for the deep hunt up front.** You
 never request the deep hunt on your own initiative: it pulls the whole
-repository into a throwaway VM, takes about an hour and costs the deep price,
+repository into a throwaway VM, takes up to 2 hours and costs the deep price,
 so it is never YOUR idea: it is started on the user's word, or on the
 server's `deep_offer` once the user agrees.
 
@@ -1241,7 +1242,7 @@ For a user who just installed the plugin and asks what it can do, offer
 no GitHub and no git (the ladder in step 1) – and this scan as the option for
 a GitHub repository with the App installed. The server reads
 the window from GitHub, clones the repository on its side, runs a deep hunt
-over the window's changed code with two engines – about an hour – and
+over the window's changed code with two engines – up to 4 hours – and
 returns ONE merged review. It is not a merge
 gate and records nothing for one; never present it as a review of the current
 branch.
@@ -1257,7 +1258,7 @@ branch.
    `scan_empty`, `scan_too_big` (fewer days is the user's call; a repository
    too large to clone is refused the same way – then a pull request is the way),
    `scan_fetch_failed`, `scan_disabled`.
-3. Tell the user once that it takes about an hour and they need not wait
+3. Tell the user once that it takes up to 4 hours and they need not wait
    at the terminal. Watch it exactly like a deep hunt (the monitor rules
    above – `monitor`, `status_url`, `watch_poll_s`); hand the user
    `live_url` once.

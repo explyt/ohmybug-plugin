@@ -20,7 +20,7 @@ mkdir -p "$STATE" && : > "$MARK"
 
 NOTE='OhMyBug is installed: a cloud bug hunt for your code, from $4 only when a real bug is found (the first is free). Try it, no pull request needed:
   /bughunter:review  hunts whatever you have: a branch, uncommitted changes, recent commits, or a folder with no git
-  /bughunter:scan    on a GitHub repository, everything it changed in the last 30 days (a deep hunt, about an hour)
+  /bughunter:scan    on a GitHub repository, everything it changed in the last 30 days (a deep hunt, up to 4 hours)
   /bughunter:stats   your record, balance and price
 With pull requests, `gh pr merge` waits until the final diff is hunted (you can skip it once). Nothing starts until you run one.'
 CONTEXT="$NOTE
