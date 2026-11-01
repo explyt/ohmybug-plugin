@@ -460,7 +460,7 @@ print(json.dumps({
   # silent, and nothing is written under any repository.
   reset_state
   said=$(cd "$NOGIT" && postxo submit_review rev_nogit '{"status":"running"}' | ctx)
-  case "$said" in *"no git repository"*"not recorded"*"from that checkout"*) ;; *) echo "FAIL stamp: a submit from a directory with no git was not said to the agent: $said"; fails=$((fails + 1));; esac
+  case "$said" in *"could not name a repository"*"not recorded"*"from that checkout"*) ;; *) echo "FAIL stamp: a submit from a directory with no git was not said to the agent: $said"; fails=$((fails + 1));; esac
   ls "$HOME"/.ohmybug/hunts/*.pending/rev_nogit >/dev/null 2>&1 && { echo "FAIL stamp: a submit from a directory with no git left a record"; fails=$((fails + 1)); }
   said=$(cd "$NOGIT" && postxo submit_review rev_nogit '{"error":"rate_limited"}' error | ctx)
   [ -z "$said" ] || { echo "FAIL stamp: a refused submit from a directory with no git still talks: $said"; fails=$((fails + 1)); }

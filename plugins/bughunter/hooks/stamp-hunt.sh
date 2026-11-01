@@ -286,13 +286,15 @@ if [ "${PRE:-0}" != 1 ] && [ "$TOOL" != submit_review ] && [ -n "$REVIEW" ] &&
     break
   done
 fi
-# No git here: nowhere to file the record. Silent, the agent took the hunt as
-# recorded and the gate in its checkout later asked for one. Only the
-# submit that ran says so; a poll or a refused submit has nothing to lose.
+# No repository git can name here (none, one it refuses, no git command):
+# nowhere to file the record. Silent, the agent took the hunt as recorded and
+# the gate in its checkout later asked for one. The sentence names all three
+# causes, because a refused checkout IS a checkout whose gate will ask. Only
+# the submit that ran says so; a poll or a refused submit has nothing to lose.
 if [ -z "$REPO_HUNTS" ]; then
   if [ "${PRE:-0}" != 1 ] && [ "$TOOL" = submit_review ] && [ "${ERRORED:-0}" != 1 ]; then
     live_page
-    say "ohmybug: this hunt was submitted from a directory with no git repository ($PWD), so it was not recorded for a merge gate. A folder with no git needs nothing more. If this change lives in a git checkout, submit it from that checkout instead, so its gate sees the hunt."
+    say "ohmybug: git could not name a repository in $PWD (not under git, a checkout git refuses to read, or no git command), so this hunt was not recorded for a merge gate. A folder that is not under git needs nothing more. If this change lives in a git checkout, submit it from that checkout once git status works there, so its gate sees the hunt."
   fi
   exit 0
 fi
