@@ -251,6 +251,10 @@ if sys.argv[2]:
 print(json.dumps(out))' "$s" "${LIVE_MSG:-}" 2>/dev/null
   LIVE_MSG=
 }
+live_page() { # the submit answer's page -> the person, on the next sentence said
+  [ -n "${LIVE_URL:-}" ] && LIVE_MSG="OhMyBug: watch this hunt live — $LIVE_URL (a private link for you; it stops working 6 hours after the result. Save the report as PDF from the page before then.)"
+  return 0
+}
 # The link when no other sentence carried it out already. Called at the end of
 # the submit arm AND on the two paths that leave it early because the record
 # could not be written (found in review): the page is the person's whatever
@@ -282,7 +286,18 @@ if [ "${PRE:-0}" != 1 ] && [ "$TOOL" != submit_review ] && [ -n "$REVIEW" ] &&
     break
   done
 fi
-[ -n "$REPO_HUNTS" ] || exit 0
+# No repository git can name here (none, one it refuses, no git command):
+# nowhere to file the record. Silent, the agent took the hunt as recorded and
+# the gate in its checkout later asked for one. The sentence names all three
+# causes, because a refused checkout IS a checkout whose gate will ask. Only
+# the submit that ran says so; a poll or a refused submit has nothing to lose.
+if [ -z "$REPO_HUNTS" ]; then
+  if [ "${PRE:-0}" != 1 ] && [ "$TOOL" = submit_review ] && [ "${ERRORED:-0}" != 1 ]; then
+    live_page
+    say "ohmybug: git could not name a repository in $PWD (not under git, a checkout git refuses to read, or no git command), so this hunt was not recorded for a merge gate. A folder that is not under git needs nothing more. If this change lives in a git checkout, submit it from that checkout once git status works there, so its gate sees the hunt."
+  fi
+  exit 0
+fi
 PENDING_DIR="$REPO_HUNTS.pending"
 PENDING="$PENDING_DIR/${REVIEW:-unknown}"
 # The tombstone a promotion leaves lives in its OWN directory, not beside the
@@ -352,7 +367,7 @@ case "$TOOL" in
     [ "${ERRORED:-0}" = '1' ] && exit 0
     # The page is the person's whatever happens to the record below: an
     # unrecordable submit is still a running hunt they can watch.
-    [ -n "${LIVE_URL:-}" ] && LIVE_MSG="OhMyBug: watch this hunt live — $LIVE_URL (a private link for you; it stops working 6 hours after the result. Save the report as PDF from the page before then.)"
+    live_page
     # No id the SERVER minted could be read out of the answer: nothing to file
     # the diff under. Silent, this was indistinguishable from a hunt that never
     # ran; said, the agent can poll from this checkout or submit again.
